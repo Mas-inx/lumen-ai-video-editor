@@ -1,5 +1,5 @@
 <#
-  Fills in the GitHub repository's "About" box — description, website and topics — so
+  Fills in the GitHub repository's "About" box - description, website and topics - so
   people searching GitHub for an AI video editor find Lumen. Run it once after you've
   created the repository and pushed the code.
 
@@ -22,8 +22,9 @@ $topics = @(
   'electron', 'react', 'typescript', 'webcodecs', 'blender', 'motion-graphics', 'vibe-coding'
 )
 
-$target = if ($Repo) { @($Repo) } else { @() }
+$target = @(if ($Repo) { $Repo })
 $url = gh repo view @target --json url -q .url
+if ($LASTEXITCODE -or -not $url) { throw 'Repository not found: push it first, or pass -Repo owner/name.' }
 $name = gh repo view @target --json nameWithOwner -q .nameWithOwner
 
 gh repo edit @target `
@@ -32,11 +33,13 @@ gh repo edit @target `
   --add-topic ($topics -join ',') `
   --enable-issues `
   --enable-discussions
+if ($LASTEXITCODE) { throw 'gh repo edit failed.' }
 
-# SECURITY.md sends people to Security → "Report a vulnerability", which needs this switched on.
+# SECURITY.md sends people to Security > "Report a vulnerability", which needs this switched on.
 gh api --method PUT "repos/$name/private-vulnerability-reporting" --silent
+if ($LASTEXITCODE) { throw 'Turning on private vulnerability reporting failed.' }
 
 Write-Host "Done: $url"
 Write-Host ''
 Write-Host 'One thing the CLI can''t do: set the social preview image (what Twitter, Discord and Slack show for links).'
-Write-Host "Upload docs/assets/social-preview.png at $url/settings → General → Social preview."
+Write-Host "Upload docs/assets/social-preview.png at $url/settings > General > Social preview."
