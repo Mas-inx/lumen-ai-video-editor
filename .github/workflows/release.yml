@@ -1,0 +1,65 @@
+name: Release
+
+# Push a version tag (e.g. `git tag v1.0.3 && git push origin v1.0.3`) to build the
+# Windows installer and publish it on the Releases page. The notes come from
+# docs/releases/<tag>.md, or from that version's section of CHANGELOG.md.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Build and publish
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Check the tag matches package.json
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          if ("v$version" -ne "${{ github.ref_name }}") { throw "Tag ${{ github.ref_name }} doesn't match package.json version $version" }
+
+      - run: npm ci
+      - run: npm test
+      # Typecheck, build, fetch the Electron binary (npm ci doesn't) and make the installer.
+      - run: npm run dist
+
+      - name: Checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem release -Filter *.exe | Get-FileHash -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
+            Set-Content -Encoding utf8 release/SHA256SUMS.txt
+
+      - name: Release notes
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $file = "docs/releases/$tag.md"
+          if (Test-Path $file) { $notes = Get-Content $file -Raw }
+          else {
+            # This version's section of the changelog.
+            $version = $tag.TrimStart('v')
+            $log = Get-Content CHANGELOG.md -Raw
+            $m = [regex]::Match($log, "(?ms)^## \[$([regex]::Escape($version))\][^\n]*\n(.*?)(?=^## \[|\z)")
+            $notes = if ($m.Success) { $m.Groups[1].Value.Trim() } else { "Lumen $tag" }
+          }
+          $sums = Get-Content release/SHA256SUMS.txt -Raw
+          "$notes`n`n``````text`n$($sums.Trim())`n``````" | Set-Content -Encoding utf8 release-notes.md
+
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = @(Get-ChildItem release -Filter *.exe) + @(Get-ChildItem release -Filter *.blockmap) + @(Get-Item release/SHA256SUMS.txt)
+          gh release create "${{ github.ref_name }}" $assets.FullName --title "Lumen ${{ github.ref_name }}" --notes-file release-notes.md --verify-tag

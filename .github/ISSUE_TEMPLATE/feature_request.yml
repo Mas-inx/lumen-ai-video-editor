@@ -1,0 +1,21 @@
+name: Feature request
+description: An idea for Lumen — an editing feature, an AI tool, an integration.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The edit or workflow, in your own words. Knowing the goal helps more than a specific solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How could Lumen help?
+      description: How you imagine it working — in the editor, or as a tool the AI can use.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What do you do today?
+      description: Workarounds, or how other editors handle it.

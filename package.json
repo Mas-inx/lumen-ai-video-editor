@@ -1,0 +1,183 @@
+{
+  "name": "lumen",
+  "productName": "Lumen",
+  "version": "1.0.2",
+  "private": true,
+  "description": "Open-source, AI-native video editor for Windows: timeline editing, frame-exact WebCodecs export, on-device Whisper captions, Blender and HyperFrames motion graphics, and an AI Copilot (Claude Code, Codex, OpenAI, Gemini or any MCP agent) that can see, hear and edit your video.",
+  "keywords": [
+    "video-editor",
+    "ai-video-editor",
+    "video-editing",
+    "nle",
+    "ai",
+    "ai-agent",
+    "copilot",
+    "llm",
+    "mcp",
+    "model-context-protocol",
+    "claude-code",
+    "codex",
+    "openai",
+    "gemini",
+    "whisper",
+    "speech-to-text",
+    "captions",
+    "subtitles",
+    "electron",
+    "react",
+    "typescript",
+    "webcodecs",
+    "blender",
+    "motion-graphics",
+    "hyperframes",
+    "claude",
+    "vibe-coding"
+  ],
+  "author": {
+    "name": "Mas-Inx",
+    "url": "https://github.com/Mas-inx"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/Mas-inx/lumen-ai-video-editor#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mas-inx/lumen-ai-video-editor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Mas-inx/lumen-ai-video-editor/issues"
+  },
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "dev:web": "vite --mode web",
+    "build": "npm run typecheck && vite build",
+    "build:web": "vite build --mode web",
+    "typecheck": "tsc -p tsconfig.app.json && tsc -p tsconfig.node.json",
+    "test": "vitest run",
+    "preview:web": "vite preview --mode web",
+    "pack": "npm run build && install-electron && electron-builder --dir --publish never",
+    "dist": "npm run build && install-electron && electron-builder --win nsis --publish never"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.60",
+    "@ai-sdk/google": "^4.0.77",
+    "@ai-sdk/openai": "^4.0.72",
+    "@ai-sdk/openai-compatible": "^3.0.53",
+    "@fontsource-variable/bricolage-grotesque": "^5.3.0",
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource/bricolage-grotesque": "^5.3.0",
+    "@fontsource/geist": "^5.3.0",
+    "@fontsource/instrument-serif": "^5.3.0",
+    "@hyperframes/core": "^0.8.61",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@openrouter/ai-sdk-provider": "^3.1.0",
+    "ai": "^7.0.111",
+    "gsap": "^3.15.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^8.0.6",
+    "@fontsource-variable/caveat": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
+    "@huggingface/transformers": "^4.3.0",
+    "@rolldown/plugin-babel": "^0.2.4",
+    "@shiguredo/rnnoise-wasm": "^2025.1.5",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/babel__core": "^7.20.5",
+    "@types/node": "^26.6.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/three": "^0.186.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "babel-plugin-react-compiler": "^1.0.0",
+    "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
+    "electron": "^44.4.3",
+    "electron-builder": "^26.15.3",
+    "gifenc": "^1.0.3",
+    "immer": "^11.1.18",
+    "lucide-react": "^1.47.0",
+    "mediabunny": "^1.59.0",
+    "motion": "^13.4.1",
+    "nanoid": "^6.0.1",
+    "opentype.js": "^2.0.0",
+    "radix-ui": "^1.6.7",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-resizable-panels": "^4.13.2",
+    "sonner": "^2.0.8",
+    "tailwind-merge": "^3.7.0",
+    "tailwindcss": "^4.3.3",
+    "three": "^0.186.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "vite-plugin-electron": "^1.1.2",
+    "vitest": "^5.0.1",
+    "zod": "^4.6.5",
+    "zustand": "^5.0.15"
+  },
+  "build": {
+    "appId": "app.lumen.editor",
+    "productName": "Lumen",
+    "copyright": "Copyright © 2026 Mas-Inx",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json",
+      "!node_modules/esbuild/**",
+      "!node_modules/@esbuild/**",
+      "!node_modules/@babel/**",
+      "!node_modules/@hyperframes/{parsers,lint,studio-server}/**",
+      "!node_modules/{linkedom,htmlparser2,recast,esprima,ast-types,acorn,acorn-walk,magic-string,source-map,css-select,css-what,postcss,postcss-selector-parser}/**",
+      "!node_modules/@chenglou/pretext/**",
+      "!**/*.{md,map,d.ts,d.mts,d.cts}",
+      "!**/{test,tests,__tests__,docs,example,examples}/**"
+    ],
+    "asar": true,
+    "electronDist": "node_modules/electron/dist",
+    "electronLanguages": [
+      "en-US"
+    ],
+    "fileAssociations": [
+      {
+        "ext": "lumen",
+        "name": "Lumen Project",
+        "description": "Lumen video project",
+        "icon": "icon.ico",
+        "role": "Editor"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "executableName": "Lumen",
+      "artifactName": "Lumen-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Lumen",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "uninstallDisplayName": "Lumen",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
+    }
+  }
+}

@@ -1,0 +1,57 @@
+# Changelog
+
+Every notable change to Lumen, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Lumen uses [Semantic Versioning](https://semver.org/).
+
+## [Unreleased]
+
+## [1.0.2] — 2026-09-23
+
+### Added
+
+- **The AI can see and hear.** Every AI brain — API models, your own Claude Code or Codex, and outside agents over MCP — now shares a toolset of about 70 tools:
+  - `get_frame` renders any moment exactly as the export will; `get_contact_sheet` lays out the whole edit as one labelled grid; `get_media_frames` looks inside footage; `get_editor_screenshot` sees the editor window.
+  - `get_transcript` (what's said and when, after every cut), `analyze_audio` (loudness in LUFS per ITU-R BS.1770, peaks, clipping, silences, per track) and `find_media` (searches inside transcripts too).
+  - `get_clips_at`, `get_clip`, `get_history` and `list_catalog` for inspecting the project and finding valid ids.
+  - `batch_edit` applies several commands as one undo step, all or nothing; plus `add_title`, `undo`, `redo`, `select_clips`, `playback`, `save_project` and `export_video`.
+- The Copilot chat shows the pictures the AI looked at on each step; click one to enlarge it.
+- Pictures reach every model: inside the tool result for Claude, as a follow-up message for other vision models. A model that can't take images is detected and carries on without them.
+
+### Changed
+
+- The Copilot keeps earlier steps' tool calls and results between turns, so it remembers what it looked up.
+- A run that only looked at the project now says “No changes made” instead of “Edited timeline”.
+- Video generation no longer names Sora, whose API OpenAI shut down on 24 September 2026; Lumen offers whichever video models your key can use (Veo with a Gemini key).
+
+### Fixed
+
+- The AI can edit and remove markers (their ids are now in `get_project`).
+- Removing a marker or effect that doesn't exist reports an error instead of silently succeeding.
+- Only one export runs at a time, whether started from the Export dialog or by the AI.
+- Sound effects, music and voice land on their own tracks (Sound effects, Music, Voice) instead of the first free audio track — so effects no longer push a music bed out of place.
+- The Export dialog's preview shows the real frame even for media the player hasn't loaded yet (Blender and HyperFrames renders), and *Save this frame to Media* captures the exact frame.
+
+## [1.0.1] — 2026-09-23
+
+### Fixed
+
+- The editor window never appeared on launch: it waited for a first paint that the start screen's fade-in only produces once the window is visible. The window now shows as soon as the page loads.
+
+## [1.0.0] — 2026-09-23
+
+First release.
+
+### Added
+
+- **Editing** — magnetic main track, free overlay/title/caption/audio tracks, split, trim, ripple, slip into gaps, snapping, markers, speed and reverse, keyframes with easing, 2D and 3D transitions, effects, looks and colour grading, 2D titles and extruded 3D titles, undo for everything, command palette.
+- **Media engine** — WebCodecs (Mediabunny) probing, filmstrips and frame-exact decoding; media referenced in place through a `lumen-media://` protocol with byte ranges; offline media and relinking; frame snapshots.
+- **Sound** — Web Audio playback that drives the playhead, per-clip volume, fades and keyframes, *Studio voice*, RNNoise noise reduction, 15 built-in sound effects.
+- **Export** — MP4 (H.264, HEVC, AV1), MOV, WebM (VP9, AV1), GIF, WAV and M4A, 480p to 4K, 24–60 fps, hardware encoding, size estimate, progress and cancel.
+- **Projects** — `.lumen` files with absolute and relative media paths, crash recovery, recent projects, unsaved-changes prompt, file association.
+- **AI** — Copilot powered by your own Claude Code or Codex, or a model with your API key (Anthropic, OpenAI, Gemini, OpenRouter, OpenCode Zen, Ollama, LM Studio, any OpenAI-compatible endpoint); on-device Whisper transcription; remove pauses (timeline-wide, speaker-aware), captions, music ducking, reframing; image and video generation with OpenAI and Gemini keys; ElevenLabs voice, sound and music.
+- **Integrations** — Blender renders (3D titles, backgrounds, agent-written scenes), HyperFrames motion graphics, MCP host (Higgsfield, Runway, Replicate, fal.ai or any server) and Lumen's own MCP server for external agents.
+- Windows installer (NSIS, per-user or all-users).
+
+[Unreleased]: https://github.com/Mas-inx/lumen-ai-video-editor/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.0.2
+[1.0.1]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.0.1
+[1.0.0]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.0.0

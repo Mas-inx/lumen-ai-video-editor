@@ -1,0 +1,413 @@
+@import "tailwindcss";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "@fontsource/instrument-serif/400.css";
+@import "@fontsource/instrument-serif/400-italic.css";
+@import "@fontsource-variable/bricolage-grotesque";
+@import "@fontsource-variable/caveat";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ───────────────────────────── Design tokens ───────────────────────────── */
+
+@theme {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Consolas, monospace;
+  --font-serif: "Instrument Serif", ui-serif, Georgia, serif;
+  --font-display: "Bricolage Grotesque Variable", "Geist Variable", sans-serif;
+  --font-hand: "Caveat Variable", cursive;
+
+  /* Dense editor type scale */
+  --text-2xs: 10px;
+  --text-2xs--line-height: 14px;
+  --text-xs: 11px;
+  --text-xs--line-height: 16px;
+  --text-sm: 12px;
+  --text-sm--line-height: 18px;
+  --text-base: 13px;
+  --text-base--line-height: 20px;
+  --text-md: 14px;
+  --text-md--line-height: 20px;
+  --text-lg: 16px;
+  --text-lg--line-height: 24px;
+  --text-xl: 20px;
+  --text-xl--line-height: 28px;
+  --text-2xl: 26px;
+  --text-2xl--line-height: 32px;
+
+  /* Surfaces — near-black graphite with a hair of olive, so the lime sits in it */
+  --color-canvas: #080807;
+  --color-surface: #10110f;
+  --color-surface-2: #161714;
+  --color-surface-3: #1c1d1a;
+  --color-surface-4: #252622;
+  --color-surface-5: #2e2f2a;
+
+  --color-line: rgb(255 255 255 / 0.06);
+  --color-line-2: rgb(255 255 255 / 0.1);
+  --color-line-3: rgb(255 255 255 / 0.16);
+
+  --color-fg: #eeeee9;
+  --color-fg-2: #b5b6ae;
+  --color-fg-3: #7f8078;
+  --color-fg-4: #585952;
+
+  /* Brand — acid lime. Text and icons sitting on it use the dark accent-fg ink. */
+  --color-accent: #d6ee00;
+  --color-accent-2: #e5f75c;
+  --color-accent-3: #a8bc00;
+  --color-accent-fg: #0b0c02;
+  /* AI signature: lime → mint → aqua */
+  --color-ai-1: #d6ee00;
+  --color-ai-2: #5ef2a6;
+  --color-ai-3: #36d6f2;
+
+  /* Timeline clip families */
+  --color-clip-video: #5b8def;
+  --color-clip-image: #35b2d4;
+  --color-clip-audio: #2fc48d;
+  --color-clip-text: #f2b33d;
+  --color-clip-adjust: #ec6fb0;
+
+  --color-danger: #ff5d5d;
+  --color-warn: #f5b73b;
+  --color-ok: #3ccf91;
+  --color-snap: #36d6f2;
+
+  --radius-panel: 14px;
+  --radius-card: 10px;
+  --radius-control: 8px;
+
+  --shadow-panel:
+    0 0 0 1px rgb(255 255 255 / 0.045), inset 0 1px 0 0 rgb(255 255 255 / 0.035),
+    0 18px 40px -24px rgb(0 0 0 / 0.8);
+  --shadow-pop:
+    0 0 0 1px rgb(255 255 255 / 0.08), inset 0 1px 0 0 rgb(255 255 255 / 0.05),
+    0 24px 60px -16px rgb(0 0 0 / 0.85), 0 6px 16px -6px rgb(0 0 0 / 0.6);
+  --shadow-control: inset 0 1px 0 0 rgb(255 255 255 / 0.05), 0 0 0 1px rgb(255 255 255 / 0.07);
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  --animate-shimmer: shimmer 2.4s linear infinite;
+  --animate-indeterminate: indeterminate 1.3s var(--ease-out-expo) infinite;
+  --animate-spin-slow: spin 3s linear infinite;
+  --animate-pulse-soft: pulse-soft 2s ease-in-out infinite;
+  --animate-float: float 6s ease-in-out infinite;
+  --animate-aurora: aurora 12s ease-in-out infinite alternate;
+  --animate-pop-in: pop-in 160ms var(--ease-out-expo);
+  --animate-pop-out: pop-out 100ms ease-in forwards;
+  --animate-fade-in: fade-in 180ms ease-out;
+  --animate-fade-out: fade-out 120ms ease-in forwards;
+  --animate-dialog-in: dialog-in 260ms var(--ease-out-expo);
+  --animate-dialog-out: dialog-out 140ms ease-in forwards;
+
+  @keyframes pop-in {
+    from { opacity: 0; transform: scale(0.96) translateY(2px); }
+  }
+  @keyframes pop-out {
+    to { opacity: 0; transform: scale(0.97); }
+  }
+  @keyframes fade-in {
+    from { opacity: 0; }
+  }
+  @keyframes fade-out {
+    to { opacity: 0; }
+  }
+  @keyframes dialog-in {
+    from { opacity: 0; transform: translate(-50%, calc(-50% + 10px)) scale(0.97); }
+  }
+  @keyframes dialog-out {
+    to { opacity: 0; transform: translate(-50%, calc(-50% + 4px)) scale(0.98); }
+  }
+  @keyframes shimmer {
+    from { background-position: 200% 0; }
+    to { background-position: -200% 0; }
+  }
+  @keyframes indeterminate {
+    from { transform: translateX(-110%); }
+    to { transform: translateX(310%); }
+  }
+  @keyframes pulse-soft {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-4px); }
+  }
+  @keyframes aurora {
+    0% { transform: translate3d(-8%, -4%, 0) rotate(0deg) scale(1); }
+    100% { transform: translate3d(8%, 6%, 0) rotate(8deg) scale(1.15); }
+  }
+}
+
+/* ───────────────────────────── Base ───────────────────────────── */
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background: var(--color-canvas);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: var(--text-base--line-height);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  input,
+  textarea,
+  [contenteditable="true"] {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--color-accent) 32%, transparent);
+  }
+
+  :focus-visible {
+    outline: 2px solid color-mix(in oklab, var(--color-accent) 70%, transparent);
+    outline-offset: 2px;
+  }
+
+  button {
+    cursor: default;
+  }
+
+  /* Slim, calm scrollbars */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(255 255 255 / 0.08);
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(255 255 255 / 0.16);
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* ───────────────────────────── Utilities ───────────────────────────── */
+
+@utility drag-region {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+@utility no-drag {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+@utility panel {
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 0.018), transparent 120px),
+    var(--color-surface);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-panel);
+}
+
+@utility popover {
+  background: color-mix(in oklab, var(--color-surface-2) 92%, transparent);
+  backdrop-filter: blur(24px) saturate(1.4);
+  border-radius: 12px;
+  box-shadow: var(--shadow-pop);
+}
+
+@utility bg-ai {
+  background-image: linear-gradient(
+    120deg,
+    var(--color-ai-1) 0%,
+    var(--color-ai-2) 52%,
+    var(--color-ai-3) 100%
+  );
+}
+
+@utility text-ai {
+  background-image: linear-gradient(
+    120deg,
+    var(--color-ai-1) 0%,
+    var(--color-ai-2) 52%,
+    var(--color-ai-3) 100%
+  );
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+}
+
+/* Animated gradient hairline used around AI surfaces */
+@utility ring-ai {
+  position: relative;
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    padding: 1px;
+    border-radius: inherit;
+    background: linear-gradient(
+      120deg,
+      var(--color-ai-1),
+      var(--color-ai-2),
+      var(--color-ai-3),
+      var(--color-ai-1)
+    );
+    background-size: 300% 100%;
+    animation: shimmer 6s linear infinite;
+    mask:
+      linear-gradient(#000 0 0) content-box exclude,
+      linear-gradient(#000 0 0);
+    pointer-events: none;
+  }
+}
+
+@utility checker {
+  background-color: #1a1b18;
+  background-image:
+    linear-gradient(45deg, #232420 25%, transparent 25%),
+    linear-gradient(-45deg, #232420 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #232420 75%),
+    linear-gradient(-45deg, transparent 75%, #232420 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+@utility scrollbar-none {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* ───────────────────────────── Asset previews ───────────────────────────── */
+
+@keyframes fx-shake {
+  0%, 100% { transform: translate(0, 0) scale(1.06); }
+  25% { transform: translate(-2px, 1px) scale(1.06) rotate(-0.4deg); }
+  50% { transform: translate(2px, -1px) scale(1.06); }
+  75% { transform: translate(-1px, -2px) scale(1.06) rotate(0.4deg); }
+}
+@keyframes fx-pulse {
+  0% { transform: scale(1.1); }
+  100% { transform: scale(1); }
+}
+@keyframes fx-grain {
+  0% { background-position: 0 0; }
+  25% { background-position: -30px 20px; }
+  50% { background-position: 40px -10px; }
+  75% { background-position: -20px -40px; }
+}
+@keyframes fx-leak {
+  from { transform: translate(-20%, -10%); }
+  to { transform: translate(25%, 15%); }
+}
+
+/* Transition cards: frozen mid-transition at rest, playing on hover */
+.tr-b,
+.tr-veil,
+[data-tr-a="push"] {
+  animation-duration: 1.8s;
+  animation-timing-function: var(--ease-out-quart);
+  animation-iteration-count: infinite;
+  animation-play-state: paused;
+  animation-delay: var(--tr-at, -0.72s);
+}
+.tr-b { animation-name: var(--tr); }
+.tr-veil { animation-name: tr-veil; }
+[data-tr-a="push"] { animation-name: tr-push-a !important; }
+.group\/tr:hover .tr-b,
+.group\/tr:hover .tr-veil,
+.group\/tr:hover [data-tr-a="push"] {
+  animation-play-state: running;
+}
+
+@keyframes tr-dissolve {
+  0%, 15% { opacity: 0; }
+  65%, 100% { opacity: 1; }
+}
+@keyframes tr-dip {
+  0%, 48% { opacity: 0; }
+  80%, 100% { opacity: 1; }
+}
+@keyframes tr-flash {
+  0%, 49% { opacity: 0; }
+  50%, 100% { opacity: 1; }
+}
+@keyframes tr-veil {
+  0%, 15% { opacity: 0; }
+  46%, 52% { opacity: 1; }
+  82%, 100% { opacity: 0; }
+}
+@keyframes tr-slide {
+  0%, 15% { transform: translateX(100%); }
+  70%, 100% { transform: translateX(0); }
+}
+@keyframes tr-push-b {
+  0%, 15% { transform: translateX(100%); }
+  70%, 100% { transform: translateX(0); }
+}
+@keyframes tr-push-a {
+  0%, 15% { transform: translateX(0); }
+  70%, 100% { transform: translateX(-100%); }
+}
+@keyframes tr-zoom {
+  0%, 15% { opacity: 0; transform: scale(0.8); }
+  70%, 100% { opacity: 1; transform: scale(1); }
+}
+@keyframes tr-wipe {
+  0%, 15% { clip-path: inset(0 100% 0 0); }
+  70%, 100% { clip-path: inset(0 0 0 0); }
+}
+@keyframes tr-blur {
+  0%, 15% { opacity: 0; filter: blur(10px); }
+  70%, 100% { opacity: 1; filter: blur(0); }
+}
+
+/* Sweeping highlight used on clips the AI just touched */
+@utility ai-sweep {
+  background-image: linear-gradient(
+    100deg,
+    transparent 30%,
+    rgb(255 255 255 / 0.28) 45%,
+    color-mix(in oklab, var(--color-ai-2) 45%, transparent) 50%,
+    rgb(255 255 255 / 0.28) 55%,
+    transparent 70%
+  );
+  background-size: 250% 100%;
+  animation: shimmer 1.6s var(--ease-out-quart) 2;
+}

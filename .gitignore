@@ -1,0 +1,20 @@
+# Dependencies and build output
+node_modules/
+dist/
+dist-electron/
+release/
+.vite/
+coverage/
+*.tsbuildinfo
+
+# Logs and OS files
+*.log
+.DS_Store
+Thumbs.db
+
+# Local configuration
+.env
+.env.*
+.claude/
+.vscode/*
+!.vscode/extensions.json

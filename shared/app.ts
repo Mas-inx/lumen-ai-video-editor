@@ -1,0 +1,142 @@
+/**
+ * The desktop app surface the editor uses for files: importing media from disk,
+ * project files, autosave/recovery and writing exports. Everything touching the
+ * file system happens in the main process; the editor only ever sees paths the
+ * user picked (or that a project it opened references).
+ */
+
+/** A media file on disk the editor may read, served as `url` (lumen-media://file/…). */
+export interface MediaFileInfo {
+  path: string
+  url: string
+  name: string
+  size: number
+  mime: string
+  /** Last-modified time (ms) — part of cache keys for thumbnails and waveforms. */
+  mtime: number
+}
+
+export interface RecentProject {
+  path: string
+  name: string
+  openedAt: number
+  exists: boolean
+}
+
+export interface OpenedProject {
+  path: string
+  /** The project document, with every media path resolved and registered. */
+  text: string
+  /** Asset ids whose media couldn't be found (moved or deleted). */
+  missing: string[]
+}
+
+export interface RecoveryInfo {
+  text: string
+  savedAt: number
+  /** The project file the unsaved changes belong to, if it had been saved before. */
+  path: string | null
+  name: string
+}
+
+export type CloseChoice = 'save' | 'discard' | 'cancel'
+
+export type MediaFolder = 'snapshots' | 'recordings' | 'sfx' | 'generated'
+
+export interface ExportHandle {
+  id: string
+  path: string
+}
+
+export const APP_IPC = {
+  pickMedia: 'lumen:files:pick-media',
+  registerMedia: 'lumen:files:register',
+  relinkMedia: 'lumen:files:relink',
+  revealFile: 'lumen:files:reveal',
+  openFile: 'lumen:files:open',
+  saveMedia: 'lumen:files:save-media',
+  mediaUrlForPath: 'lumen:files:url-for-path',
+
+  projectOpen: 'lumen:project:open',
+  projectSave: 'lumen:project:save',
+  projectSaveAs: 'lumen:project:save-as',
+  projectRecent: 'lumen:project:recent',
+  projectForget: 'lumen:project:forget',
+  projectAutosave: 'lumen:project:autosave',
+  projectRecovery: 'lumen:project:recovery',
+  projectDiscardRecovery: 'lumen:project:discard-recovery',
+  projectState: 'lumen:project:state',
+  projectStartup: 'lumen:project:startup',
+  confirmDiscard: 'lumen:project:confirm-discard',
+  closeWindow: 'lumen:app:close-window',
+
+  exportBegin: 'lumen:export:begin',
+  exportWrite: 'lumen:export:write',
+  exportFinish: 'lumen:export:finish',
+  exportAbort: 'lumen:export:abort',
+  exportProgress: 'lumen:export:progress',
+
+  captureWindow: 'lumen:app:capture-window',
+
+  /** main → renderer */
+  openRequest: 'lumen:project:open-request',
+  saveBeforeClose: 'lumen:project:save-before-close',
+} as const
+
+/** What the preload exposes as `window.lumen.app`. */
+export interface AppAPI {
+  files: {
+    /** Native "Import media" dialog. */
+    pickMedia(): Promise<MediaFileInfo[]>
+    /** Registers dropped files (by path) so the editor may read them. */
+    register(paths: string[]): Promise<MediaFileInfo[]>
+    /** The absolute path of a File from a drop or <input> (Electron only). */
+    pathForFile(file: File): string
+    /** Lets the user point a missing asset at its new location. */
+    relink(name: string): Promise<MediaFileInfo | null>
+    reveal(path: string): Promise<void>
+    /** Opens a file in the system's default app (e.g. a finished export). */
+    open(path: string): Promise<void>
+    /** Saves bytes the editor produced (snapshot, recording…) into Lumen's media library. */
+    saveMedia(folder: MediaFolder, fileName: string, data: Uint8Array): Promise<MediaFileInfo>
+    urlForPath(path: string): Promise<MediaFileInfo | null>
+  }
+  project: {
+    /** Opens a project file — with a dialog when no path is given. Null if cancelled. */
+    open(path?: string): Promise<OpenedProject | null>
+    save(path: string, text: string): Promise<{ path: string }>
+    /** Save dialog, then save. Null if cancelled. */
+    saveAs(suggestedName: string, text: string): Promise<{ path: string } | null>
+    recent(): Promise<RecentProject[]>
+    forget(path: string): Promise<RecentProject[]>
+    /** Writes the crash-recovery copy (null clears it). */
+    autosave(snapshot: { text: string; path: string | null; name: string } | null): Promise<void>
+    recovery(): Promise<RecoveryInfo | null>
+    discardRecovery(): Promise<void>
+    /** Keeps the window title and close-confirmation in sync with the editor. */
+    setState(state: { name: string; path: string | null; dirty: boolean }): void
+    /** A project file Lumen was launched with (double-clicked .lumen file). */
+    startupFile(): Promise<string | null>
+    /** Native "Save changes?" prompt. */
+    confirmDiscard(name: string): Promise<CloseChoice>
+    onOpenRequest(cb: (path: string) => void): () => void
+    /** The window is closing with unsaved changes and the user chose "Save". */
+    onSaveBeforeClose(cb: () => void): () => void
+    /** Closes the window without asking again (after saving). */
+    closeWindow(): void
+  }
+  export: {
+    /** Save dialog for an export. Null if cancelled. */
+    begin(opts: { defaultName: string; extension: string; filterName: string }): Promise<ExportHandle | null>
+    write(id: string, position: number, data: Uint8Array): Promise<void>
+    finish(id: string): Promise<{ path: string; size: number }>
+    /** Stops an export and deletes the partial file. */
+    abort(id: string): Promise<void>
+    /** Taskbar progress (0..1), or null to clear. */
+    progress(value: number | null): void
+  }
+  window: {
+    /** A JPEG (base64) of the editor window as the user sees it, at most `maxWidth` wide. */
+    capture(maxWidth: number): Promise<string>
+  }
+}
