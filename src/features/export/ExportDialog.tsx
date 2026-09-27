@@ -61,7 +61,10 @@ export function ExportDialog() {
   const open = useUI((s) => s.exportOpen)
   const setOpen = useUI((s) => s.setExportOpen)
   const project = useEditor((s) => s.project)
-  const duration = projectDuration(project)
+  const marked = project.range ?? null
+  const [span, setSpan] = useState<'all' | 'range'>('all')
+  const useRange = span === 'range' && marked !== null
+  const duration = useRange ? marked.out - marked.in : projectDuration(project)
   const { fps: projectFps, width: pw, height: ph } = project.settings
   const sizes = useMemo(() => sizesFor(pw, ph), [pw, ph])
 
@@ -89,10 +92,12 @@ export function ExportDialog() {
     setName(getProject().name)
     setState({ kind: 'idle' })
     const p = getProject()
+    // A marked in / out stretch is what you most likely want to export.
+    setSpan(p.range ? 'range' : 'all')
     // Frame-exact, like the export itself — media the preview hasn't loaded still shows.
     let alive = true
     setPreview(undefined)
-    void timelineStills(p, [Math.round(projectDuration(p) * 0.2)], 640)
+    void timelineStills(p, [p.range ? Math.round((p.range.in + p.range.out) / 2) : Math.round(projectDuration(p) * 0.2)], 640)
       .then(([canvas]) => alive && setPreview(canvas.toDataURL('image/jpeg', 0.85)))
       .catch(() => {})
     return () => {
@@ -132,7 +137,9 @@ export function ExportDialog() {
     const started = performance.now()
     setState({ kind: 'running', progress: { phase: 'preparing', done: 0, total: 1, speed: 0, eta: 0, message: 'Starting…' } })
     try {
-      const res = await runExport(getProject(), { format, codec, width: out.width, height: out.height, fps, quality, hardware: hw }, handle, (p) => {
+      const r = getProject().range
+      const range: [number, number] | undefined = useRange && r ? [r.in, r.out] : undefined
+      const res = await runExport(getProject(), { format, codec, width: out.width, height: out.height, fps, quality, hardware: hw, range }, handle, (p) => {
         if (p.preview) setPreview(p.preview)
         setState({ kind: 'running', progress: p })
       }, controller.signal)
@@ -186,6 +193,18 @@ export function ExportDialog() {
           <Row label="File name">
             <Input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.stopPropagation()} disabled={running} />
           </Row>
+          {marked && (
+            <Row label="Range">
+              <Segmented
+                value={span}
+                onChange={(v) => setSpan(v)}
+                options={[
+                  { value: 'all', label: 'Whole timeline' },
+                  { value: 'range', label: `In to out · ${formatDuration(marked.out - marked.in, projectFps)}` },
+                ]}
+              />
+            </Row>
+          )}
           <Row label="Format">
             <Segmented
               value={format}
@@ -235,7 +254,7 @@ export function ExportDialog() {
             </Row>
           )}
           {gif && <p className="text-2xs leading-relaxed text-fg-4">GIFs export at up to 720 px wide and 20 fps, without sound.</p>}
-          {!info.video && <p className="text-2xs leading-relaxed text-fg-4">Exports the mixed audio of the whole timeline.</p>}
+          {!info.video && <p className="text-2xs leading-relaxed text-fg-4">Exports the mixed audio of {useRange ? 'the marked in-to-out stretch' : 'the whole timeline'}.</p>}
         </div>
       </div>
 

@@ -123,6 +123,12 @@ function projectSummary() {
         ...(c.text ? { text: c.text.content } : {}),
         ...(c.effects.length ? { effects: c.effects.map((e) => e.kind) } : {}),
         ...(c.transitionIn ? { transition_in: c.transitionIn.kind } : {}),
+        ...(c.groupId ? { group: c.groupId } : {}),
+        ...(c.freeze ? { freeze_frame: true } : {}),
+        ...(c.audio.detached ? { sound_detached: true } : {}),
+        ...(c.keyframes.speed?.length ? { speed_ramp: true } : c.speed !== 1 ? { speed: c.speed } : {}),
+        ...(c.reverse ? { reverse: true } : {}),
+        ...(c.crop ? { cropped: true } : {}),
       }))
   const duration = projectDuration(p)
   return {
@@ -135,7 +141,8 @@ function projectSummary() {
     playhead_frame: usePlayback.getState().frame,
     playing: usePlayback.getState().playing,
     selection: useUI.getState().selection,
-    tracks: p.tracks.map((t) => ({ id: t.id, name: t.name, kind: t.kind, role: t.role, locked: t.locked, hidden: t.hidden, clips: clipsOn(t.id) })),
+    ...(p.range ? { in_out: { in: p.range.in, out: p.range.out } } : {}),
+    tracks: p.tracks.map((t) => ({ id: t.id, name: t.name, kind: t.kind, role: t.role, locked: t.locked, hidden: t.hidden, ...(t.muted ? { muted: true } : {}), ...(t.solo ? { solo: true } : {}), clips: clipsOn(t.id) })),
     media: Object.values(p.assets).map((a) => ({
       id: a.id,
       name: a.name,

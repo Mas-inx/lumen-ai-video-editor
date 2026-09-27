@@ -1,4 +1,4 @@
-import { Copy, Flag, Magnet, MousePointer2, Scissors, SquareSplitHorizontal, Trash, UnfoldHorizontal, X, ZoomIn, ZoomOut } from 'lucide-react'
+import { ArrowLeftRight, Copy, Flag, Magnet, MousePointer2, MoveHorizontal, Scissors, SeparatorVertical, SquareSplitHorizontal, Trash, UnfoldHorizontal, X, ZoomIn, ZoomOut } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
@@ -7,6 +7,7 @@ import { IconButton } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
 import { useEditor } from '@/editor/store'
 import { useUI, ZOOM_MAX, ZOOM_MIN } from '@/editor/ui-store'
+import { formatDuration } from '@/lib/time'
 import { suggestFor, type Suggestion } from '@/editor/smart'
 import { useCopilot } from '@/features/copilot/store'
 import { actions } from '@/features/shell/actions'
@@ -29,6 +30,15 @@ export function TimelineToolbar() {
         <IconButton size="xs" label="Blade" shortcut="b" active={tool === 'blade'} onClick={() => setTool('blade')}>
           <Scissors />
         </IconButton>
+        <IconButton size="xs" label="Roll — move a cut between two clips" shortcut="r" active={tool === 'roll'} onClick={() => setTool('roll')}>
+          <SeparatorVertical />
+        </IconButton>
+        <IconButton size="xs" label="Slip — change the footage in place" shortcut="y" active={tool === 'slip'} onClick={() => setTool('slip')}>
+          <ArrowLeftRight />
+        </IconButton>
+        <IconButton size="xs" label="Slide — move a clip between its neighbours" shortcut="u" active={tool === 'slide'} onClick={() => setTool('slide')}>
+          <MoveHorizontal />
+        </IconButton>
       </div>
       <div className="mx-1.5 h-4 w-px bg-line-2" />
       <IconButton label="Split at playhead" shortcut="s" onClick={actions.split}>
@@ -47,6 +57,8 @@ export function TimelineToolbar() {
       <IconButton label="Add marker" shortcut="m" onClick={actions.addMarker}>
         <Flag />
       </IconButton>
+
+      <RangeChip />
 
       <div className="flex min-w-0 flex-1 justify-center px-3">
         <CopilotHint />
@@ -71,6 +83,23 @@ export function TimelineToolbar() {
       <IconButton label="Zoom to fit" shortcut="shift+z" onClick={actions.zoomToFit}>
         <UnfoldHorizontal />
       </IconButton>
+    </div>
+  )
+}
+
+/** The marked in / out stretch, with a way to clear it. */
+function RangeChip() {
+  const range = useEditor((s) => s.project.range)
+  const fps = useEditor((s) => s.project.settings.fps)
+  if (!range) return null
+  return (
+    <div className="ml-1 flex h-6 shrink-0 items-center gap-1 rounded-full bg-accent/10 pr-0.5 pl-2 text-2xs font-medium text-accent-2 shadow-[inset_0_0_0_1px_rgb(214_238_0/0.25)]">
+      <button type="button" onClick={actions.goToIn} className="font-mono tabular hover:text-fg" title="In to out — click to go to the in point (Shift+I)">
+        In–Out {formatDuration(range.out - range.in, fps)}
+      </button>
+      <button type="button" aria-label="Clear in and out" onClick={actions.clearInOut} className="grid size-5 place-items-center rounded-full text-accent-2/80 hover:bg-white/[0.08] hover:text-fg">
+        <X className="size-3" />
+      </button>
     </div>
   )
 }

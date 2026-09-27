@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { ContextMenu } from 'radix-ui'
 import { Trash } from 'lucide-react'
 import { projectDuration } from '@/editor/ops'
 import { playback, usePlayback } from '@/editor/playback'
 import { dispatch, useEditor } from '@/editor/store'
 import type { Marker } from '@/editor/types'
-import { parseTimecode, formatTimecode } from '@/lib/time'
+import { formatDuration, parseTimecode, formatTimecode } from '@/lib/time'
 import { Tip } from '@/components/ui/tooltip'
 import { useLayout } from './layout'
 import { HEADER_W, RULER_H } from './model'
@@ -80,6 +80,7 @@ export function Ruler({ width, laneViewport, scrollLeft }: { width: number; lane
   return (
     <div data-ruler className="relative shrink-0 border-b border-line bg-surface" style={{ width, height: RULER_H }}>
       <canvas ref={canvasRef} className="pointer-events-none sticky top-0 block" style={{ left: HEADER_W, width: laneViewport, height: RULER_H }} />
+      <RangeBand />
       {markers.map((m) => (
         <MarkerFlag key={m.id} marker={m} x={(m.frame / fps) * pps} />
       ))}
@@ -133,6 +134,59 @@ function MarkerFlag({ marker, x }: { marker: Marker; x: number }) {
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>
+  )
+}
+
+/** The in / out stretch: drag either end to adjust it, right-click for what to do with it. */
+function RangeBand() {
+  const { pps, fps } = useLayout()
+  const range = useEditor((s) => s.project.range)
+  if (!range) return null
+  const x0 = (range.in / fps) * pps
+  const x1 = (range.out / fps) * pps
+
+  const drag = (e: ReactPointerEvent, edge: 'in' | 'out' | 'both') => {
+    e.stopPropagation()
+    e.preventDefault()
+    const startX = e.clientX
+    const start = { ...range }
+    const key = `range:${edge}:${Date.now()}`
+    const move = (ev: PointerEvent) => {
+      const df = Math.round(((ev.clientX - startX) / pps) * fps)
+      let next = { ...start }
+      if (edge === 'in') next.in = Math.max(0, Math.min(start.out - 1, start.in + df))
+      else if (edge === 'out') next.out = Math.max(start.in + 1, start.out + df)
+      else {
+        const d = Math.max(-start.in, df)
+        next = { in: start.in + d, out: start.out + d }
+      }
+      // Snap the dragged end to the playhead.
+      const playhead = usePlayback.getState().frame
+      const near = (f: number) => Math.abs(f - playhead) * (pps / fps) < 8
+      if (edge === 'in' && near(next.in) && playhead < next.out) next.in = playhead
+      if (edge === 'out' && near(next.out) && playhead > next.in) next.out = playhead
+      dispatch('timeline.setRange', { range: next }, { coalesce: key, label: 'Adjust in and out' })
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
+  return (
+    <div
+      data-range
+      className="absolute top-0 z-[5] h-[11px] cursor-grab rounded-b-[3px] bg-accent/25 shadow-[inset_0_-1.5px_0_var(--color-accent)]"
+      style={{ left: x0, width: Math.max(2, x1 - x0) }}
+      onPointerDown={(e) => drag(e, 'both')}
+      title={`In ${formatTimecode(range.in, fps)} · Out ${formatTimecode(range.out, fps)} · ${formatDuration(range.out - range.in, fps)}`}
+    >
+      {x1 - x0 > 70 && <span className="pointer-events-none absolute inset-x-2 top-px truncate text-center font-mono text-[9px] leading-[10px] font-semibold text-accent-2">{formatDuration(range.out - range.in, fps)}</span>}
+      <span onPointerDown={(e) => drag(e, 'in')} className="absolute -left-[3px] top-0 h-[18px] w-[7px] cursor-ew-resize rounded-l-[2px] border-l-2 border-accent" aria-label="In point" />
+      <span onPointerDown={(e) => drag(e, 'out')} className="absolute -right-[3px] top-0 h-[18px] w-[7px] cursor-ew-resize rounded-r-[2px] border-r-2 border-accent" aria-label="Out point" />
+    </div>
   )
 }
 

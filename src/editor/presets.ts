@@ -100,6 +100,19 @@ export const ANIMATIONS: { preset: AnimPreset; name: string; textOnly?: boolean 
   { preset: 'flip3d', name: '3D Flip' },
 ]
 
+// ─── Speed ramps ─────────────────────────────────────────────────────────
+
+/** Speed-ramp shapes: the speed at positions 0 (clip start) to 1 (clip end). */
+export const SPEED_RAMPS: { id: string; name: string; description: string; points: { at: number; speed: number }[] }[] = [
+  { id: 'montage', name: 'Montage', description: 'Bursts of speed around a slow beat', points: [{ at: 0, speed: 1 }, { at: 0.22, speed: 3 }, { at: 0.5, speed: 0.5 }, { at: 0.78, speed: 3 }, { at: 1, speed: 1 }] },
+  { id: 'hero', name: 'Hero', description: 'Fast in, slow-motion moment, fast out', points: [{ at: 0, speed: 2 }, { at: 0.38, speed: 2 }, { at: 0.5, speed: 0.3 }, { at: 0.62, speed: 2 }, { at: 1, speed: 2 }] },
+  { id: 'bullet', name: 'Bullet', description: 'Racing, then time nearly stops, then racing', points: [{ at: 0, speed: 4 }, { at: 0.4, speed: 0.2 }, { at: 0.6, speed: 0.2 }, { at: 1, speed: 4 }] },
+  { id: 'flash-in', name: 'Flash in', description: 'Starts fast and settles to real time', points: [{ at: 0, speed: 5 }, { at: 0.35, speed: 1 }, { at: 1, speed: 1 }] },
+  { id: 'flash-out', name: 'Flash out', description: 'Real time, then whips away fast', points: [{ at: 0, speed: 1 }, { at: 0.65, speed: 1 }, { at: 1, speed: 5 }] },
+  { id: 'ramp-up', name: 'Speed up', description: 'Slow motion building to fast', points: [{ at: 0, speed: 0.5 }, { at: 1, speed: 3 }] },
+  { id: 'ramp-down', name: 'Slow down', description: 'Fast easing into slow motion', points: [{ at: 0, speed: 3 }, { at: 1, speed: 0.4 }] },
+]
+
 // ─── Title presets ───────────────────────────────────────────────────────
 
 export interface TitlePreset {

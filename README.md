@@ -19,7 +19,7 @@ Lumen is a desktop video editor where the AI isn't a chatbot bolted onto a timel
 [![CI](https://img.shields.io/github/actions/workflow/status/Mas-inx/lumen-ai-video-editor/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/Mas-inx/lumen-ai-video-editor/actions/workflows/ci.yml)
 ![License: MIT](https://img.shields.io/badge/license-MIT-d6ee00?style=flat-square)
 ![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-2b2c26?style=flat-square)
-![69 AI tools](https://img.shields.io/badge/AI%20tools-69-d6ee00?style=flat-square)
+![83 AI tools](https://img.shields.io/badge/AI%20tools-83-d6ee00?style=flat-square)
 ![MCP server and client](https://img.shields.io/badge/MCP-server%20%2B%20client-2b2c26?style=flat-square)
 ![Electron 44](https://img.shields.io/badge/Electron-44-2b2c26?style=flat-square&logo=electron)
 ![React 19](https://img.shields.io/badge/React-19-2b2c26?style=flat-square&logo=react)
@@ -32,7 +32,7 @@ Lumen is a desktop video editor where the AI isn't a chatbot bolted onto a timel
 
 ## Why Lumen
 
-- **An AI that edits, not just chats.** Every edit in Lumen is a typed command, and the AI gets all of them — plus tools to look and listen. About 70 tools in all, each change a normal undo step. [See them all →](docs/AI-TOOLS.md)
+- **An AI that edits, not just chats.** Every edit in Lumen is a typed command, and the AI gets all of them — plus tools to look and listen. More than 80 tools in all, each change a normal undo step. [See them all →](docs/AI-TOOLS.md)
 - **It sees what you'll export.** When the AI checks a frame, it's rendered exactly as the export will be: every track, title, effect and transition. It can watch the whole edit as a contact sheet, look inside footage, and hear loudness, silences and speech.
 - **Bring your own brain.** Use the Claude Code or Codex you already pay for, an API key from any major provider, or a local model. Lumen is also an **MCP server**, so any agent can drive it.
 - **Local-first.** Media is edited in place and never uploaded. Speech-to-text runs on your GPU with Whisper. No account, no watermark, no telemetry.
@@ -59,6 +59,7 @@ It's an open-source alternative to editors like CapCut, Filmora and Descript —
 
 - **Magnetic main track** that keeps your story edge to edge, with free tracks above and below for B-roll, overlays, titles, captions, voice, music and sound effects.
 - Split, trim, ripple, slide into gaps, snapping, markers, speed and reverse, and **keyframes with easing** on every property.
+- **Pro editing tools:** roll, slip and slide; ripple trim and insert or overwrite on any track; in and out points to play, lift, extract or export a stretch; copy, cut, paste and *paste attributes*; crop with rounded corners; freeze frames and **speed ramps**; detached sound for J- and L-cuts; groups; and solo and reorder for tracks.
 - **2D and 3D transitions** (cube, flip, door, page curl, shatter…), effects, **colour looks and grading**, and extruded **3D titles** rendered live.
 - **Sound that drives the picture:** a Web Audio mix with per-clip volume, fades and keyframes, *Studio voice* clean-up, on-device noise reduction and 15 built-in sound effects.
 - Import **MP4, MOV, WebM, MKV, MP3, WAV, FLAC, PNG, JPEG, WebP, GIF** and more — by dialog, folder or drag and drop. Files stay where they are; missing ones can be relinked.
@@ -138,7 +139,7 @@ From 480p to 4K in your project's shape, 24–60 fps, with **hardware encoding**
 
 <img src="docs/screenshots/integrations.jpg" alt="Lumen's integrations hub: AI models, Claude Code and Codex, Blender, HyperFrames, MCP servers and Lumen's own MCP server" />
 
-- **Lumen is an MCP server.** Turn it on and any agent — Claude Code, Claude Desktop, your own — gets the same ~70 tools, pictures included:
+- **Lumen is an MCP server.** Turn it on and any agent — Claude Code, Claude Desktop, your own — gets the same 80-plus tools, pictures included:
 
   ```bash
   claude mcp add --transport http lumen http://127.0.0.1:47910/mcp --header "Authorization: Bearer <token from Lumen>"
@@ -193,6 +194,12 @@ npm run dev      # the app, with hot reload
 | `←` `→` · `↑` `↓` | Frame step · previous / next edit point |
 | `S` · `Del` · `Shift+Del` | Split · delete · ripple delete |
 | `V` · `B` · `N` · `M` | Select tool · blade · snapping · marker |
+| `R` · `Y` · `U` | Roll · slip · slide tools |
+| `I` · `O` · `X` · `Alt+X` | Mark in · out · around the selection · clear |
+| `Shift+Space` · `;` · `'` | Play in to out · lift · extract |
+| `Ctrl+C` · `Ctrl+X` · `Ctrl+V` · `Ctrl+Alt+V` | Copy · cut · paste · paste attributes |
+| `Shift+F` · `Ctrl+L` · `Ctrl+G` | Freeze frame · detach audio · group |
+| Drag + `Ctrl` · `Shift` | Insert · overwrite (on a trim handle, `Ctrl` ripples) |
 | `=` `-` · `Shift+Z` | Zoom · zoom to fit |
 | `Ctrl+Z` · `Ctrl+Shift+Z` | Undo · redo |
 | `Ctrl+I` · `Ctrl+E` · `Ctrl+S` · `Ctrl+O` | Import · export · save · open |
@@ -206,7 +213,7 @@ Ideas the project is heading towards — contributions welcome:
 
 - [ ] macOS and Linux builds
 - [ ] Code-signed installer
-- [ ] Exporting a marked range, and render queues
+- [ ] Render queues
 - [ ] Streaming audio for hour-long recordings
 - [ ] More languages for the interface
 

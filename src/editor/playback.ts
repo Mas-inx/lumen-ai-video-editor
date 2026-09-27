@@ -2,6 +2,9 @@
  * Playback clock. Frame-accurate, driven by requestAnimationFrame. At normal
  * speed the picture follows the audio engine's clock (so sound and picture
  * never drift apart); shuttling and silent playback follow the wall clock.
+ *
+ * With in and out points set, "play in to out" plays just that stretch, and
+ * looping from inside it loops the stretch.
  */
 import { create } from 'zustand'
 import { audioEngine } from '@/engine/audio-engine'
@@ -32,9 +35,21 @@ let anchorTime = 0
 let anchorFrame = 0
 /** Audio-clock time that corresponds to `anchorFrame`, when sound is playing. */
 let anchorAudio: number | null = null
+/** Playing in to out: stop (or loop) at the out point. */
+let inToOut = false
 
 const fps = () => useEditor.getState().project.settings.fps
 const endFrame = () => Math.max(1, projectDuration(useEditor.getState().project))
+const markedRange = () => useEditor.getState().project.range ?? null
+
+/** The stretch playback is confined to right now, if any. */
+function playRange() {
+  const range = markedRange()
+  if (!range) return null
+  if (inToOut) return range
+  // Looping from inside the marked stretch loops the stretch.
+  return usePlayback.getState().loop && anchorFrame >= range.in && anchorFrame < range.out ? range : null
+}
 
 /** Restarts the clock (and the sound) at `frame`. */
 function anchor(frame: number, rate: number) {
@@ -54,18 +69,21 @@ function elapsedSeconds(now: number) {
 
 function tick(now: number) {
   const { rate, loop } = usePlayback.getState()
-  const end = endFrame()
+  const range = playRange()
+  const end = range ? range.out : endFrame()
+  const restart = range ? range.in : 0
   let f = anchorFrame + elapsedSeconds(now) * fps() * (anchorAudio !== null ? 1 : rate)
   if (rate > 0 && f >= end) {
     if (!loop) {
       raf = 0
       audioEngine.stop()
       anchorAudio = null
-      usePlayback.setState({ frame: end, playing: false, rate: 1 })
+      inToOut = false
+      usePlayback.setState({ frame: range ? Math.max(range.in, end - 1) : end, playing: false, rate: 1 })
       return
     }
-    anchor(0, rate)
-    f = 0
+    anchor(restart, rate)
+    f = restart
   } else if (rate < 0 && f <= 0) {
     raf = 0
     usePlayback.setState({ frame: 0, playing: false, rate: 1 })
@@ -78,15 +96,27 @@ function tick(now: number) {
 
 export const playback = {
   play(rate = 1) {
+    inToOut = false
     let start = usePlayback.getState().frame
     if (rate > 0 && start >= endFrame() - 1) start = 0
     anchor(start, rate)
     usePlayback.setState({ playing: true, rate, frame: start })
     if (!raf) raf = requestAnimationFrame(tick)
   },
+  /** Plays from the in point to the out point (the whole timeline when none are set). */
+  playInToOut() {
+    const range = markedRange()
+    if (!range) return playback.play()
+    playback.pause()
+    inToOut = true
+    anchor(range.in, 1)
+    usePlayback.setState({ playing: true, rate: 1, frame: range.in })
+    if (!raf) raf = requestAnimationFrame(tick)
+  },
   pause() {
     cancelAnimationFrame(raf)
     raf = 0
+    inToOut = false
     anchorAudio = null
     audioEngine.stop()
     usePlayback.setState({ playing: false, rate: 1 })

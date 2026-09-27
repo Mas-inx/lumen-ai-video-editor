@@ -181,7 +181,12 @@ export function pruneVideos(keep: Set<string>) {
   }
 }
 
-export function videoFrame(key: string, url: string, t: number, playing: boolean): CanvasImageSource | null {
+/**
+ * The frame of a video at source time `t`. While playing, the element runs at `rate`
+ * (the clip's speed) and is only re-seeked when it drifts; a rate of 0 (reversed
+ * clips, freeze frames) steps it frame by frame instead.
+ */
+export function videoFrame(key: string, url: string, t: number, playing: boolean, rate = 1): CanvasImageSource | null {
   if (exportFrames) return exportFrames(key)
   let entry = videos.get(key)
   if (!entry || entry.el.src !== new URL(url, location.href).href) {
@@ -208,9 +213,14 @@ export function videoFrame(key: string, url: string, t: number, playing: boolean
   const { el } = entry
   if (!entry.ready || entry.failed) return null
   const target = Math.max(0, Math.min(t, (el.duration || t + 1) - 0.01))
-  if (playing) {
+  if (playing && rate > 0) {
+    const r = Math.min(16, Math.max(0.0625, rate))
+    if (Math.abs(el.playbackRate - r) > 0.005) el.playbackRate = r
     if (el.paused) void el.play().catch(() => {})
-    if (Math.abs(el.currentTime - target) > 0.25) el.currentTime = target
+    if (Math.abs(el.currentTime - target) > 0.25 * Math.max(1, r)) el.currentTime = target
+  } else if (playing) {
+    if (!el.paused) el.pause()
+    if (Math.abs(el.currentTime - target) > 0.02 && !el.seeking) el.currentTime = target
   } else {
     if (!el.paused) el.pause()
     if (Math.abs(el.currentTime - target) > 0.02 && !el.seeking) el.currentTime = target

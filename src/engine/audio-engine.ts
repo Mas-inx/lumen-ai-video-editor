@@ -9,6 +9,7 @@
 import { PEAKS_PER_SECOND } from '@/editor/defaults'
 import { propAt } from '@/editor/keyframes'
 import { clipEnd } from '@/editor/ops'
+import { isRamped, sourceFrameAt, speedAt } from '@/editor/timing'
 import type { Asset, Clip, Project } from '@/editor/types'
 import { decodeAudio } from './decode'
 
@@ -162,11 +163,13 @@ async function clipBuffer(asset: Asset, clip: Clip): Promise<AudioBuffer | null>
 
 const dbToGain = (db: number) => (db <= -60 ? 0 : Math.pow(10, db / 20))
 
-/** Whether a clip makes sound at all. */
+/** Whether a clip makes sound at all: freeze frames and video whose sound was detached are silent, and while any track is soloed only soloed tracks play. */
 export function isAudible(project: Project, clip: Clip) {
   if (clip.kind !== 'audio' && clip.kind !== 'video') return false
+  if (clip.freeze || (clip.kind === 'video' && clip.audio.detached)) return false
   const track = project.tracks.find((t) => t.id === clip.trackId)
   if (!track || track.muted) return false
+  if (!track.solo && project.tracks.some((t) => t.solo)) return false
   return Boolean(clip.assetId && audioSourceUrl(project.assets[clip.assetId]))
 }
 
@@ -227,16 +230,26 @@ function scheduleClip(ctx: BaseAudioContext, dest: AudioNode, project: Project, 
   const a = Math.max(cs, from)
   const b = Math.min(ce, to)
   if (b - a <= 1e-4) return null
-  const speed = clip.speed
-  const srcAt = (T: number) => (clip.reverse ? clip.inPoint / fps + (ce - T) * speed : clip.inPoint / fps + (T - cs) * speed)
+  const localAt = (T: number) => (T - cs) * fps
+  const srcAt = (T: number) => sourceFrameAt(clip, localAt(T)) / fps
   // Reversed clips play a reversed copy forwards.
   const offset = clip.reverse ? buffer.duration - srcAt(a) : srcAt(a)
-  const span = (b - a) * speed
+  const span = Math.abs(srcAt(b) - srcAt(a))
   if (offset >= buffer.duration || offset + span <= 0) return null
+  const when = at + (a - from)
+  const dur = b - a
 
   const source = ctx.createBufferSource()
   source.buffer = buffer
+  const speed = speedAt(clip, localAt(a))
   source.playbackRate.value = speed
+  if (isRamped(clip)) {
+    // A speed ramp: the rate follows the ramp, so the sound stays locked to the picture.
+    const steps = Math.max(2, Math.min(24000, Math.ceil(dur * 60)))
+    const curve = new Float32Array(steps)
+    for (let i = 0; i < steps; i++) curve[i] = speedAt(clip, localAt(a + (dur * i) / (steps - 1)))
+    source.playbackRate.setValueCurveAtTime(curve, when, Math.max(0.001, dur))
+  }
   const gain = ctx.createGain()
   const nodes: AudioNode[] = [source, gain]
   gain.connect(dest)
@@ -247,9 +260,6 @@ function scheduleClip(ctx: BaseAudioContext, dest: AudioNode, project: Project, 
   } else source.connect(gain)
 
   // Gain automation from the start of the scheduled part to its end.
-  const when = at + (a - from)
-  const dur = b - a
-  const localAt = (T: number) => (T - cs) * fps
   const animated = Boolean(clip.keyframes.volume?.length)
   if (!animated && !clip.audio.fadeIn && !clip.audio.fadeOut) {
     gain.gain.setValueAtTime(clipGainAt(clip, localAt(a)), when)

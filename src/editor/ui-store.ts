@@ -4,7 +4,8 @@ import { useEditor } from './store'
 
 export type LeftTab = 'media' | 'audio' | 'text' | 'effects' | 'transitions' | 'looks' | 'generate'
 export type RightTab = 'inspector' | 'copilot'
-export type Tool = 'select' | 'blade'
+/** select: move and trim · blade: cut · roll: move a cut · slip: change the footage in place · slide: move a clip between its neighbours */
+export type Tool = 'select' | 'blade' | 'roll' | 'slip' | 'slide'
 export type SelectMode = 'replace' | 'toggle' | 'add'
 
 export const ZOOM_MIN = 6
@@ -19,6 +20,9 @@ interface UIState {
   pxPerSecond: number
   selection: string[]
   showGuides: boolean
+  /** The preview gizmo edits the selected clip's crop instead of its transform. */
+  cropMode: boolean
+  pasteAttributesOpen: boolean
   paletteOpen: boolean
   exportOpen: boolean
   shortcutsOpen: boolean
@@ -36,6 +40,8 @@ interface UIState {
   select: (ids: string[], mode?: SelectMode) => void
   clearSelection: () => void
   setShowGuides: (v: boolean) => void
+  setCropMode: (v: boolean) => void
+  setPasteAttributesOpen: (v: boolean) => void
   setPaletteOpen: (v: boolean) => void
   setExportOpen: (v: boolean) => void
   setShortcutsOpen: (v: boolean) => void
@@ -54,6 +60,8 @@ export const useUI = create<UIState>()(
       pxPerSecond: 36,
       selection: [],
       showGuides: false,
+      cropMode: false,
+      pasteAttributesOpen: false,
       paletteOpen: false,
       exportOpen: false,
       shortcutsOpen: false,
@@ -79,6 +87,8 @@ export const useUI = create<UIState>()(
         }),
       clearSelection: () => set({ selection: [] }),
       setShowGuides: (showGuides) => set({ showGuides }),
+      setCropMode: (cropMode) => set({ cropMode }),
+      setPasteAttributesOpen: (pasteAttributesOpen) => set({ pasteAttributesOpen }),
       setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
       setExportOpen: (exportOpen) => set({ exportOpen }),
       setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
@@ -111,4 +121,9 @@ useEditor.subscribe((state, prev) => {
   const { selection } = useUI.getState()
   const alive = selection.filter((id) => state.project.clips[id])
   if (alive.length !== selection.length) useUI.setState({ selection: alive })
+})
+
+// Crop mode belongs to one clip: selecting something else leaves it.
+useUI.subscribe((state, prev) => {
+  if (state.cropMode && state.selection !== prev.selection) useUI.setState({ cropMode: false })
 })

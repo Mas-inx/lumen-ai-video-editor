@@ -88,6 +88,8 @@ export interface Track {
   hidden: boolean
   muted: boolean
   locked: boolean
+  /** Only soloed tracks are heard while any track is soloed. */
+  solo?: boolean
   /** Lane height in px — a view preference that travels with the project. */
   height: number
   role?: 'main' | 'titles' | 'captions'
@@ -132,6 +134,20 @@ export interface AudioMix {
   fadeOut: Frame
   enhance: boolean
   denoise: boolean
+  /** A video clip whose sound was split onto its own audio clip — the video itself stays silent. */
+  detached?: boolean
+}
+
+/**
+ * Crop, as fractions of the picture cut from each edge (0..0.95), plus
+ * rounded corners as a fraction of half the shorter visible side (0..1).
+ */
+export interface Crop {
+  left: number
+  right: number
+  top: number
+  bottom: number
+  radius: number
 }
 
 export type FontId = 'sans' | 'display' | 'serif' | 'mono' | 'hand'
@@ -236,7 +252,8 @@ export type BlendMode =
   | 'color-dodge'
   | 'difference'
 
-export type AnimatableProp = 'x' | 'y' | 'scale' | 'rotation' | 'opacity' | 'volume' | 'rotateX' | 'rotateY' | 'z'
+/** `speed` keyframes make a speed ramp: the clip's footage plays at a changing rate. */
+export type AnimatableProp = 'x' | 'y' | 'scale' | 'rotation' | 'opacity' | 'volume' | 'rotateX' | 'rotateY' | 'z' | 'speed'
 
 export type Easing = 'linear' | 'ease' | 'ease-in' | 'ease-out' | 'hold'
 
@@ -271,6 +288,11 @@ export interface Clip {
   transitionIn: Transition | null
   effects: Effect[]
   keyframes: Partial<Record<AnimatableProp, Keyframe[]>>
+  crop?: Crop
+  /** Clips sharing a group move and select together (a video and its detached sound, or a user group). */
+  groupId?: string
+  /** Holds the frame at `inPoint` for the whole clip (a freeze frame). */
+  freeze?: boolean
 }
 
 // ─── Project ─────────────────────────────────────────────────────────────
@@ -291,6 +313,12 @@ export interface ProjectSettings {
   background: string
 }
 
+/** In and out points on the timeline: what plays in a loop, exports as a range, or gets lifted / extracted. */
+export interface TimelineRange {
+  in: Frame
+  out: Frame
+}
+
 export interface Project {
   id: string
   name: string
@@ -299,5 +327,6 @@ export interface Project {
   tracks: Track[]
   clips: Record<string, Clip>
   markers: Marker[]
+  range?: TimelineRange | null
   createdAt: number
 }

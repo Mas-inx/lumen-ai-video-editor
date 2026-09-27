@@ -22,7 +22,10 @@ src/
     types.ts          project model — integer frames at the project's fps
     commands.ts       every mutation: Zod schema + description + run()  → agent tools
     store.ts          dispatch · undo/redo with Immer patches · transactions · savepoints
-    ops.ts            timeline rules: magnetic main track, gap-seeking moves, trims, ripple, range removal
+    ops.ts            timeline rules: magnetic main track, gap-seeking moves, trims, ripple, roll / slip / slide,
+                      insert / overwrite, freeze frames, linked sound and groups, range removal
+    timing.ts         clip time → source time: speed, speed ramps (integrated), reverse, freeze frames
+    clipboard.ts      copy / paste of clips and their media, across projects
     smart.ts          speech-aware edits: pauses, captions, ducking, reframing
     playback.ts       transport, clocked by the audio engine
   engine/           pixels and samples

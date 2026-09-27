@@ -1,11 +1,13 @@
 import { clamp, easeInCubic, easeInOutCubic, easeOutCubic, lerp } from '@/lib/math'
 import type { AnimatableProp, Clip, Easing, Keyframe } from './types'
 
-export const ANIMATABLE: AnimatableProp[] = ['x', 'y', 'scale', 'rotation', 'opacity', 'volume', 'rotateX', 'rotateY', 'z']
+export const ANIMATABLE: AnimatableProp[] = ['x', 'y', 'scale', 'rotation', 'opacity', 'volume', 'rotateX', 'rotateY', 'z', 'speed']
 
 /** The static (un-animated) value of a property. */
 export function baseValue(clip: Clip, prop: AnimatableProp): number {
-  return prop === 'volume' ? clip.audio.volume : (clip.transform[prop] ?? 0)
+  if (prop === 'volume') return clip.audio.volume
+  if (prop === 'speed') return clip.speed
+  return clip.transform[prop] ?? 0
 }
 
 function ease(e: Easing, t: number) {

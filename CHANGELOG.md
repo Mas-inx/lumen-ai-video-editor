@@ -6,6 +6,16 @@ Every notable change to Lumen, newest first. The format follows [Keep a Changelo
 
 ### Added
 
+- **Pro trim tools.** The **roll** (`R`), **slip** (`Y`) and **slide** (`U`) tools; hold `Ctrl` on a trim handle to **ripple trim** on any track; hold `Ctrl` while dragging clips to **insert** (push clips later) or `Shift` to **overwrite**.
+- **In and out points.** `I` and `O` mark a stretch (drag its ends on the ruler); `Shift+Space` plays it, looping plays just that stretch, `;` lifts it, `'` extracts it, and the Export dialog can export only that stretch.
+- **Copy, cut and paste** clips (`Ctrl+C`, `Ctrl+X`, `Ctrl+V`, `Ctrl+Shift+V` to paste as an insert), also between projects, and **paste attributes** (`Ctrl+Alt+V`) to copy transform, crop, color, effects, audio, speed, animation, text style or blend mode onto other clips.
+- **Crop** with rounded corners: sliders, aspect presets (16:9, 1:1, 9:16, 4:5, circle) and a crop box to drag on the canvas.
+- **Freeze frames** (`Shift+F`) and **speed ramps**: presets such as Montage, Hero and Bullet, or shape the curve yourself. Ramps keep the same footage, and the sound follows the ramp.
+- **Detach audio** (`Ctrl+L`) onto its own clip, linked to the picture, for J- and L-cuts; it stays in sync when the main track moves. Reattach it any time.
+- **Groups** (`Ctrl+G`): grouped and linked clips select, move and cut together; hold `Alt` to pick just one.
+- **Solo** tracks, **mute** a video track's sound, and **reorder tracks** by dragging.
+- 14 new AI tools for all of the above, for 83 in all.
+
 - **OpenCode Go** as a Copilot brain: paste your OpenCode Go key and pick from GLM, Kimi, DeepSeek, Qwen, MiniMax, MiMo, Grok, GPT Luna and the rest of its models.
 - **Choose the model and effort for every brain.**
   - Claude Code gets its default plus Fable, Opus, Sonnet and Haiku.
@@ -19,6 +29,8 @@ Every notable change to Lumen, newest first. The format follows [Keep a Changelo
 
 ### Fixed
 
+- A video at a speed other than 1× now plays smoothly in the preview; before, it played at normal speed and kept jumping to catch up.
+- `Shift+←` and `Shift+→` move one second at any frame rate, not 30 frames.
 - Lumen's taskbar, Start menu and desktop icons were blank after installing 1.0.2. The app's long description overflowed into the shortcuts' icon path; it's short again, and a test keeps it that way.
 - Claude, GPT and Gemini models on **OpenCode Zen** now work. Each goes to the endpoint of its own family (Anthropic, OpenAI Responses, Google) instead of OpenAI chat completions. Requests also carry the client name and session that OpenCode's gateways ask for.
 - Follow-up messages to Claude Opus 5.5 and Fable 5.1 no longer risk being rejected. Earlier turns' thinking isn't replayed once their pictures and long results have been trimmed.

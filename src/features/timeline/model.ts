@@ -43,6 +43,8 @@ interface DragState {
   bladeFrame: number | null
   dropGhost: DropGhost | null
   dropTargetClip: string | null
+  /** Reordering tracks: the content-space y of the insertion line. */
+  trackDropY: number | null
 }
 
 export const useDrag = create<DragState>(() => ({
@@ -55,6 +57,7 @@ export const useDrag = create<DragState>(() => ({
   bladeFrame: null,
   dropGhost: null,
   dropTargetClip: null,
+  trackDropY: null,
 }))
 
 export const resetDrag = () =>

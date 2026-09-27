@@ -90,10 +90,11 @@ export const useEditor = create<EditorState>()((set, get) => ({
     let next: Project
     let patches: Patch[]
     let inverse: Patch[]
+    const before = get().project
     try {
-      ;[next, patches, inverse] = produceWithPatches(get().project, (draft) => {
+      ;[next, patches, inverse] = produceWithPatches(before, (draft) => {
         result = def.run(draft, parsed.data)
-        normalizeProject(draft)
+        normalizeProject(draft, before)
       })
     } catch (err) {
       if (err instanceof CommandError) return { ok: false, error: err.message }

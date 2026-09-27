@@ -4,13 +4,15 @@ import { toast } from 'sonner'
 import { ContextMenu } from 'radix-ui'
 import { ContextContent, ContextItem, ContextSeparator, ContextSub } from '@/components/ui/menu'
 import { AiSparkle } from '@/components/brand'
+import { useClipboard } from '@/editor/clipboard'
 import { clipEnd, findFreeStart, isMagneticTrack, magneticLayout, projectDuration, trackAccepts } from '@/editor/ops'
 import { applyEffect, applyLook, applyTransition, assetFrames, placeAsset, placeTitle } from '@/editor/placement'
 import { usePlayback } from '@/editor/playback'
-import { TITLE_PRESETS } from '@/editor/presets'
+import { SPEED_RAMPS, TITLE_PRESETS } from '@/editor/presets'
 import { dispatch, getProject, useEditor } from '@/editor/store'
+import { isRamped } from '@/editor/timing'
 import type { ClipKind } from '@/editor/types'
-import { useUI, ZOOM_MAX, ZOOM_MIN } from '@/editor/ui-store'
+import { useUI, ZOOM_MAX, ZOOM_MIN, type Tool } from '@/editor/ui-store'
 import { SFX } from '@/engine/sfx'
 import { sfxAsset } from '@/project/audio-library'
 import { askCopilotAbout } from '@/features/copilot/store'
@@ -29,6 +31,19 @@ import { usePointerController } from './usePointerController'
 const SCISSORS_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><path d="M8.12 8.12 12 12"/><path d="M20 4 8.12 15.88"/><circle cx="6" cy="18" r="3"/><path d="M14.8 14.8 20 20"/></svg>',
 )}") 11 11, crosshair`
+
+/** A white-on-dark cursor from one SVG path, readable on any clip color. */
+const pathCursor = (d: string, fallback: string) =>
+  `url("data:image/svg+xml,${encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="${d}" stroke="black" stroke-opacity="0.7" stroke-width="4"/><path d="${d}" stroke="white" stroke-width="1.8"/></svg>`,
+  )}") 12 12, ${fallback}`
+
+const TOOL_CURSOR: Partial<Record<Tool, string>> = {
+  blade: SCISSORS_CURSOR,
+  roll: pathCursor('M10 5v14M14 5v14M7 12H2m0 0 2.5-2.5M2 12l2.5 2.5M17 12h5m0 0-2.5-2.5M22 12l-2.5 2.5', 'col-resize'),
+  slip: pathCursor('M6 5H4v14h2M18 5h2v14h-2M8 12h8m-8 0 2-2m-2 2 2 2m6-2-2-2m2 2-2 2', 'ew-resize'),
+  slide: pathCursor('M9 8h6v8H9zM2 12h4m-4 0 2-2m-2 2 2 2M22 12h-4m4 0-2-2m2 2-2 2', 'ew-resize'),
+}
 
 export function Timeline() {
   const tracks = useEditor((s) => s.project.tracks)
@@ -273,8 +288,9 @@ export function Timeline() {
             <div ref={scrollRef} className="relative min-h-0 flex-1 overflow-auto overscroll-contain">
               <div
                 ref={contentRef}
+                data-timeline-content
                 className="relative flex min-h-full flex-col"
-                style={{ width: HEADER_W + contentW, cursor: tool === 'blade' ? SCISSORS_CURSOR : undefined }}
+                style={{ width: HEADER_W + contentW, cursor: TOOL_CURSOR[tool] }}
                 onPointerDown={pointer.onPointerDown}
                 onPointerMove={pointer.onPointerMove}
                 onPointerLeave={pointer.onPointerLeave}
@@ -344,10 +360,19 @@ function Overlays() {
   const bladeFrame = useDrag((s) => s.bladeFrame)
   const marquee = useDrag((s) => s.marquee)
   const readout = useDrag((s) => s.readout)
+  const range = useEditor((s) => s.project.range)
+  const trackDropY = useDrag((s) => s.trackDropY)
   const x = (f: number) => HEADER_W + (f / fps) * pps
 
   return (
     <>
+      {/* In / out stretch */}
+      {range && (
+        <div
+          className="pointer-events-none absolute bottom-0 z-[2] border-x border-dashed border-accent/35 bg-accent/[0.035]"
+          style={{ left: x(range.in), width: x(range.out) - x(range.in), top: RULER_H }}
+        />
+      )}
       {/* Playhead */}
       <div className="pointer-events-none absolute bottom-0 z-20 w-[1.5px] -translate-x-1/2 bg-white shadow-[0_0_10px_rgb(255_255_255/0.45)]" style={{ left: x(frame), top: RULER_H }} />
       {snapFrame !== null && (
@@ -357,6 +382,9 @@ function Overlays() {
       )}
       {bladeFrame !== null && (
         <div className="pointer-events-none absolute bottom-0 z-[22] w-0 -translate-x-1/2 border-l border-dashed border-white/80" style={{ left: x(bladeFrame), top: RULER_H }} />
+      )}
+      {trackDropY !== null && (
+        <div className="pointer-events-none absolute right-0 left-0 z-[35] h-[2px] -translate-y-1/2 bg-accent shadow-[0_0_8px_var(--color-accent)]" style={{ top: trackDropY }} />
       )}
       {marquee && (
         <div
@@ -380,24 +408,75 @@ const SPEEDS = [0.25, 0.5, 1, 1.5, 2, 4]
 
 function TimelineMenu({ clipId, frame }: { clipId: string | null; frame: number }) {
   const clip = useEditor((s) => (clipId ? s.project.clips[clipId] : undefined))
+  const range = useEditor((s) => s.project.range)
+  const canPaste = useClipboard((s) => Boolean(s.data?.clips.length))
+  const selection = () => useUI.getState().selection
   if (clip) {
+    const media = clip.kind === 'video' || clip.kind === 'audio'
     return (
       <ContextContent>
         <ContextItem shortcut="s" onSelect={actions.split}>
           Split at playhead
         </ContextItem>
+        {clip.kind === 'video' && !clip.freeze && (
+          <ContextItem shortcut="shift+f" onSelect={actions.freezeFrame}>
+            Freeze frame
+          </ContextItem>
+        )}
+        <ContextSeparator />
+        <ContextItem shortcut="mod+c" onSelect={actions.copy}>
+          Copy
+        </ContextItem>
+        <ContextItem shortcut="mod+x" onSelect={actions.cut}>
+          Cut
+        </ContextItem>
+        <ContextItem shortcut="mod+alt+v" disabled={!canPaste} onSelect={actions.pasteAttributes}>
+          Paste attributes…
+        </ContextItem>
         <ContextItem shortcut="mod+d" onSelect={actions.duplicateSelection}>
           Duplicate
         </ContextItem>
-        {clip.kind !== 'text' && clip.kind !== 'adjustment' && (
+        <ContextSeparator />
+        {media && !clip.freeze && (
           <ContextSub label="Speed">
             {SPEEDS.map((s) => (
-              <ContextItem key={s} onSelect={() => dispatch('clip.update', { ids: useUI.getState().selection, patch: { speed: s } })}>
-                <span className="tabular">{s}×</span> {s === clip.speed && <span className="text-accent-2">•</span>}
+              <ContextItem key={s} onSelect={() => dispatch('clip.update', { ids: selection(), patch: { speed: s } })}>
+                <span className="tabular">{s}×</span> {s === clip.speed && !isRamped(clip) && <span className="text-accent-2">•</span>}
               </ContextItem>
             ))}
+            <ContextSeparator />
+            {SPEED_RAMPS.map((r) => (
+              <ContextItem key={r.id} onSelect={() => dispatch('clip.setSpeedRamp', { id: clip.id, points: r.points })}>
+                Ramp: {r.name}
+              </ContextItem>
+            ))}
+            {isRamped(clip) && <ContextItem onSelect={() => dispatch('clip.setSpeedRamp', { id: clip.id, points: null })}>Remove ramp</ContextItem>}
+            <ContextSeparator />
+            <ContextItem onSelect={() => dispatch('clip.update', { ids: selection(), patch: { reverse: !clip.reverse } })}>{clip.reverse ? 'Play forwards' : 'Reverse'}</ContextItem>
           </ContextSub>
         )}
+        {clip.kind === 'video' &&
+          (clip.audio.detached ? (
+            <ContextItem shortcut="mod+l" onSelect={actions.reattachAudio}>
+              Reattach audio
+            </ContextItem>
+          ) : (
+            <ContextItem shortcut="mod+l" onSelect={actions.detachAudio}>
+              Detach audio
+            </ContextItem>
+          ))}
+        {clip.groupId ? (
+          <ContextItem shortcut="mod+shift+g" onSelect={actions.ungroup}>
+            {clip.audio.detached || clip.kind === 'audio' ? 'Unlink' : 'Ungroup'}
+          </ContextItem>
+        ) : (
+          <ContextItem shortcut="mod+g" disabled={selection().length < 2} onSelect={actions.group}>
+            Group
+          </ContextItem>
+        )}
+        <ContextItem shortcut="x" onSelect={actions.markSelection}>
+          Mark in and out around clip
+        </ContextItem>
         <ContextSeparator />
         <ContextItem icon={<AiSparkle />} onSelect={() => askCopilotAbout(clip.id)}>
           Ask Copilot about this clip
@@ -414,6 +493,13 @@ function TimelineMenu({ clipId, frame }: { clipId: string | null; frame: number 
   }
   return (
     <ContextContent>
+      <ContextItem shortcut="mod+v" disabled={!canPaste} onSelect={() => actions.paste('free', frame)}>
+        Paste here
+      </ContextItem>
+      <ContextItem shortcut="mod+shift+v" disabled={!canPaste} onSelect={() => actions.paste('insert', frame)}>
+        Paste insert here
+      </ContextItem>
+      <ContextSeparator />
       <ContextItem onSelect={() => dispatch('marker.add', { frame })}>Add marker here</ContextItem>
       <ContextItem
         onSelect={() => {
@@ -423,6 +509,24 @@ function TimelineMenu({ clipId, frame }: { clipId: string | null; frame: number 
       >
         Add title here
       </ContextItem>
+      <ContextSeparator />
+      <ContextItem onSelect={() => dispatch('timeline.setRange', { range: { in: frame, out: range && range.out > frame ? range.out : Math.max(frame + 1, projectDuration(getProject())) } })}>
+        Mark in here
+      </ContextItem>
+      <ContextItem onSelect={() => frame > 0 && dispatch('timeline.setRange', { range: { in: range && range.in < frame ? range.in : 0, out: frame } })}>Mark out here</ContextItem>
+      {range && (
+        <>
+          <ContextItem shortcut=";" onSelect={actions.lift}>
+            Lift in to out
+          </ContextItem>
+          <ContextItem shortcut="'" onSelect={actions.extract}>
+            Extract in to out
+          </ContextItem>
+          <ContextItem shortcut="alt+x" onSelect={actions.clearInOut}>
+            Clear in and out
+          </ContextItem>
+        </>
+      )}
       <ContextSeparator />
       <ContextItem shortcut="mod+a" onSelect={actions.selectAll}>
         Select all

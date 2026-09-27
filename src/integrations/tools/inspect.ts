@@ -11,6 +11,7 @@ import { clipEnd, projectDuration } from '@/editor/ops'
 import { ANIMATIONS, EFFECTS, LOOKS, TITLE_PRESETS, TRANSITIONS } from '@/editor/presets'
 import { timelineTranscript, untranscribed } from '@/editor/smart'
 import { getProject, useEditor } from '@/editor/store'
+import { consumed, isRamped } from '@/editor/timing'
 import type { Asset, Clip, Project } from '@/editor/types'
 import { activeRegions, isAudible, loadAudio, prepareAudio, renderMix } from '@/engine/audio-engine'
 import { speechScript } from '@/engine/audio'
@@ -49,8 +50,12 @@ function clipLine(p: Project, clip: Clip, frame?: number) {
         }
       : {}),
     ...(local !== undefined && isAudible(p, clip) ? { volume_db: round(propAt(clip, 'volume', local), 1) } : {}),
-    ...(clip.speed !== 1 ? { speed: clip.speed } : {}),
+    ...(isRamped(clip) ? { speed_ramp: clip.keyframes.speed!.map((k) => ({ at_seconds: seconds(k.frame), speed: k.value })) } : clip.speed !== 1 ? { speed: clip.speed } : {}),
     ...(clip.reverse ? { reverse: true } : {}),
+    ...(clip.freeze ? { freeze_frame: true } : {}),
+    ...(clip.crop ? { crop: clip.crop } : {}),
+    ...(clip.groupId ? { group_id: clip.groupId } : {}),
+    ...(clip.audio.detached ? { sound_detached: true } : {}),
     ...(clip.effects.length ? { effects: clip.effects.map((e) => e.kind) } : {}),
     ...(clip.look ? { look: clip.look } : {}),
     ...(asset?.source.missing ? { offline: true } : {}),
@@ -167,7 +172,7 @@ export const INSPECT_TOOLS: AgentTool[] = [
             ...(asset
               ? {
                   source_in_seconds: round(c.inPoint / fps, 3),
-                  source_out_seconds: round((c.inPoint + c.duration * c.speed) / fps, 3),
+                  source_out_seconds: round((c.inPoint + consumed(c)) / fps, 3),
                   asset: { id: asset.id, name: asset.name, kind: asset.kind, duration_seconds: asset.duration ?? null },
                 }
               : {}),

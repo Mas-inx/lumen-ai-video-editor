@@ -9,10 +9,12 @@ import {
   Diamond,
   Gauge,
   Italic,
+  Link2,
   Move,
   Palette,
   Plus,
   RotateCcw,
+  Snowflake,
   Sparkles,
   TextAlignCenter,
   TextAlignEnd,
@@ -21,6 +23,7 @@ import {
   WandSparkles,
   X,
 } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { AiSparkle } from '@/components/brand'
 import { Button, IconButton } from '@/components/ui/button'
 import { ScrubInput } from '@/components/ui/scrub-input'
@@ -35,6 +38,7 @@ import { DEFAULT_COLOR, FONTS } from '@/editor/defaults'
 import { setAnimatable } from '@/editor/edit'
 import { ANIMATABLE } from '@/editor/keyframes'
 import { ANIMATIONS, EFFECTS, LOOKS } from '@/editor/presets'
+import { isRamped } from '@/editor/timing'
 import { dispatch, useEditor } from '@/editor/store'
 import type { AnimPreset, BlendMode, Clip, ColorGrade, FontId, Material3D, TextStyle } from '@/editor/types'
 import { useUI } from '@/editor/ui-store'
@@ -44,6 +48,7 @@ import { assetThumb } from '@/features/assets/shared'
 import { cn } from '@/lib/cn'
 import { formatDuration } from '@/lib/time'
 import { ColorSwatches, KeyframeButton, PropSlider, usePropValue, ValueSlider } from './controls'
+import { SpeedRamp } from './SpeedRamp'
 
 const update = (ids: string[], patch: ClipPatch, key?: string) =>
   dispatch('clip.update', { ids, patch }, { coalesce: key })
@@ -268,6 +273,19 @@ export function ColorSections({ clips }: { clips: Clip[] }) {
 export function AudioSection({ clip, fps }: { clip: Clip; fps: number }) {
   const a = clip.audio
   const maxFade = Math.floor(clip.duration / 2)
+  if (clip.freeze) return <Note icon={<Snowflake />} text="A freeze frame holds one picture, so it plays no sound." />
+  if (a.detached)
+    return (
+      <Note
+        icon={<Link2 />}
+        text="This clip’s sound is on its own audio clip, linked to it — select that clip to mix it, or trim it separately for J- and L-cuts."
+        action={
+          <Button size="sm" variant="secondary" onClick={() => dispatch('clip.reattachAudio', { ids: [clip.id] })}>
+            Reattach audio
+          </Button>
+        }
+      />
+    )
   return (
     <>
       <Section title="Volume" icon={<AudioLines />}>
@@ -287,6 +305,18 @@ export function AudioSection({ clip, fps }: { clip: Clip; fps: number }) {
         </div>
       </Section>
     </>
+  )
+}
+
+function Note({ icon, text, action }: { icon: ReactNode; text: string; action?: ReactNode }) {
+  return (
+    <div className="m-4 flex gap-3 rounded-xl bg-white/[0.035] p-3.5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.05)]">
+      <span className="mt-0.5 text-fg-3 [&_svg]:size-4">{icon}</span>
+      <div className="min-w-0 flex-1">
+        <p className="text-xs leading-relaxed text-fg-3">{text}</p>
+        {action && <div className="mt-2.5">{action}</div>}
+      </div>
+    </div>
   )
 }
 
@@ -310,7 +340,11 @@ const SPEED_PRESETS = [0.25, 0.5, 1, 1.5, 2, 4]
 export function SpeedSection({ clips, fps }: { clips: Clip[]; fps: number }) {
   const clip = clips[0]
   const ids = clips.map((c) => c.id)
+  const ramped = clips.some(isRamped)
+  if (clips.length === 1 && clip.freeze)
+    return <Note icon={<Snowflake />} text={`Freeze frame — holds one picture for ${formatDuration(clip.duration, fps)}. Trim it to hold longer or shorter.`} />
   return (
+    <>
     <Section title="Speed" icon={<Gauge />}>
       <div className="space-y-3">
         <div className="grid grid-cols-6 gap-1">
@@ -321,7 +355,7 @@ export function SpeedSection({ clips, fps }: { clips: Clip[]; fps: number }) {
               onClick={() => update(ids, { speed: s })}
               className={cn(
                 'h-7 rounded-md text-xs font-medium tabular transition-colors',
-                clip.speed === s ? 'bg-accent/18 text-accent-2 shadow-[inset_0_0_0_1px_rgb(214_238_0/0.4)]' : 'bg-white/[0.04] text-fg-3 hover:bg-white/[0.07] hover:text-fg',
+                clip.speed === s && !ramped ? 'bg-accent/18 text-accent-2 shadow-[inset_0_0_0_1px_rgb(214_238_0/0.4)]' : 'bg-white/[0.04] text-fg-3 hover:bg-white/[0.07] hover:text-fg',
               )}
             >
               {s}×
@@ -335,9 +369,19 @@ export function SpeedSection({ clips, fps }: { clips: Clip[]; fps: number }) {
         <Row label="Reverse">
           <Switch aria-label="Reverse" checked={clip.reverse} onChange={(v) => update(ids, { reverse: v })} />
         </Row>
-        {clips.length === 1 && <p className="text-2xs text-fg-4">Clip length {formatDuration(clip.duration, fps)} · changing speed keeps the same footage and adjusts the length.</p>}
+        {clips.length === 1 && (
+          <p className="text-2xs text-fg-4">
+            Clip length {formatDuration(clip.duration, fps)} · {ramped ? 'a constant speed replaces the ramp' : 'changing speed keeps the same footage and adjusts the length'}.
+          </p>
+        )}
       </div>
     </Section>
+    {clips.length === 1 && (
+      <Section title="Speed ramp" icon={<Gauge />} defaultOpen={ramped}>
+        <SpeedRamp clip={clip} />
+      </Section>
+    )}
+    </>
   )
 }
 

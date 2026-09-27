@@ -17,6 +17,7 @@ import { ShortcutsDialog } from '@/features/shell/ShortcutsDialog'
 import { SidePanel } from '@/features/shell/SidePanel'
 import { TitleBar } from '@/features/shell/TitleBar'
 import { useGlobalShortcuts } from '@/features/shell/useGlobalShortcuts'
+import { PasteAttributesDialog } from '@/features/timeline/PasteAttributesDialog'
 import { Timeline } from '@/features/timeline/Timeline'
 import { startAi } from '@/integrations/ai'
 import { startBridgeClient } from '@/integrations/bridge'
@@ -50,6 +51,7 @@ export function App() {
         <ExportDialog />
         <ShortcutsDialog />
         <AboutDialog />
+        <PasteAttributesDialog />
         <IntegrationsHub />
         <AgentApprovals />
         <Toaster

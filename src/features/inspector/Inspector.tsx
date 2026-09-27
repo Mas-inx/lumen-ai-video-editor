@@ -18,6 +18,7 @@ import { sendPrompt } from '@/features/copilot/store'
 import { actions } from '@/features/shell/actions'
 import { cn } from '@/lib/cn'
 import { formatDuration, formatTimecode } from '@/lib/time'
+import { CropSection } from './CropSection'
 import { AnimateSection, AudioSection, ColorSections, CompositingSection, EffectsSection, Space3DSection, SpeedSection, TextSection, TransformSection } from './sections'
 
 export function Inspector() {
@@ -120,6 +121,7 @@ function ClipInspector({ clip }: { clip: Clip }) {
       {tab === 'video' && (
         <>
           {clip.kind !== 'adjustment' && <TransformSection clip={clip} />}
+          {(clip.kind === 'video' || clip.kind === 'image') && <CropSection clip={clip} />}
           {clip.kind !== 'adjustment' && <Space3DSection clip={clip} />}
           {clip.kind !== 'text' && clip.kind !== 'adjustment' && <CompositingSection clip={clip} />}
           <EffectsSection clip={clip} />

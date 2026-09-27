@@ -8,6 +8,7 @@ import { speechScript } from '@/engine/audio'
 import { clipEnd, clipsOnTrack } from './ops'
 import { TITLE_PRESETS } from './presets'
 import { dispatch, getProject, useEditor } from './store'
+import { consumed, localForSource } from './timing'
 import type { Clip, Project } from './types'
 
 const ai = { source: 'ai' as const }
@@ -42,11 +43,17 @@ export async function speechRegions(project: Project, clip: Clip): Promise<{ reg
 /** The part of a clip's source (seconds) that's on the timeline. */
 function sourceRange(project: Project, clip: Clip): [number, number] {
   const fps = project.settings.fps
-  return [clip.inPoint / fps, (clip.inPoint + clip.duration * clip.speed) / fps]
+  return [clip.inPoint / fps, (clip.inPoint + consumed(clip)) / fps]
 }
 
-const toTimeline = (project: Project, clip: Clip, sourceSec: number) =>
-  clip.start + ((sourceSec - clip.inPoint / project.settings.fps) * project.settings.fps) / clip.speed
+/** The timeline frame where a clip shows a source second (clamped to the clip) — speed ramps included. */
+function toTimeline(project: Project, clip: Clip, sourceSec: number) {
+  const src = sourceSec * project.settings.fps
+  const local = localForSource(clip, src)
+  if (local !== null) return clip.start + local
+  const before = src < clip.inPoint
+  return clip.start + (before !== clip.reverse ? 0 : clip.duration)
+}
 
 /** Clips that carry speech: anything with a transcript, or sound on a voice-ish track or the main track. */
 export function voiceClips(project: Project): Clip[] {
@@ -347,7 +354,11 @@ export async function duckMusic(opts: { depth?: number; musicClipIds?: string[];
     const speech = await speechRegions(project, v)
     const [s0, s1] = sourceRange(project, v)
     const spans = speech ? speech.regions.filter(([a, b]) => b > s0 && a < s1) : [[s0, s1] as [number, number]]
-    for (const [a, b] of spans) regions.push([toTimeline(project, v, Math.max(a, s0)), toTimeline(project, v, Math.min(b, s1))])
+    for (const [a, b] of spans) {
+      const x = toTimeline(project, v, Math.max(a, s0))
+      const y = toTimeline(project, v, Math.min(b, s1))
+      regions.push([Math.min(x, y), Math.max(x, y)])
+    }
   }
   regions.sort((a, b) => a[0] - b[0])
   const merged: [number, number][] = []

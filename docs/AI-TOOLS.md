@@ -1,6 +1,6 @@
 # Lumen AI tools
 
-Every AI that works in Lumen — the Copilot's API models, your own Claude Code or Codex, and any agent connected to Lumen's MCP server — uses this same set of **69 tools**. This page is generated from the tool registry ([`src/integrations/agent-tools.ts`](../src/integrations/agent-tools.ts) and [`src/integrations/tools/`](../src/integrations/tools)).
+Every AI that works in Lumen — the Copilot's API models, your own Claude Code or Codex, and any agent connected to Lumen's MCP server — uses this same set of **83 tools**. This page is generated from the tool registry ([`src/integrations/agent-tools.ts`](../src/integrations/agent-tools.ts) and [`src/integrations/tools/`](../src/integrations/tools)).
 
 - **Times:** the helper tools take seconds; editor commands take integer frames at the project's fps (see `get_project`).
 - **Pictures:** `get_frame`, `get_contact_sheet`, `get_media_frames` and `get_editor_screenshot` return an image block along with JSON — over MCP as `image` content, and to the Copilot's models as real images.
@@ -14,7 +14,7 @@ Every AI that works in Lumen — the Copilot's API models, your own Claude Code 
 - [Act](#act) — 10 tools
 - [Smart edits](#smart-edits) — 6 tools
 - [Generate and import](#generate-and-import) — 16 tools
-- [Editor commands](#editor-commands) — 25 tools
+- [Editor commands](#editor-commands) — 39 tools
 
 ## See
 
@@ -509,7 +509,7 @@ Every edit the UI can make, as a typed command: undoable, in the History, frames
 
 ### `clip_add`
 
-Add a clip to a track. Media clips (video/image/audio) reference an asset; text clips take a text style via patch.text; adjustment clips grade everything beneath them. Overlapping positions slide to the nearest free spot. Returns the new clip id.
+Add a clip to a track. Media clips (video/image/audio) reference an asset; text clips take a text style via patch.text; adjustment clips grade everything beneath them. By default an overlapping position slides to the nearest free spot; mode "overwrite" covers what is there, "insert" pushes it later. Returns the new clip id.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
@@ -522,24 +522,54 @@ Add a clip to a track. Media clips (video/image/audio) reference an asset; text 
 | `inPoint` | integer | (≥ 0) |
 | `name` | string |  |
 | `patch` | object |  |
+| `mode` **(required)** | `free` · `overwrite` · `insert` | Default `"free"`. |
 
 ### `clip_move`
 
-Move one or more clips to new start frames and optionally other tracks. Moves are applied as a group; if they would overlap other clips the group slides to the nearest place that fits.
+Move one or more clips to new start frames and optionally other tracks. Moves are applied as a group. By default, if they would overlap other clips the group slides to the nearest place that fits; mode "overwrite" lands them exactly and covers what is there, "insert" lands them exactly and pushes what is there later.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
 | `moves` **(required)** | object[] |  |
+| `mode` **(required)** | `free` · `overwrite` · `insert` | Default `"free"`. |
 
 ### `clip_trim`
 
-Trim a clip by moving its start or end edge to an absolute timeline frame. Respects the source media length and neighbouring clips.
+Trim a clip by moving its start or end edge to an absolute timeline frame. Respects the source media length and neighbouring clips. With ripple, the clips after it on its track move by the same amount, so no gap opens (trimming the start with ripple keeps the clip in place and takes frames off its head).
 
 | Parameter | Type | Description |
 | --- | --- | --- |
 | `id` **(required)** | string |  |
 | `edge` **(required)** | `start` · `end` |  |
 | `frame` **(required)** | integer | (≥ 0) |
+| `ripple` **(required)** | boolean | Default `false`. |
+
+### `clip_roll`
+
+Roll edit: move the cut between a clip and the clip touching it on the left to a new frame — one gets longer, the other shorter, nothing else moves. Pass the right-hand clip. Returns the frame the cut landed on.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `id` **(required)** | string |  |
+| `frame` **(required)** | integer | (≥ 0) |
+
+### `clip_slip`
+
+Slip a clip: show an earlier (negative) or later (positive) part of its footage, by `frames` source frames, without moving or resizing it. Returns the frames actually slipped.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `id` **(required)** | string |  |
+| `frames` **(required)** | integer |  |
+
+### `clip_slide`
+
+Slide a clip along its track by `frames` (negative = earlier): the clips touching it either side give and take frames so no gap opens. Returns the frames actually slid.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `id` **(required)** | string |  |
+| `frames` **(required)** | integer |  |
 
 ### `clip_split`
 
@@ -595,6 +625,79 @@ Set or clear the transition that plays from the previous clip into this one. Dur
 | `id` **(required)** | string |  |
 | `transition` **(required)** | object or null |  |
 
+### `clip_paste`
+
+Paste clips (whole clips as get_clip returns them, or copies) so the earliest lands at frame `at`; their spacing and tracks are kept (or all go on `trackId` when it fits). By default they slide to the nearest free spot; mode "overwrite" covers what is there, "insert" pushes it later. Returns the new ids.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `clips` **(required)** | object[] |  |
+| `at` **(required)** | integer | (≥ 0) |
+| `trackId` | string |  |
+| `mode` **(required)** | `free` · `overwrite` · `insert` | Default `"free"`. |
+
+### `clip_copyAttributes`
+
+Paste attributes: copy chosen properties from one clip (fromId, or a whole clip in `from`) onto others — transform (with its keyframes), crop, color, effects, audio mix, speed, animation, text style or blend mode. Properties that don’t fit a clip’s kind are skipped.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `fromId` | string |  |
+| `from` | object |  |
+| `ids` **(required)** | string[] |  |
+| `include` **(required)** | `transform` · `crop` · `color` · `effects` · `audio` · `speed` · `animation` · `text` · `blend`[] |  |
+
+### `clip_detachAudio`
+
+Split the sound of video clips onto their own audio clips (on a free audio track), linked to the picture: they move together, and each can be trimmed on its own for J- and L-cuts. Returns the new audio clip ids.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `ids` **(required)** | string[] |  |
+
+### `clip_reattachAudio`
+
+Put detached sound back into its video clips: the linked audio clips are removed and each video plays its own sound again, keeping the audio clip’s volume and fades.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `ids` **(required)** | string[] |  |
+
+### `clip_group`
+
+Group clips so they select and move together (grouping a clip that is already grouped merges the groups). Returns the group id.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `ids` **(required)** | string[] |  |
+
+### `clip_ungroup`
+
+Ungroup clips (and unlink detached sound from its picture): every clip in their groups becomes independent.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `ids` **(required)** | string[] |  |
+
+### `clip_freeze`
+
+Freeze frame: hold the picture a clip shows at timeline `frame` for `duration` frames. The clip is cut there and the still goes in between, pushing the rest of the track later. Returns the freeze clip id.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `id` **(required)** | string |  |
+| `frame` **(required)** | integer | (≥ 0) |
+| `duration` **(required)** | integer | (≥ 1) |
+
+### `clip_setSpeedRamp`
+
+Speed ramp: make a video or audio clip change speed smoothly over its length. `points` give the speed (0.1–16×) at positions `at` from 0 (start) to 1 (end); null removes the ramp (the clip plays at its average speed). The clip keeps the same footage, so it gets longer or shorter — but never runs into the clip after it.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `id` **(required)** | string |  |
+| `points` **(required)** | object[] or null |  |
+
 ### `effect_add`
 
 Add an effect to clips (or update its amount if already present). Amount is 0–100.
@@ -626,12 +729,12 @@ Remove an effect from a clip. Effect ids are in get_clip → effects.
 
 ### `keyframe_set`
 
-Set a keyframe on an animatable property (x, y, scale, rotation, opacity, volume) at a frame relative to the clip start.
+Set a keyframe on an animatable property (x, y, scale, rotation, opacity, volume, rotateX, rotateY, z — or speed, for a speed ramp) at a frame relative to the clip start.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
 | `clipId` **(required)** | string |  |
-| `prop` **(required)** | `x` · `y` · `scale` · `rotation` · `opacity` · `volume` · `rotateX` · `rotateY` · `z` |  |
+| `prop` **(required)** | `x` · `y` · `scale` · `rotation` · `opacity` · `volume` · `rotateX` · `rotateY` · `z` · `speed` |  |
 | `frame` **(required)** | integer | (≥ 0) |
 | `value` **(required)** | number |  |
 | `easing` | `linear` · `ease` · `ease-in` · `ease-out` · `hold` |  |
@@ -643,7 +746,7 @@ Remove the keyframe at a clip-relative frame.
 | Parameter | Type | Description |
 | --- | --- | --- |
 | `clipId` **(required)** | string |  |
-| `prop` **(required)** | `x` · `y` · `scale` · `rotation` · `opacity` · `volume` · `rotateX` · `rotateY` · `z` |  |
+| `prop` **(required)** | `x` · `y` · `scale` · `rotation` · `opacity` · `volume` · `rotateX` · `rotateY` · `z` · `speed` |  |
 | `frame` **(required)** | integer | (≥ 0) |
 
 ### `keyframe_clear`
@@ -653,7 +756,7 @@ Remove all keyframes from a property, keeping its first value.
 | Parameter | Type | Description |
 | --- | --- | --- |
 | `clipId` **(required)** | string |  |
-| `prop` **(required)** | `x` · `y` · `scale` · `rotation` · `opacity` · `volume` · `rotateX` · `rotateY` · `z` |  |
+| `prop` **(required)** | `x` · `y` · `scale` · `rotation` · `opacity` · `volume` · `rotateX` · `rotateY` · `z` · `speed` |  |
 
 ### `track_add`
 
@@ -669,12 +772,21 @@ Add a video or audio track. Video tracks go on top by default, audio tracks at t
 
 ### `track_update`
 
-Rename a track, or toggle hidden / muted / locked, or change its height.
+Rename a track, toggle hidden / muted / locked / solo (while any track is soloed only soloed tracks are heard), or change its height.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
 | `id` **(required)** | string |  |
 | `patch` **(required)** | object |  |
+
+### `track_move`
+
+Move a track up or down the stack (index 0 is the top). Video tracks higher up draw over the ones below.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `id` **(required)** | string |  |
+| `index` **(required)** | integer | (≥ 0) |
 
 ### `track_remove`
 
@@ -683,6 +795,23 @@ Remove a track and every clip on it (track ids are in get_project → tracks).
 | Parameter | Type | Description |
 | --- | --- | --- |
 | `id` **(required)** | string |  |
+
+### `timeline_setRange`
+
+Set the in and out points (frames, out exclusive) that mark a stretch of the timeline — it can loop in playback, export on its own, or be lifted or extracted. null clears them.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `range` **(required)** | object or null |  |
+
+### `timeline_liftRange`
+
+Lift a stretch of time: clear everything between two frames on every unlocked track and leave the gap (timeline_removeRange closes it up instead).
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `start` **(required)** | integer | (≥ 0) |
+| `end` **(required)** | integer | (≥ 0) |
 
 ### `marker_add`
 

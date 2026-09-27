@@ -9,7 +9,8 @@ import { FONTS } from '@/editor/defaults'
 import { propAt } from '@/editor/keyframes'
 import { adjacentBefore, clipEnd } from '@/editor/ops'
 import { is3dEffect, is3dTransition } from '@/editor/presets'
-import type { AnimPreset, BlendMode, Clip, Effect, EffectKind, Project, Transition } from '@/editor/types'
+import { sourceFrameAt, speedAt } from '@/editor/timing'
+import type { AnimPreset, BlendMode, Clip, Crop, Effect, EffectKind, Project, Transition } from '@/editor/types'
 import { clamp, easeInOutCubic, easeOutBack, easeOutCubic, lerp, noise1 } from '@/lib/math'
 import { gradeFilter, gradeOverlays } from './color'
 import { usePlayback } from '@/editor/playback'
@@ -27,7 +28,14 @@ export interface ClipBounds {
   w: number
   h: number
   rotation: number
+  /** The point the clip scales and rotates around (its position), when that isn't the box center — a cropped picture. */
+  px?: number
+  py?: number
+  /** The whole picture before cropping (same rotation), for the crop gizmo. */
+  full?: { cx: number; cy: number; w: number; h: number }
 }
+
+type Rect = { x: number; y: number; w: number; h: number }
 
 export interface RenderResult {
   bounds: Map<string, ClipBounds>
@@ -87,11 +95,13 @@ function stage3D(W: number, H: number, project: Project) {
 
 // ─── Frame ───────────────────────────────────────────────────────────────
 
-/** Source time (seconds) a clip shows at a frame relative to its start. */
+/** Source time (seconds) a clip shows at a frame relative to its start — speed ramps, reverse and freeze frames included. */
 export function clipSourceTime(clip: Clip, local: number, fps: number) {
-  const sourceFrame = clip.reverse ? clip.inPoint + (clip.duration - local) * clip.speed : clip.inPoint + local * clip.speed
-  return sourceFrame / fps
+  return sourceFrameAt(clip, local) / fps
 }
+
+/** The rate a playing video element should run at for a clip, or 0 when it must be stepped frame by frame. */
+const playRate = (clip: Clip, local: number) => (clip.freeze || clip.reverse ? 0 : speedAt(clip, local))
 
 /**
  * Every clip `renderFrame` draws at `frame`, bottom to top, including the
@@ -358,7 +368,7 @@ function drawClip(ctx: CanvasRenderingContext2D, project: Project, clip: Clip, f
     return
   }
 
-  const layer = renderMediaLayer(project, clip, local, W, H)
+  const { canvas: layer, rect, full } = renderMediaLayer(project, clip, local, W, H)
   if (wipe < 1) {
     ctx.beginPath()
     ctx.rect(-W / 2, -H / 2, W * wipe, H)
@@ -388,7 +398,14 @@ function drawClip(ctx: CanvasRenderingContext2D, project: Project, clip: Clip, f
   }
   ctx.restore()
 
-  bounds.set(clip.id, { cx: PW / 2 + x, cy: PH / 2 + y, w: PW * scale, h: PH * scale, rotation })
+  // The box around the picture itself (not the letterbox around it), so the gizmo hugs what you see.
+  const box = (r: Rect) => {
+    const a = (rotation * Math.PI) / 180
+    const dx = ((r.x + r.w / 2 - W / 2) / k) * scale
+    const dy = ((r.y + r.h / 2 - H / 2) / k) * scale
+    return { cx: PW / 2 + x + dx * Math.cos(a) - dy * Math.sin(a), cy: PH / 2 + y + dx * Math.sin(a) + dy * Math.cos(a), w: (r.w / k) * scale, h: (r.h / k) * scale }
+  }
+  bounds.set(clip.id, { ...box(rect), rotation, px: PW / 2 + x, py: PH / 2 + y, ...(clip.crop ? { full: box(full) } : {}) })
 }
 
 interface Placement {
@@ -435,7 +452,7 @@ function draw3D(ctx: CanvasRenderingContext2D, project: Project, clip: Clip, loc
       bw = (box.w / k) * p.scale
       bh = (box.h / k) * p.scale
     } else {
-      const layer = renderMediaLayer(project, clip, local, W, H)
+      const layer = renderMediaLayer(project, clip, local, W, H).canvas
       if (wipe < 1) {
         flat.ctx.beginPath()
         flat.ctx.rect(0, 0, W * wipe, H)
@@ -466,8 +483,11 @@ function draw3D(ctx: CanvasRenderingContext2D, project: Project, clip: Clip, loc
   bounds.set(clip.id, { cx: PW / 2 + p.x, cy: PH / 2 + p.y, w: bw, h: bh, rotation: p.rotation })
 }
 
-/** Content + grade washes + per-clip texture effects, drawn untransformed. */
-function renderMediaLayer(project: Project, clip: Clip, local: number, W: number, H: number) {
+/**
+ * Content + grade washes + per-clip texture effects, drawn untransformed.
+ * Returns the layer, the rect the visible picture covers and the rect of the whole picture before cropping.
+ */
+function renderMediaLayer(project: Project, clip: Clip, local: number, W: number, H: number): { canvas: HTMLCanvasElement; rect: Rect; full: Rect } {
   layerCanvas = sized(layerCanvas, W, H)
   const lctx = layerCanvas.getContext('2d')!
   resetCtx(lctx)
@@ -481,7 +501,7 @@ function renderMediaLayer(project: Project, clip: Clip, local: number, W: number
   if (!asset) drawSlate(lctx, W, H, 'Media missing')
   else if (asset.source.missing) drawSlate(lctx, W, H, `Media offline — ${asset.source.type === 'file' ? asset.source.fileName : asset.name}`)
   else if (asset.source.type === 'file' && asset.kind === 'video') {
-    const video = videoFrame(clip.id, asset.source.url, t, usePlayback.getState().playing)
+    const video = videoFrame(clip.id, asset.source.url, t, usePlayback.getState().playing, playRate(clip, local))
     if (video) rect = drawContain(lctx, video, W, H)
     else if (asset.source.poster) {
       const img = getImage(asset.source.poster)
@@ -497,15 +517,30 @@ function renderMediaLayer(project: Project, clip: Clip, local: number, W: number
     else if (img) rect = drawContain(lctx, img, W, H)
   }
 
+  const full = rect
+  let shape: Path2D | null = null
+  if (clip.crop) {
+    rect = cropRect(full, clip.crop)
+    shape = new Path2D()
+    shape.roundRect(rect.x, rect.y, rect.w, rect.h, (clip.crop.radius * Math.min(rect.w, rect.h)) / 2)
+    // Keep only the cropped (rounded) picture.
+    lctx.globalCompositeOperation = 'destination-in'
+    lctx.fill(shape)
+    lctx.globalCompositeOperation = 'source-over'
+  }
+
   const overlays = asset?.alpha ? [] : gradeOverlays(clip.color)
   const vignette = clip.color.vignette + (fx(clip, 'vignette')?.amount ?? 0)
   const grain = fx(clip, 'grain')
   const leak = fx(clip, 'leak')
   if (overlays.length || vignette || grain || leak) {
     lctx.save()
-    lctx.beginPath()
-    lctx.rect(rect.x, rect.y, rect.w, rect.h)
-    lctx.clip()
+    if (shape) lctx.clip(shape)
+    else {
+      lctx.beginPath()
+      lctx.rect(rect.x, rect.y, rect.w, rect.h)
+      lctx.clip()
+    }
     for (const o of overlays) {
       lctx.globalCompositeOperation = 'soft-light'
       lctx.globalAlpha = o.alpha
@@ -519,7 +554,16 @@ function renderMediaLayer(project: Project, clip: Clip, local: number, W: number
     if (grain) drawGrain(lctx, W, H, local, grain.amount / 100)
     lctx.restore()
   }
-  return layerCanvas
+  return { canvas: layerCanvas, rect, full }
+}
+
+/** The part of a picture rect a crop keeps. */
+export function cropRect(r: Rect, crop: Crop): Rect {
+  const left = Math.min(crop.left, 0.95)
+  const top = Math.min(crop.top, 0.95)
+  const w = Math.max(0.01, 1 - left - crop.right)
+  const h = Math.max(0.01, 1 - top - crop.bottom)
+  return { x: r.x + r.w * left, y: r.y + r.h * top, w: r.w * w, h: r.h * h }
 }
 
 function drawAdjustment(ctx: CanvasRenderingContext2D, clip: Clip, local: number, fps: number, mods: Mods) {

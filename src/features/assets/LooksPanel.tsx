@@ -6,6 +6,7 @@ import { useEditor } from '@/editor/store'
 import type { Asset, ColorGrade } from '@/editor/types'
 import { useUI } from '@/editor/ui-store'
 import { gradeFilter, gradeOverlays } from '@/engine/color'
+import { clipSourceTime } from '@/engine/compositor'
 import { usePreviewArt } from '@/engine/preview-art'
 import { dnd } from '@/features/dnd'
 import { cn } from '@/lib/cn'
@@ -35,7 +36,7 @@ export function LooksPanel() {
   const art = usePreviewArt()
 
   const visual = clip && (clip.kind === 'video' || clip.kind === 'image') && asset
-  const t = visual ? Math.max(0, (clip.inPoint + Math.max(0, Math.min(clip.duration, frame - clip.start)) * clip.speed) / fps) : 0
+  const t = visual ? Math.max(0, clipSourceTime(clip, Math.max(0, Math.min(clip.duration - 1, frame - clip.start)), fps)) : 0
   const src = (visual ? assetThumb(asset, Math.round(t * 2) / 2) : undefined) ?? art.a
 
   return (

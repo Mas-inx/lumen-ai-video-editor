@@ -1,8 +1,9 @@
-import { AudioLines, Blend, Film, Gauge, Image as ImageIcon, Sparkles, Type } from 'lucide-react'
+import { AudioLines, Blend, Film, Gauge, Image as ImageIcon, Link2, Snowflake, Sparkles, Type } from 'lucide-react'
 import { memo, useMemo } from 'react'
 import { PEAKS_PER_SECOND } from '@/editor/defaults'
 import { allKeyframeFrames } from '@/editor/keyframes'
 import { useEditor } from '@/editor/store'
+import { isRamped, sourceFrameAt, type Timed } from '@/editor/timing'
 import type { Asset, Clip } from '@/editor/types'
 import { useUI } from '@/editor/ui-store'
 import { getPeaks } from '@/engine/audio'
@@ -95,18 +96,19 @@ export const ClipView = memo(function ClipView({ clipId, locked }: { clipId: str
 
 function ClipBody({ clip, asset, inPoint, duration, width, height }: { clip: Clip; asset?: Asset; inPoint: number; duration: number; width: number; height: number }) {
   const { fps, pps } = useLayout()
+  const timing: Timed = { speed: clip.speed, duration, inPoint, reverse: clip.reverse, freeze: clip.freeze, keyframes: clip.keyframes }
   switch (clip.kind) {
     case 'video':
     case 'image': {
-      const strip = clip.kind === 'video' && asset?.hasAudio && height >= 56 ? 15 : 0
+      const strip = clip.kind === 'video' && asset?.hasAudio && !clip.audio.detached && !clip.freeze && height >= 56 ? 15 : 0
       return (
         <>
-          {asset && <Filmstrip asset={asset} inPoint={inPoint} speed={clip.speed} fps={fps} pps={pps} width={width} height={height - strip} />}
+          {asset && <Filmstrip asset={asset} timing={timing} fps={fps} pps={pps} width={width} height={height - strip} />}
           <div className="absolute inset-x-0 top-0 h-6 bg-gradient-to-b from-black/60 to-transparent" />
           <div className="absolute inset-x-0 top-0 h-[2px] opacity-90" style={{ background: 'var(--clip)' }} />
           {strip > 0 && asset && (
             <div className="absolute inset-x-0 bottom-0 border-t border-black/40 bg-[color-mix(in_oklab,var(--clip)_22%,#10110e)]" style={{ height: strip }}>
-              <Waveform asset={asset} inPoint={inPoint} duration={duration} speed={clip.speed} width={width} gain={dbToGain(clip.audio.volume)} color="color-mix(in oklab, var(--clip) 70%, white)" />
+              <Waveform asset={asset} timing={timing} width={width} gain={dbToGain(clip.audio.volume)} color="color-mix(in oklab, var(--clip) 70%, white)" />
             </div>
           )}
         </>
@@ -117,9 +119,7 @@ function ClipBody({ clip, asset, inPoint, duration, width, height }: { clip: Cli
         <div className="absolute inset-x-0 top-[14px] bottom-[2px]">
           <Waveform
             asset={asset}
-            inPoint={inPoint}
-            duration={duration}
-            speed={clip.speed}
+            timing={timing}
             width={width}
             gain={dbToGain(clip.audio.volume)}
             fadeIn={clip.audio.fadeIn}
@@ -150,11 +150,19 @@ function ClipLabel({ clip, asset }: { clip: Clip; asset?: Asset }) {
     <div className="pointer-events-none absolute inset-x-0 top-0 flex h-[18px] min-w-0 items-center gap-1 px-1.5 pt-px text-[11px] leading-none font-medium text-white [text-shadow:0_1px_2px_rgb(0_0_0/0.7)]">
       <Icon className="size-3 shrink-0 opacity-80" />
       <span className="min-w-0 truncate">{text}</span>
-      {clip.speed !== 1 && (
-        <span className="ml-0.5 flex shrink-0 items-center gap-0.5 rounded bg-black/40 px-1 py-px text-[9.5px] font-semibold tabular">
-          <Gauge className="size-2.5" />
-          {clip.speed}×
+      {clip.groupId && <Link2 className="size-3 shrink-0 opacity-80" aria-label="Linked" />}
+      {clip.freeze ? (
+        <span className="ml-0.5 flex shrink-0 items-center gap-0.5 rounded bg-black/40 px-1 py-px text-[9.5px] font-semibold">
+          <Snowflake className="size-2.5" />
+          Freeze
         </span>
+      ) : (
+        (clip.speed !== 1 || isRamped(clip)) && (
+          <span className="ml-0.5 flex shrink-0 items-center gap-0.5 rounded bg-black/40 px-1 py-px text-[9.5px] font-semibold tabular">
+            <Gauge className="size-2.5" />
+            {isRamped(clip) ? 'Ramp' : `${clip.speed}×`}
+          </span>
+        )
       )}
       {clip.effects.length > 0 && (
         <span className="flex shrink-0 items-center gap-0.5 rounded bg-black/40 px-1 py-px text-[9.5px] font-semibold">
@@ -177,14 +185,14 @@ function stillAt(asset: Asset, seconds: number): string | undefined {
   return undefined
 }
 
-function Filmstrip({ asset, inPoint, speed, fps, pps, width, height }: { asset: Asset; inPoint: number; speed: number; fps: number; pps: number; width: number; height: number }) {
+function Filmstrip({ asset, timing, fps, pps, width, height }: { asset: Asset; timing: Timed; fps: number; pps: number; width: number; height: number }) {
   const tileW = Math.max(36, Math.round(height * 1.6))
   const count = Math.min(200, Math.max(1, Math.ceil(width / tileW)))
   const strip = useFilmstrip(asset)
   const tiles: { frame: ImageBitmap | null; url?: string }[] = []
   for (let i = 0; i < count; i++) {
     const xMid = i * tileW + tileW / 2
-    const t = Math.max(0, (inPoint + (xMid / pps) * fps * speed) / fps)
+    const t = Math.max(0, sourceFrameAt(timing, Math.min(timing.duration, (xMid / pps) * fps)) / fps)
     const frame = stripFrame(strip, t)
     tiles.push({ frame, url: frame ? undefined : stillAt(asset, Math.round(t * 2) / 2) })
   }
@@ -203,9 +211,8 @@ function Filmstrip({ asset, inPoint, speed, fps, pps, width, height }: { asset: 
 
 interface WaveformProps {
   asset: Asset
-  inPoint: number
-  duration: number
-  speed: number
+  /** Where the clip's frames come from in the source — speed ramps and reverse included. */
+  timing: Timed
   width: number
   gain: number
   fadeIn?: number
@@ -213,19 +220,21 @@ interface WaveformProps {
   color: string
 }
 
-export function Waveform({ asset, inPoint, duration, speed, width, gain, fadeIn = 0, fadeOut = 0, color }: WaveformProps) {
+export function Waveform({ asset, timing, width, gain, fadeIn = 0, fadeOut = 0, color }: WaveformProps) {
   const { fps } = useLayout()
+  const { speed, duration, inPoint, reverse, freeze, keyframes } = timing
   const path = useMemo(() => {
     const peaks = getPeaks(asset)
     if (!peaks) return ''
     const n = clamp(Math.floor(width / 2.2), 8, 1600)
-    const i0 = (inPoint / fps) * PEAKS_PER_SECOND
-    const i1 = ((inPoint + duration * speed) / fps) * PEAKS_PER_SECOND
-    const step = (i1 - i0) / n
+    const t = { speed, duration, inPoint, reverse, freeze, keyframes }
+    const peakAt = (local: number) => (sourceFrameAt(t, local) / fps) * PEAKS_PER_SECOND
     const amps: number[] = []
     for (let j = 0; j <= n; j++) {
-      const a = Math.floor(i0 + j * step)
-      const b = Math.max(a + 1, Math.floor(i0 + (j + 1) * step))
+      const x = peakAt((j / n) * duration)
+      const y = peakAt(((j + 1) / n) * duration)
+      const a = Math.floor(Math.min(x, y))
+      const b = Math.max(a + 1, Math.floor(Math.max(x, y)))
       let peak = 0
       for (let k = a; k < b && k < peaks.length; k++) peak = Math.max(peak, peaks[k] ?? 0)
       const local = (j / n) * duration
@@ -238,7 +247,7 @@ export function Waveform({ asset, inPoint, duration, speed, width, gain, fadeIn 
     amps.forEach((a, j) => (d += `L${j} ${(50 - a * 47).toFixed(1)}`))
     for (let j = amps.length - 1; j >= 0; j--) d += `L${j} ${(50 + amps[j] * 47).toFixed(1)}`
     return `${d}Z`
-  }, [asset, inPoint, duration, speed, width, gain, fadeIn, fadeOut, fps])
+  }, [asset, inPoint, duration, speed, reverse, freeze, keyframes, width, gain, fadeIn, fadeOut, fps])
 
   if (!path) return null
   return (

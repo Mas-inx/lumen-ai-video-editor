@@ -8,6 +8,7 @@
 import { z } from 'zod'
 import { uid } from '@/lib/id'
 import { createClip, createTrack, TRACK_HEIGHTS } from './defaults'
+import { ANIMATABLE, evalKeyframes } from './keyframes'
 import { EFFECTS } from './presets'
 import {
   clipEnd,
@@ -15,14 +16,30 @@ import {
   clipsOnTrack,
   cloneClip,
   deleteClips,
+  detachAudio,
+  dropLoneGroups,
   findFreeStart,
+  freezeFrame,
+  groupClips,
+  insertGap,
   isMagneticTrack,
+  liftRange,
+  moveTrack,
+  overwriteRange,
   removeRange,
+  reattachAudio,
   resolveMoveDelta,
-  splitClip,
+  rippleTrimClip,
+  rollEdit,
+  slideClip,
+  slipClip,
+  sourceFrames,
+  splitClips,
   trackAccepts,
   trimClip,
+  ungroupClips,
 } from './ops'
+import { averageSpeed, consumed, localForConsumed, MAX_SPEED, MIN_SPEED } from './timing'
 import type { AnimatableProp, Clip, Project } from './types'
 
 export class CommandError extends Error {}
@@ -40,13 +57,19 @@ const transitionKind = z.enum(['dissolve', 'dip', 'flash', 'slide', 'push', 'zoo
 const effectKind = z.enum(['blur', 'glow', 'vignette', 'grain', 'mono', 'shake', 'pulse', 'leak', 'rgb', 'sharpen', 'tilt3d', 'curve3d', 'wave3d', 'cube3d', 'mirror3d'])
 const fontId = z.enum(['sans', 'display', 'serif', 'mono', 'hand'])
 const easing = z.enum(['linear', 'ease', 'ease-in', 'ease-out', 'hold'])
-const animatable = z.enum(['x', 'y', 'scale', 'rotation', 'opacity', 'volume', 'rotateX', 'rotateY', 'z'])
+const animatable = z.enum(['x', 'y', 'scale', 'rotation', 'opacity', 'volume', 'rotateX', 'rotateY', 'z', 'speed'])
 const markerColor = z.enum(['lime', 'violet', 'pink', 'amber', 'emerald', 'sky'])
 const pct = z.number().min(-100).max(100)
+/** How clips land where others already are: slide to the nearest gap, cover them, or push them later. */
+const editMode = z.enum(['free', 'overwrite', 'insert'])
+const attribute = z.enum(['transform', 'crop', 'color', 'effects', 'audio', 'speed', 'animation', 'text', 'blend'])
 
 /** Values the schemas accept, for tools that list what's available. */
 export const BLEND_MODES = blend.options
 export const EASINGS = easing.options
+export const ATTRIBUTES = attribute.options
+export type EditMode = z.infer<typeof editMode>
+export type Attribute = z.infer<typeof attribute>
 
 const transform = z.object({
   x: z.number(),
@@ -74,6 +97,15 @@ const audioMix = z.object({
   fadeOut: frame,
   enhance: z.boolean(),
   denoise: z.boolean(),
+  detached: z.boolean().optional(),
+})
+
+const crop = z.object({
+  left: z.number().min(0).max(0.95),
+  right: z.number().min(0).max(0.95),
+  top: z.number().min(0).max(0.95),
+  bottom: z.number().min(0).max(0.95),
+  radius: z.number().min(0).max(1),
 })
 
 const textStyle = z.object({
@@ -101,7 +133,7 @@ const transition = z.object({ kind: transitionKind, duration: z.number().int().m
 export const clipPatch = z
   .object({
     name: z.string().min(1),
-    speed: z.number().min(0.1).max(16),
+    speed: z.number().min(MIN_SPEED).max(MAX_SPEED),
     reverse: z.boolean(),
     blend,
     look: z.string().nullable(),
@@ -110,10 +142,42 @@ export const clipPatch = z
     audio: audioMix.partial(),
     text: textStyle.partial(),
     animation: z.object({ in: animSpec.partial(), out: animSpec.partial() }).partial(),
+    crop: crop.partial().nullable(),
   })
   .partial()
 
 export type ClipPatch = z.infer<typeof clipPatch>
+
+const keyframe = z.object({ frame, value: z.number(), easing })
+
+/** A whole clip as get_clip or a copy holds it — what paste and paste-attributes take. */
+export const clipSnapshot = z.object({
+  id,
+  kind: clipKind,
+  trackId: id,
+  name: z.string(),
+  start: z.number().min(0),
+  duration: length,
+  assetId: id.optional(),
+  inPoint: z.number().min(0),
+  speed: z.number().min(MIN_SPEED).max(MAX_SPEED),
+  reverse: z.boolean(),
+  transform,
+  color: grade.loose(),
+  look: z.string().nullable(),
+  audio: audioMix,
+  text: textStyle.optional(),
+  blend,
+  animation: z.object({ in: animSpec, out: animSpec }),
+  transitionIn: transition.nullable(),
+  effects: z.array(z.object({ id, kind: effectKind, enabled: z.boolean(), amount: z.number().min(0).max(100) }).loose()),
+  keyframes: z.partialRecord(animatable, z.array(keyframe)),
+  crop: crop.optional(),
+  groupId: z.string().optional(),
+  freeze: z.boolean().optional(),
+})
+
+export type ClipSnapshot = z.infer<typeof clipSnapshot>
 
 const assetSource = z.discriminatedUnion('type', [
   z.object({
@@ -190,8 +254,10 @@ function assertEditable(p: Project, clip: Clip) {
   if (getTrack(p, clip.trackId).locked) throw new CommandError(`"${clip.name}" is on a locked track`)
 }
 
+const NO_CROP = { left: 0, right: 0, top: 0, bottom: 0, radius: 0 }
+
 function applyPatch(p: Project, clip: Clip, patch: ClipPatch) {
-  const { transform, color, audio, text, animation, speed, ...flat } = patch
+  const { transform, color, audio, text, animation, speed, crop, ...flat } = patch
   Object.assign(clip, flat)
   if (transform) Object.assign(clip.transform, transform)
   if (color) Object.assign(clip.color, color)
@@ -199,12 +265,19 @@ function applyPatch(p: Project, clip: Clip, patch: ClipPatch) {
   if (text && clip.text) Object.assign(clip.text, text)
   if (animation?.in) Object.assign(clip.animation.in, animation.in)
   if (animation?.out) Object.assign(clip.animation.out, animation.out)
-  if (speed !== undefined && speed !== clip.speed) {
-    // Speed changes keep the same source range, so the clip gets longer or shorter —
-    // but never runs into its right-hand neighbour.
-    let duration = Math.max(1, Math.round((clip.duration * clip.speed) / speed))
+  if (crop === null) delete clip.crop
+  else if (crop) {
+    clip.crop = { ...NO_CROP, ...clip.crop, ...crop }
+    if (Object.values(clip.crop).every((v) => !v)) delete clip.crop
+  }
+  if (speed !== undefined && (speed !== clip.speed || clip.keyframes.speed)) {
+    // A constant speed replaces any ramp. The clip keeps the same footage, so it gets
+    // longer or shorter — but never runs into its right-hand neighbour.
+    const used = consumed(clip)
+    delete clip.keyframes.speed
+    let duration = Math.max(1, Math.round(used / speed))
     const next = clipsOnTrack(p, clip.trackId).find((c) => c.id !== clip.id && c.start >= clipEnd(clip))
-    if (next) duration = Math.min(duration, next.start - clip.start)
+    if (next && !isMagneticTrack(p, clip.trackId)) duration = Math.min(duration, next.start - clip.start)
     clip.speed = speed
     clip.duration = duration
   }
@@ -212,7 +285,80 @@ function applyPatch(p: Project, clip: Clip, patch: ClipPatch) {
 
 function setBase(clip: Clip, prop: AnimatableProp, value: number) {
   if (prop === 'volume') clip.audio.volume = value
+  else if (prop === 'speed') clip.speed = Math.min(MAX_SPEED, Math.max(MIN_SPEED, value))
   else clip.transform[prop] = value
+}
+
+/** A speed ramp can eat footage faster: shorten the clip so it never runs past the end of its media. */
+function fitToMedia(p: Project, clip: Clip) {
+  const src = sourceFrames(p, clip)
+  if (src === Infinity || clip.freeze) return
+  const available = Math.max(1, src - clip.inPoint)
+  if (consumed(clip) <= available + 0.5) return
+  clip.duration = Math.max(1, Math.floor(localForConsumed(clip, available)))
+  for (const prop of ANIMATABLE) {
+    const kfs = clip.keyframes[prop]
+    if (kfs) clip.keyframes[prop] = kfs.filter((k) => k.frame <= clip.duration)
+  }
+}
+
+/** Copies attribute groups from one clip onto another, where they make sense for its kind. */
+function copyAttributes(p: Project, from: Pick<Clip, 'kind'> & Partial<Clip>, to: Clip, include: readonly Attribute[]) {
+  const visual = (c: Pick<Clip, 'kind'>) => c.kind !== 'audio'
+  const media = (c: Pick<Clip, 'kind'>) => c.kind === 'video' || c.kind === 'audio'
+  const keys = (props: AnimatableProp[]) => {
+    for (const prop of props) {
+      const kfs = from.keyframes?.[prop]
+      if (kfs?.length) to.keyframes[prop] = kfs.filter((k) => k.frame <= to.duration).map((k) => ({ ...k }))
+      else delete to.keyframes[prop]
+    }
+  }
+  for (const attr of include) {
+    switch (attr) {
+      case 'transform':
+        if (!visual(to) || !visual(from) || !from.transform) break
+        Object.assign(to.transform, from.transform)
+        keys(['x', 'y', 'scale', 'rotation', 'opacity', 'rotateX', 'rotateY', 'z'])
+        break
+      case 'crop':
+        if (!visual(to) || to.kind === 'text' || to.kind === 'adjustment') break
+        if (from.crop) to.crop = { ...from.crop }
+        else delete to.crop
+        break
+      case 'color':
+        if (!visual(to) || to.kind === 'text' || !from.color) break
+        to.color = structuredClone(from.color)
+        to.look = from.look ?? null
+        break
+      case 'effects':
+        if (!visual(to) || !from.effects) break
+        to.effects = from.effects.map((e) => ({ ...e, id: uid('fx') }))
+        break
+      case 'audio':
+        if (!media(to) || !media(from) || !from.audio) break
+        Object.assign(to.audio, { ...from.audio, detached: to.audio.detached })
+        keys(['volume'])
+        break
+      case 'speed':
+        if (!media(to) || !media(from) || from.speed === undefined) break
+        to.speed = from.speed
+        to.reverse = Boolean(from.reverse)
+        keys(['speed'])
+        fitToMedia(p, to)
+        break
+      case 'animation':
+        if (!visual(to) || !from.animation) break
+        to.animation = structuredClone(from.animation)
+        break
+      case 'text':
+        if (to.kind !== 'text' || !to.text || !from.text) break
+        to.text = { ...from.text, content: to.text.content }
+        break
+      case 'blend':
+        if (visual(to) && from.blend) to.blend = from.blend
+        break
+    }
+  }
 }
 
 // ─── Commands ────────────────────────────────────────────────────────────
@@ -221,7 +367,7 @@ export const commands = {
   // Clips
   'clip.add': command({
     description:
-      'Add a clip to a track. Media clips (video/image/audio) reference an asset; text clips take a text style via patch.text; adjustment clips grade everything beneath them. Overlapping positions slide to the nearest free spot. Returns the new clip id.',
+      'Add a clip to a track. Media clips (video/image/audio) reference an asset; text clips take a text style via patch.text; adjustment clips grade everything beneath them. By default an overlapping position slides to the nearest free spot; mode "overwrite" covers what is there, "insert" pushes it later. Returns the new clip id.',
     input: z.object({
       id: id.optional(),
       trackId: id,
@@ -232,8 +378,9 @@ export const commands = {
       inPoint: frame.optional(),
       name: z.string().optional(),
       patch: clipPatch.optional(),
+      mode: editMode.default('free'),
     }),
-    title: (i) => (i.kind === 'text' ? 'Add title' : i.kind === 'adjustment' ? 'Add adjustment layer' : 'Add clip'),
+    title: (i) => (i.kind === 'text' ? 'Add title' : i.kind === 'adjustment' ? 'Add adjustment layer' : i.mode === 'insert' ? 'Insert clip' : i.mode === 'overwrite' ? 'Overwrite clip' : 'Add clip'),
     run(p, i) {
       const track = getTrack(p, i.trackId)
       if (!trackAccepts(track, i.kind)) throw new CommandError(`A ${i.kind} clip can't go on an ${track.kind} track`)
@@ -242,11 +389,18 @@ export const commands = {
       const inPoint = i.inPoint ?? 0
       const available = source?.duration !== undefined ? Math.floor(source.duration * p.settings.fps) - inPoint : Infinity
       const duration = Math.max(1, Math.min(i.duration, available))
+      let start: number
+      if (i.mode === 'free' || isMagneticTrack(p, track.id)) start = findFreeStart(p, track.id, i.start, duration)
+      else {
+        if (i.mode === 'overwrite') overwriteRange(p, track.id, i.start, i.start + duration)
+        else insertGap(p, track.id, i.start, duration)
+        start = i.start
+      }
       const clip = createClip({
         id: i.id ?? uid('clip'),
         kind: i.kind,
         trackId: track.id,
-        start: findFreeStart(p, track.id, i.start, duration),
+        start,
         duration,
         assetId: i.assetId,
         inPoint,
@@ -260,12 +414,19 @@ export const commands = {
 
   'clip.move': command({
     description:
-      'Move one or more clips to new start frames and optionally other tracks. Moves are applied as a group; if they would overlap other clips the group slides to the nearest place that fits.',
+      'Move one or more clips to new start frames and optionally other tracks. Moves are applied as a group. By default, if they would overlap other clips the group slides to the nearest place that fits; mode "overwrite" lands them exactly and covers what is there, "insert" lands them exactly and pushes what is there later.',
     input: z.object({
       moves: z.array(z.object({ id, start: frame, trackId: id.optional() })).min(1),
+      mode: editMode.default('free'),
     }),
     title: (i, p) =>
-      i.moves.every((m) => isMagneticTrack(p, m.trackId ?? p.clips[m.id]?.trackId ?? '')) ? 'Reorder clips' : `Move ${plural(i.moves.length, 'clip')}`,
+      i.mode === 'insert'
+        ? `Insert ${plural(i.moves.length, 'clip')}`
+        : i.mode === 'overwrite'
+          ? `Overwrite with ${plural(i.moves.length, 'clip')}`
+          : i.moves.every((m) => isMagneticTrack(p, m.trackId ?? p.clips[m.id]?.trackId ?? ''))
+            ? 'Reorder clips'
+            : `Move ${plural(i.moves.length, 'clip')}`,
     run(p, i) {
       const moving = i.moves.map((m) => {
         const clip = getClip(p, m.id)
@@ -275,7 +436,22 @@ export const commands = {
         if (track.locked) throw new CommandError(`${track.name} is locked`)
         return { id: clip.id, start: m.start, duration: clip.duration, trackId: track.id }
       })
-      const delta = resolveMoveDelta(p, moving, 0)
+      let delta = 0
+      if (i.mode === 'free') delta = resolveMoveDelta(p, moving, 0)
+      else {
+        // Land exactly: make room on each (non-magnetic) target track first.
+        const exclude = new Set(moving.map((m) => m.id))
+        const byTrack = new Map<string, typeof moving>()
+        for (const m of moving) byTrack.set(m.trackId, [...(byTrack.get(m.trackId) ?? []), m])
+        for (const [trackId, ms] of byTrack) {
+          if (isMagneticTrack(p, trackId)) continue
+          if (i.mode === 'overwrite') for (const m of ms) overwriteRange(p, trackId, m.start, m.start + m.duration, exclude)
+          else {
+            const a = Math.min(...ms.map((m) => m.start))
+            insertGap(p, trackId, a, Math.max(...ms.map((m) => m.start + m.duration)) - a, exclude)
+          }
+        }
+      }
       for (const m of moving) {
         const clip = p.clips[m.id]
         // On magnetic tracks a start means "insert here" — nudge so it sorts before a clip starting on the same frame.
@@ -287,13 +463,51 @@ export const commands = {
 
   'clip.trim': command({
     description:
-      "Trim a clip by moving its start or end edge to an absolute timeline frame. Respects the source media length and neighbouring clips.",
-    input: z.object({ id, edge: z.enum(['start', 'end']), frame }),
-    title: (i) => (i.edge === 'start' ? 'Trim start' : 'Trim end'),
+      'Trim a clip by moving its start or end edge to an absolute timeline frame. Respects the source media length and neighbouring clips. With ripple, the clips after it on its track move by the same amount, so no gap opens (trimming the start with ripple keeps the clip in place and takes frames off its head).',
+    input: z.object({ id, edge: z.enum(['start', 'end']), frame, ripple: z.boolean().default(false) }),
+    title: (i) => `${i.ripple ? 'Ripple trim' : 'Trim'} ${i.edge}`,
     run(p, i) {
       const clip = getClip(p, i.id)
       assertEditable(p, clip)
-      trimClip(p, clip, i.edge, i.frame)
+      if (i.ripple && !isMagneticTrack(p, clip.trackId)) rippleTrimClip(p, clip, i.edge, i.frame)
+      else trimClip(p, clip, i.edge, i.frame)
+    },
+  }),
+
+  'clip.roll': command({
+    description: 'Roll edit: move the cut between a clip and the clip touching it on the left to a new frame — one gets longer, the other shorter, nothing else moves. Pass the right-hand clip. Returns the frame the cut landed on.',
+    input: z.object({ id, frame }),
+    title: () => 'Roll edit',
+    run(p, i) {
+      const clip = getClip(p, i.id)
+      assertEditable(p, clip)
+      try {
+        return rollEdit(p, clip, i.frame)
+      } catch (err) {
+        throw new CommandError((err as Error).message)
+      }
+    },
+  }),
+
+  'clip.slip': command({
+    description: 'Slip a clip: show an earlier (negative) or later (positive) part of its footage, by `frames` source frames, without moving or resizing it. Returns the frames actually slipped.',
+    input: z.object({ id, frames: z.number().int() }),
+    title: () => 'Slip',
+    run(p, i) {
+      const clip = getClip(p, i.id)
+      assertEditable(p, clip)
+      return slipClip(p, clip, i.frames)
+    },
+  }),
+
+  'clip.slide': command({
+    description: 'Slide a clip along its track by `frames` (negative = earlier): the clips touching it either side give and take frames so no gap opens. Returns the frames actually slid.',
+    input: z.object({ id, frames: z.number().int() }),
+    title: () => 'Slide',
+    run(p, i) {
+      const clip = getClip(p, i.id)
+      assertEditable(p, clip)
+      return slideClip(p, clip, i.frames)
     },
   }),
 
@@ -305,7 +519,7 @@ export const commands = {
     run(p, i) {
       const targets = clipsAt(p, i.frame, i.ids)
       if (!targets.length) throw new CommandError('Nothing to split at the playhead')
-      return targets.map((c) => splitClip(p, c, i.frame)?.id).filter(Boolean)
+      return splitClips(p, targets, i.frame).map((c) => c.id)
     },
   }),
 
@@ -352,14 +566,22 @@ export const commands = {
     input: z.object({ ids: z.array(id).min(1) }),
     title: (i) => `Duplicate ${plural(i.ids.length, 'clip')}`,
     run(p, i) {
-      return i.ids.map((clipId) => {
+      // Copies of grouped clips are grouped with each other, not with the originals.
+      const groups = new Map<string, string>()
+      const ids = i.ids.map((clipId) => {
         const original = getClip(p, clipId)
         const copy = cloneClip(original)
         copy.id = uid('clip')
         copy.start = findFreeStart(p, original.trackId, clipEnd(original), original.duration)
+        if (copy.groupId) {
+          if (!groups.has(copy.groupId)) groups.set(copy.groupId, uid('grp'))
+          copy.groupId = groups.get(copy.groupId)
+        }
         p.clips[copy.id] = copy
         return copy.id
       })
+      dropLoneGroups(p, groups.values())
+      return ids
     },
   }),
 
@@ -371,6 +593,173 @@ export const commands = {
       const clip = getClip(p, i.id)
       assertEditable(p, clip)
       clip.transitionIn = i.transition ? { ...i.transition, duration: Math.min(i.transition.duration, clip.duration) } : null
+    },
+  }),
+
+  'clip.paste': command({
+    description:
+      'Paste clips (whole clips as get_clip returns them, or copies) so the earliest lands at frame `at`; their spacing and tracks are kept (or all go on `trackId` when it fits). By default they slide to the nearest free spot; mode "overwrite" covers what is there, "insert" pushes it later. Returns the new ids.',
+    input: z.object({ clips: z.array(clipSnapshot).min(1), at: frame, trackId: id.optional(), mode: editMode.default('free') }),
+    title: (i) => `Paste ${plural(i.clips.length, 'clip')}`,
+    run(p, i) {
+      const first = Math.min(...i.clips.map((c) => c.start))
+      const usable = (trackId: string | undefined, kind: Clip['kind']) => {
+        const t = p.tracks.find((x) => x.id === trackId)
+        return t && !t.locked && trackAccepts(t, kind) ? t : undefined
+      }
+      const placed = i.clips.map((c) => {
+        const track = usable(i.trackId, c.kind) ?? usable(c.trackId, c.kind) ?? p.tracks.find((t) => !t.locked && trackAccepts(t, c.kind))
+        if (!track) throw new CommandError(`There's no unlocked ${c.kind === 'audio' ? 'audio' : 'video'} track to paste “${c.name}” on`)
+        return { snap: c, id: uid('clip'), trackId: track.id, start: i.at + (c.start - first), duration: c.duration }
+      })
+      let delta = 0
+      if (i.mode === 'free') delta = resolveMoveDelta(p, placed, 0)
+      else
+        for (const m of placed) {
+          if (isMagneticTrack(p, m.trackId)) continue
+          if (i.mode === 'overwrite') overwriteRange(p, m.trackId, m.start, m.start + m.duration)
+          else insertGap(p, m.trackId, m.start, m.duration)
+        }
+      // Pasted groups stay grouped with each other — not with the originals.
+      const groups = new Map<string, string>()
+      const ids = placed.map((m) => {
+        const clip = structuredClone(m.snap) as Clip
+        clip.id = m.id
+        clip.trackId = m.trackId
+        clip.start = m.start + delta - (isMagneticTrack(p, m.trackId) ? 0.5 : 0)
+        clip.effects = clip.effects.map((e) => ({ ...e, id: uid('fx') }))
+        if (clip.assetId && !p.assets[clip.assetId]) throw new CommandError(`The media of “${clip.name}” isn't in this project`)
+        if (clip.groupId) {
+          if (!groups.has(clip.groupId)) groups.set(clip.groupId, uid('grp'))
+          clip.groupId = groups.get(clip.groupId)
+        }
+        p.clips[clip.id] = clip
+        return clip.id
+      })
+      dropLoneGroups(p, groups.values())
+      return ids
+    },
+  }),
+
+  'clip.copyAttributes': command({
+    description:
+      'Paste attributes: copy chosen properties from one clip (fromId, or a whole clip in `from`) onto others — transform (with its keyframes), crop, color, effects, audio mix, speed, animation, text style or blend mode. Properties that don’t fit a clip’s kind are skipped.',
+    input: z
+      .object({ fromId: id.optional(), from: clipSnapshot.optional(), ids: z.array(id).min(1), include: z.array(attribute).min(1) })
+      .refine((i) => i.fromId || i.from, 'Give fromId or from'),
+    title: (i) => `Paste ${i.include.length === 1 ? i.include[0] : 'attributes'}`,
+    run(p, i) {
+      // A copy, so pasting onto the source clip's own group can't feed back into it.
+      const source = cloneClip(i.fromId ? getClip(p, i.fromId) : (i.from as Clip))
+      for (const clipId of i.ids) {
+        if (clipId === i.fromId) continue
+        const clip = getClip(p, clipId)
+        assertEditable(p, clip)
+        copyAttributes(p, source, clip, i.include)
+      }
+    },
+  }),
+
+  'clip.detachAudio': command({
+    description: 'Split the sound of video clips onto their own audio clips (on a free audio track), linked to the picture: they move together, and each can be trimmed on its own for J- and L-cuts. Returns the new audio clip ids.',
+    input: z.object({ ids: z.array(id).min(1) }),
+    title: (i) => (i.ids.length > 1 ? 'Detach audio from clips' : 'Detach audio'),
+    run(p, i) {
+      return i.ids.map((clipId) => {
+        const clip = getClip(p, clipId)
+        assertEditable(p, clip)
+        try {
+          return detachAudio(p, clip).id
+        } catch (err) {
+          throw new CommandError((err as Error).message)
+        }
+      })
+    },
+  }),
+
+  'clip.reattachAudio': command({
+    description: 'Put detached sound back into its video clips: the linked audio clips are removed and each video plays its own sound again, keeping the audio clip’s volume and fades.',
+    input: z.object({ ids: z.array(id).min(1) }),
+    title: () => 'Reattach audio',
+    run(p, i) {
+      for (const clipId of i.ids) {
+        const clip = getClip(p, clipId)
+        assertEditable(p, clip)
+        if (!clip.audio.detached) throw new CommandError(`“${clip.name}” still has its own sound`)
+        reattachAudio(p, clip)
+      }
+    },
+  }),
+
+  'clip.group': command({
+    description: 'Group clips so they select and move together (grouping a clip that is already grouped merges the groups). Returns the group id.',
+    input: z.object({ ids: z.array(id).min(2) }),
+    title: () => 'Group clips',
+    run(p, i) {
+      i.ids.forEach((clipId) => getClip(p, clipId))
+      return groupClips(p, i.ids)
+    },
+  }),
+
+  'clip.ungroup': command({
+    description: 'Ungroup clips (and unlink detached sound from its picture): every clip in their groups becomes independent.',
+    input: z.object({ ids: z.array(id).min(1) }),
+    title: () => 'Ungroup clips',
+    run(p, i) {
+      i.ids.forEach((clipId) => getClip(p, clipId))
+      ungroupClips(p, i.ids)
+    },
+  }),
+
+  'clip.freeze': command({
+    description: 'Freeze frame: hold the picture a clip shows at timeline `frame` for `duration` frames. The clip is cut there and the still goes in between, pushing the rest of the track later. Returns the freeze clip id.',
+    input: z.object({ id, frame, duration: length }),
+    title: () => 'Freeze frame',
+    run(p, i) {
+      const clip = getClip(p, i.id)
+      assertEditable(p, clip)
+      if (clip.kind !== 'video') throw new CommandError('Freeze frames are made from video clips')
+      if (i.frame < clip.start || i.frame >= clipEnd(clip)) throw new CommandError(`Frame ${i.frame} isn't inside “${clip.name}”`)
+      return freezeFrame(p, clip, i.frame, i.duration).id
+    },
+  }),
+
+  'clip.setSpeedRamp': command({
+    description:
+      'Speed ramp: make a video or audio clip change speed smoothly over its length. `points` give the speed (0.1–16×) at positions `at` from 0 (start) to 1 (end); null removes the ramp (the clip plays at its average speed). The clip keeps the same footage, so it gets longer or shorter — but never runs into the clip after it.',
+    input: z.object({
+      id,
+      points: z
+        .array(z.object({ at: z.number().min(0).max(1), speed: z.number().min(MIN_SPEED).max(MAX_SPEED), easing: easing.optional() }))
+        .min(2)
+        .nullable(),
+    }),
+    title: (i) => (i.points ? 'Speed ramp' : 'Remove speed ramp'),
+    run(p, i) {
+      const clip = getClip(p, i.id)
+      assertEditable(p, clip)
+      if (clip.kind !== 'video' && clip.kind !== 'audio') throw new CommandError('Only video and audio clips have a speed')
+      if (clip.freeze) throw new CommandError('A freeze frame has no speed to ramp')
+      if (!i.points) {
+        if (!clip.keyframes.speed) return
+        applyPatch(p, clip, { speed: Math.round(averageSpeed(clip) * 100) / 100 })
+        return
+      }
+      const used = consumed(clip)
+      const points = [...i.points].sort((a, b) => a.at - b.at)
+      // The ramp's average speed decides the length that plays the same footage.
+      const shape = points.map((pt) => ({ frame: pt.at * 1000, value: pt.speed, easing: pt.easing ?? ('ease' as const) }))
+      let sum = 0
+      for (let k = 0; k <= 1000; k++) sum += Math.min(MAX_SPEED, Math.max(MIN_SPEED, evalKeyframes(shape, k)))
+      let duration = Math.max(2, Math.round(used / (sum / 1001)))
+      const next = clipsOnTrack(p, clip.trackId).find((c) => c.id !== clip.id && c.start >= clipEnd(clip))
+      if (next && !isMagneticTrack(p, clip.trackId)) duration = Math.max(2, Math.min(duration, next.start - clip.start))
+      clip.duration = duration
+      clip.keyframes.speed = points
+        .map((pt) => ({ frame: Math.round(pt.at * duration), value: pt.speed, easing: pt.easing ?? ('ease' as const) }))
+        .filter((k, n, all) => n === 0 || k.frame !== all[n - 1].frame)
+      clip.speed = points[0].speed
+      fitToMedia(p, clip)
     },
   }),
 
@@ -421,21 +810,25 @@ export const commands = {
   // Keyframes
   'keyframe.set': command({
     description:
-      'Set a keyframe on an animatable property (x, y, scale, rotation, opacity, volume) at a frame relative to the clip start.',
+      'Set a keyframe on an animatable property (x, y, scale, rotation, opacity, volume, rotateX, rotateY, z — or speed, for a speed ramp) at a frame relative to the clip start.',
     input: z.object({ clipId: id, prop: animatable, frame, value: z.number(), easing: easing.optional() }),
     title: (i) => `Keyframe ${i.prop}`,
     run(p, i) {
       const clip = getClip(p, i.clipId)
       assertEditable(p, clip)
+      const speed = i.prop === 'speed'
+      if (speed && clip.kind !== 'video' && clip.kind !== 'audio') throw new CommandError('Only video and audio clips have a speed')
+      const value = speed ? Math.min(MAX_SPEED, Math.max(MIN_SPEED, i.value)) : i.value
       const kfs = (clip.keyframes[i.prop] ??= [])
       const existing = kfs.find((k) => k.frame === i.frame)
       if (existing) {
-        existing.value = i.value
+        existing.value = value
         if (i.easing) existing.easing = i.easing
       } else {
-        kfs.push({ frame: i.frame, value: i.value, easing: i.easing ?? 'ease' })
+        kfs.push({ frame: i.frame, value, easing: i.easing ?? 'ease' })
         kfs.sort((a, b) => a.frame - b.frame)
       }
+      if (speed) fitToMedia(p, clip)
     },
   }),
 
@@ -454,6 +847,7 @@ export const commands = {
         delete clip.keyframes[i.prop]
         if (removed) setBase(clip, i.prop, removed.value)
       }
+      if (i.prop === 'speed') fitToMedia(p, clip)
     },
   }),
 
@@ -466,6 +860,7 @@ export const commands = {
       const first = clip.keyframes[i.prop]?.[0]
       if (first) setBase(clip, i.prop, first.value)
       delete clip.keyframes[i.prop]
+      if (i.prop === 'speed') fitToMedia(p, clip)
     },
   }),
 
@@ -495,17 +890,38 @@ export const commands = {
   }),
 
   'track.update': command({
-    description: 'Rename a track, or toggle hidden / muted / locked, or change its height.',
+    description: 'Rename a track, toggle hidden / muted / locked / solo (while any track is soloed only soloed tracks are heard), or change its height.',
     input: z.object({
       id,
-      patch: z.object({ name: z.string().min(1), hidden: z.boolean(), muted: z.boolean(), locked: z.boolean(), height: z.number().min(28).max(160) }).partial(),
+      patch: z
+        .object({ name: z.string().min(1), hidden: z.boolean(), muted: z.boolean(), locked: z.boolean(), solo: z.boolean(), height: z.number().min(28).max(160) })
+        .partial(),
     }),
     title: (i) => {
       const [key] = Object.keys(i.patch)
-      return key === 'hidden' ? (i.patch.hidden ? 'Hide track' : 'Show track') : key === 'locked' ? (i.patch.locked ? 'Lock track' : 'Unlock track') : key === 'muted' ? (i.patch.muted ? 'Mute track' : 'Unmute track') : 'Edit track'
+      const toggles: Record<string, [string, string]> = {
+        hidden: ['Hide track', 'Show track'],
+        locked: ['Lock track', 'Unlock track'],
+        muted: ['Mute track', 'Unmute track'],
+        solo: ['Solo track', 'Unsolo track'],
+      }
+      const pair = toggles[key]
+      return pair ? pair[i.patch[key as keyof typeof i.patch] ? 0 : 1] : 'Edit track'
     },
     run(p, i) {
-      Object.assign(getTrack(p, i.id), i.patch)
+      const track = getTrack(p, i.id)
+      Object.assign(track, i.patch)
+      if (i.patch.solo === false) delete track.solo
+    },
+  }),
+
+  'track.move': command({
+    description: 'Move a track up or down the stack (index 0 is the top). Video tracks higher up draw over the ones below.',
+    input: z.object({ id, index: z.number().int().min(0) }),
+    title: () => 'Reorder tracks',
+    run(p, i) {
+      getTrack(p, i.id)
+      moveTrack(p, i.id, i.index)
     },
   }),
 
@@ -517,6 +933,26 @@ export const commands = {
       getTrack(p, i.id)
       for (const c of Object.values(p.clips)) if (c.trackId === i.id) delete p.clips[c.id]
       p.tracks = p.tracks.filter((t) => t.id !== i.id)
+    },
+  }),
+
+  // In and out points
+  'timeline.setRange': command({
+    description:
+      'Set the in and out points (frames, out exclusive) that mark a stretch of the timeline — it can loop in playback, export on its own, or be lifted or extracted. null clears them.',
+    input: z.object({ range: z.object({ in: frame, out: frame }).refine((r) => r.out > r.in, 'out must be after in').nullable() }),
+    title: (i) => (i.range ? 'Mark in and out' : 'Clear in and out'),
+    run(p, i) {
+      p.range = i.range
+    },
+  }),
+
+  'timeline.liftRange': command({
+    description: 'Lift a stretch of time: clear everything between two frames on every unlocked track and leave the gap (timeline_removeRange closes it up instead).',
+    input: z.object({ start: frame, end: frame }).refine((i) => i.end > i.start, 'end must be after start'),
+    title: () => 'Lift',
+    run(p, i) {
+      liftRange(p, i.start, i.end)
     },
   }),
 
@@ -638,6 +1074,7 @@ export const commands = {
           for (const kfs of Object.values(c.keyframes)) kfs?.forEach((k) => (k.frame = sc(k.frame)))
         }
         for (const m of p.markers) m.frame = sc(m.frame)
+        if (p.range) p.range = { in: sc(p.range.in), out: Math.max(sc(p.range.in) + 1, sc(p.range.out)) }
         p.settings.fps = fps
       }
     },

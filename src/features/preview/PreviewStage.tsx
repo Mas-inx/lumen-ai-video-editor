@@ -4,7 +4,8 @@ import { FONTS } from '@/editor/defaults'
 import { setAnimatable } from '@/editor/edit'
 import { clipEnd } from '@/editor/ops'
 import { usePlayback } from '@/editor/playback'
-import { getProject, useEditor } from '@/editor/store'
+import { dispatch, getProject, useEditor } from '@/editor/store'
+import type { Clip, Crop } from '@/editor/types'
 import { useUI } from '@/editor/ui-store'
 import { renderFrame, type ClipBounds } from '@/engine/compositor'
 import { onMediaReady } from '@/engine/media'
@@ -107,6 +108,99 @@ function SafeGuides() {
   )
 }
 
+// ─── Crop gizmo ──────────────────────────────────────────────────────────
+
+type CropHandle = 'l' | 'r' | 't' | 'b' | 'tl' | 'tr' | 'bl' | 'br' | 'move'
+
+const NO_CROP: Crop = { left: 0, right: 0, top: 0, bottom: 0, radius: 0 }
+
+/** Drag the edges, corners or the middle of the crop box over the whole (dimmed) picture. */
+function CropGizmo({ clip, b, scale }: { clip: Clip; b: ClipBounds; scale: number }) {
+  const full = b.full ?? { cx: b.cx, cy: b.cy, w: b.w, h: b.h }
+  const crop = clip.crop ?? NO_CROP
+  const box = { left: crop.left * full.w, top: crop.top * full.h, width: (1 - crop.left - crop.right) * full.w, height: (1 - crop.top - crop.bottom) * full.h }
+
+  const startDrag = (e: ReactPointerEvent, handle: CropHandle) => {
+    e.stopPropagation()
+    e.preventDefault()
+    const start = { ...crop }
+    const x0 = e.clientX
+    const y0 = e.clientY
+    const a = (-b.rotation * Math.PI) / 180
+    const key = `crop:${clip.id}:${handle}:${Date.now()}`
+    const move = (ev: PointerEvent) => {
+      // Screen delta → project pixels → the picture's own (unrotated) axes → fractions of it.
+      const sx = (ev.clientX - x0) / scale
+      const sy = (ev.clientY - y0) / scale
+      const fx = (sx * Math.cos(a) - sy * Math.sin(a)) / full.w
+      const fy = (sx * Math.sin(a) + sy * Math.cos(a)) / full.h
+      const next = { ...start }
+      const min = 0.02
+      if (handle === 'move') {
+        const dx = Math.max(-start.left, Math.min(start.right, fx))
+        const dy = Math.max(-start.top, Math.min(start.bottom, fy))
+        next.left = start.left + dx
+        next.right = start.right - dx
+        next.top = start.top + dy
+        next.bottom = start.bottom - dy
+      } else {
+        if (handle.includes('l')) next.left = Math.max(0, Math.min(1 - start.right - min, start.left + fx))
+        if (handle.includes('r')) next.right = Math.max(0, Math.min(1 - start.left - min, start.right - fx))
+        if (handle.includes('t')) next.top = Math.max(0, Math.min(1 - start.bottom - min, start.top + fy))
+        if (handle.includes('b')) next.bottom = Math.max(0, Math.min(1 - start.top - min, start.bottom - fy))
+      }
+      const r = (v: number) => Math.min(0.95, Math.round(v * 10000) / 10000)
+      dispatch('clip.update', { ids: [clip.id], patch: { crop: { left: r(next.left), right: r(next.right), top: r(next.top), bottom: r(next.bottom) } } }, { coalesce: key, label: 'Crop' })
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
+  const handle = (h: CropHandle, className: string, cursor: string) => (
+    <span key={h} onPointerDown={(e) => startDrag(e, h)} className={cn('absolute z-10 bg-white shadow-[0_0_0_1.5px_var(--color-accent),0_1px_4px_rgb(0_0_0/0.6)]', className)} style={{ cursor }} />
+  )
+
+  return (
+    <>
+      <div
+        className="absolute overflow-hidden"
+        style={{ left: (full.cx - full.w / 2) * scale, top: (full.cy - full.h / 2) * scale, width: full.w * scale, height: full.h * scale, transform: `rotate(${b.rotation}deg)` }}
+      >
+        <div className="pointer-events-none absolute inset-0 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.25)]" />
+        <div
+          className="absolute cursor-move shadow-[0_0_0_9999px_rgb(0_0_0/0.55)]"
+          onPointerDown={(e) => startDrag(e, 'move')}
+          style={{ left: box.left * scale, top: box.top * scale, width: box.width * scale, height: box.height * scale }}
+        >
+          <div className="pointer-events-none absolute inset-0 shadow-[inset_0_0_0_1.5px_var(--color-accent)]" />
+          {/* Rule of thirds */}
+          <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_right,transparent_calc(33.33%-0.5px),rgb(255_255_255/0.28)_calc(33.33%-0.5px),rgb(255_255_255/0.28)_calc(33.33%+0.5px),transparent_calc(33.33%+0.5px),transparent_calc(66.66%-0.5px),rgb(255_255_255/0.28)_calc(66.66%-0.5px),rgb(255_255_255/0.28)_calc(66.66%+0.5px),transparent_calc(66.66%+0.5px)),linear-gradient(to_bottom,transparent_calc(33.33%-0.5px),rgb(255_255_255/0.28)_calc(33.33%-0.5px),rgb(255_255_255/0.28)_calc(33.33%+0.5px),transparent_calc(33.33%+0.5px),transparent_calc(66.66%-0.5px),rgb(255_255_255/0.28)_calc(66.66%-0.5px),rgb(255_255_255/0.28)_calc(66.66%+0.5px),transparent_calc(66.66%+0.5px))]" />
+          {handle('l', '-left-[3px] top-1/2 h-6 w-[6px] -translate-y-1/2 rounded-full', 'ew-resize')}
+          {handle('r', '-right-[3px] top-1/2 h-6 w-[6px] -translate-y-1/2 rounded-full', 'ew-resize')}
+          {handle('t', '-top-[3px] left-1/2 h-[6px] w-6 -translate-x-1/2 rounded-full', 'ns-resize')}
+          {handle('b', '-bottom-[3px] left-1/2 h-[6px] w-6 -translate-x-1/2 rounded-full', 'ns-resize')}
+          {handle('tl', '-top-[4px] -left-[4px] size-2.5 rounded-[2px]', 'nwse-resize')}
+          {handle('tr', '-top-[4px] -right-[4px] size-2.5 rounded-[2px]', 'nesw-resize')}
+          {handle('bl', '-bottom-[4px] -left-[4px] size-2.5 rounded-[2px]', 'nesw-resize')}
+          {handle('br', '-right-[4px] -bottom-[4px] size-2.5 rounded-[2px]', 'nwse-resize')}
+        </div>
+      </div>
+      <button
+        type="button"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={() => useUI.getState().setCropMode(false)}
+        className="absolute top-2 left-1/2 z-20 -translate-x-1/2 rounded-full bg-accent px-3 py-1 text-xs font-semibold text-accent-fg shadow-[0_4px_16px_-4px_rgb(0_0_0/0.7)] hover:bg-accent-2"
+      >
+        Done cropping
+      </button>
+    </>
+  )
+}
+
 // ─── Transform gizmo ─────────────────────────────────────────────────────
 
 type Handle = 'move' | 'nw' | 'ne' | 'sw' | 'se' | 'rotate'
@@ -122,8 +216,10 @@ function Gizmo({ scale }: { scale: number }) {
   const ph = useEditor((s) => s.project.settings.height)
   const [guides, setGuides] = useState<{ v: boolean; h: boolean }>({ v: false, h: false })
 
+  const cropMode = useUI((s) => s.cropMode)
   const b = clipId ? bounds.get(clipId) : undefined
   const active = clip && frame >= clip.start && frame < clipEnd(clip) && clip.kind !== 'audio' && clip.kind !== 'adjustment'
+  const cropping = Boolean(cropMode && active && b && (clip.kind === 'video' || clip.kind === 'image'))
 
   const onCanvasPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     // Click-to-select: pick the top-most visible clip under the pointer.
@@ -157,7 +253,8 @@ function Gizmo({ scale }: { scale: number }) {
     const toProject = (cx: number, cy: number) => ({ x: (cx - r.left) / scale, y: (cy - r.top) / scale })
     const p0 = toProject(e.clientX, e.clientY)
     const start = { x: clip.transform.x, y: clip.transform.y, scale: clip.transform.scale, rotation: clip.transform.rotation }
-    const center = { x: b.cx, y: b.cy }
+    // Scale and rotation pivot on the clip's position, which a crop can move off the box center.
+    const center = { x: b.px ?? b.cx, y: b.py ?? b.cy }
     const key = `gizmo:${clip.id}:${handle}:${Date.now()}`
     const move = (ev: PointerEvent) => {
       const p = toProject(ev.clientX, ev.clientY)
@@ -199,7 +296,8 @@ function Gizmo({ scale }: { scale: number }) {
     <div data-gizmo-root className="absolute inset-0" onPointerDown={onCanvasPointerDown}>
       {guides.v && <div className="pointer-events-none absolute top-0 bottom-0 left-1/2 w-px bg-accent-2 shadow-[0_0_6px_var(--color-accent)]" />}
       {guides.h && <div className="pointer-events-none absolute top-1/2 right-0 left-0 h-px bg-accent-2 shadow-[0_0_6px_var(--color-accent)]" />}
-      {active && b && !playing && (
+      {cropping && clip && b && !playing && <CropGizmo clip={clip} b={b} scale={scale} />}
+      {active && b && !playing && !cropping && (
         <div
           className="absolute cursor-move"
           onPointerDown={(e) => startDrag(e, 'move')}
