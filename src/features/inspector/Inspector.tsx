@@ -10,6 +10,7 @@ import { Row, Section } from '@/components/ui/section'
 import { Segmented } from '@/components/ui/segmented'
 import { Select } from '@/components/ui/select'
 import { clipEnd, projectDuration } from '@/editor/ops'
+import { openSequenceName } from '@/editor/sequences'
 import { dispatch, useEditor } from '@/editor/store'
 import type { Clip, ClipKind } from '@/editor/types'
 import { useUI } from '@/editor/ui-store'
@@ -20,6 +21,7 @@ import { cn } from '@/lib/cn'
 import { formatDuration, formatTimecode } from '@/lib/time'
 import { CropSection } from './CropSection'
 import { MaskSection } from './MaskSection'
+import { MotionSection, NestSection } from './MotionSections'
 import { AnimateSection, AudioSection, ColorSections, CompositingSection, EffectsSection, Space3DSection, SpeedSection, TextSection, TransformSection } from './sections'
 
 export function Inspector() {
@@ -121,7 +123,9 @@ function ClipInspector({ clip }: { clip: Clip }) {
 
       {tab === 'video' && (
         <>
+          {clip.sequenceId && <NestSection clip={clip} />}
           {clip.kind !== 'adjustment' && <TransformSection clip={clip} />}
+          <MotionSection clip={clip} />
           {(clip.kind === 'video' || clip.kind === 'image') && <CropSection clip={clip} />}
           {(clip.kind === 'video' || clip.kind === 'image' || clip.kind === 'adjustment') && <MaskSection clip={clip} />}
           {clip.kind !== 'adjustment' && <Space3DSection clip={clip} />}
@@ -131,6 +135,7 @@ function ClipInspector({ clip }: { clip: Clip }) {
       )}
       {tab === 'text' && <TextSection clip={clip} />}
       {tab === 'color' && <ColorSections clips={[clip]} />}
+      {tab === 'audio' && clip.kind === 'audio' && clip.sequenceId && <NestSection clip={clip} />}
       {tab === 'audio' && <AudioSection clip={clip} fps={fps} />}
       {tab === 'speed' && <SpeedSection clips={[clip]} fps={fps} />}
       {tab === 'animate' && <AnimateSection clip={clip} fps={fps} />}
@@ -200,7 +205,7 @@ function ProjectInspector() {
         />
       </div>
 
-      <Section title="Canvas">
+      <Section title={project.sequences && Object.keys(project.sequences).length ? `Canvas · ${openSequenceName(project)}` : 'Canvas'}>
         <div className="grid grid-cols-5 gap-1.5">
           {CANVASES.map((c) => {
             const active = current?.id === c.id

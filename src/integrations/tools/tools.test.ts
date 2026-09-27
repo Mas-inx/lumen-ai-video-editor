@@ -241,3 +241,42 @@ describe('control tools', () => {
     expect((await call('undo')).json.error).toBe('Nothing to undo.')
   })
 })
+
+describe('timeline and footage tools', () => {
+  it('are all registered, with the timeline commands', () => {
+    const names = new Set(agentTools().map((t) => t.name))
+    for (const name of ['list_timelines', 'import_subtitles', 'export_subtitles', 'detect_scenes', 'create_multicam', 'stabilize_clip', 'track_motion', 'render_queue', 'sequence_create', 'sequence_open', 'sequence_duplicate', 'clip_nest', 'clip_unnest', 'multicam_create', 'multicam_switch']) {
+      expect(names.has(name), name).toBe(true)
+    }
+  })
+
+  it('import_subtitles lays SRT text as captions and export_subtitles reads them back', async () => {
+    const res = await call('import_subtitles', { text: '1\n00:00:01,000 --> 00:00:02,000\nHello\n\n2\n00:00:03,000 --> 00:00:04,500\nWorld\n', offset_seconds: 1 })
+    expect(res.json).toMatchObject({ captions_added: 2, cues_in_file: 2 })
+    const out = await call('export_subtitles', { format: 'vtt', save: false })
+    expect(out.json.text).toBe('WEBVTT\n\n00:00:02.000 --> 00:00:03.000\nHello\n\n00:00:04.000 --> 00:00:05.500\nWorld\n')
+    expect((await call('import_subtitles', {})).json.error).toMatch(/Give path/)
+  })
+
+  it('list_timelines and get_project show every timeline', async () => {
+    const created = await call('sequence_create', { name: 'Shorts', settings: { width: 1080, height: 1920 }, open: false })
+    const id = created.json.result as string
+    const list = await call('list_timelines')
+    expect(list.json.timelines.map((t: Json) => [t.name, t.open, t.size])).toEqual([
+      ['Main timeline', true, '1920x1080'],
+      ['Shorts', false, '1080x1920'],
+    ])
+    const project = await call('get_project')
+    expect(project.json.timeline).toMatchObject({ name: 'Main timeline' })
+    expect(project.json.other_timelines).toEqual([{ id, name: 'Shorts' }])
+    await call('sequence_open', { id })
+    expect((await call('get_project')).json.timeline).toMatchObject({ id, name: 'Shorts' })
+  })
+
+  it('track_motion needs a box and explains what it follows', async () => {
+    const r = dispatch('clip.add', { trackId: trackId('Titles'), kind: 'text', start: 0, duration: 90 })
+    const id = (r as { result: string }).result
+    expect((await call('track_motion', { clip_id: id })).json.error).toMatch(/box_fraction/)
+    expect((await call('track_motion', { clip_id: id, box_fraction: { x: 0.5, y: 0.5, width: 0.1, height: 0.1 } })).json.error).toMatch(/no video under this clip/)
+  })
+})

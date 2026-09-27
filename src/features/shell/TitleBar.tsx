@@ -1,5 +1,6 @@
 import {
   ArrowDownToLine,
+  Captions,
   Check,
   ChevronDown,
   Clock,
@@ -8,6 +9,7 @@ import {
   FolderOpen,
   FolderArchive,
   FolderSearch,
+  ListVideo,
   Gauge,
   History,
   House,
@@ -29,12 +31,14 @@ import { Kbd } from '@/components/ui/kbd'
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuSub, MenuTrigger } from '@/components/ui/menu'
 import { Tip } from '@/components/ui/tooltip'
 import { dispatch, useEditor } from '@/editor/store'
+import { QueueIndicator } from '@/features/export/RenderQueue'
 import { JobsIndicator } from '@/features/integrations/JobsIndicator'
 import { useUI } from '@/editor/ui-store'
 import { cn } from '@/lib/cn'
 import { desktop, platform } from '@/lib/platform'
 import { checkForUpdates, installUpdate, useUpdates } from '@/lib/updates'
 import { collectProject, openProject, refreshRecent, useDirty, useSession } from '@/project/session'
+import { pickSubtitles, saveSubtitles } from '@/project/subtitle-files'
 import { actions } from './actions'
 
 export function TitleBar() {
@@ -84,6 +88,7 @@ export function TitleBar() {
 
       <div className="no-drag ml-auto flex items-center gap-0.5">
         <UpdatePill />
+        <QueueIndicator />
         <JobsIndicator />
         <div className="mx-1.5 h-4 w-px bg-line-2" />
         <IconButton label={undoLabel ? `Undo ${undoLabel}` : 'Undo'} shortcut="mod+z" disabled={!canUndo} onClick={actions.undo} tooltipSide="bottom">
@@ -162,8 +167,16 @@ function AppMenu() {
             <MenuItem icon={<Download />} shortcut="mod+i" onSelect={actions.importMedia}>
               Import media…
             </MenuItem>
+            <MenuSub icon={<Captions />} label="Subtitles">
+              <MenuItem onSelect={pickSubtitles}>Import SRT / VTT…</MenuItem>
+              <MenuItem onSelect={() => void saveSubtitles('srt')}>Export captions as SRT…</MenuItem>
+              <MenuItem onSelect={() => void saveSubtitles('vtt')}>Export captions as WebVTT…</MenuItem>
+            </MenuSub>
             <MenuItem icon={<Upload />} shortcut="mod+e" onSelect={() => setExportOpen(true)}>
               Export…
+            </MenuItem>
+            <MenuItem icon={<ListVideo />} shortcut="mod+shift+e" onSelect={() => useUI.getState().setQueueOpen(true)}>
+              Render queue…
             </MenuItem>
             <MenuItem icon={<History />} disabled={!desktop} onSelect={() => useUI.getState().setVersionsOpen(true)}>
               Version history…

@@ -1,6 +1,6 @@
 # Lumen AI tools
 
-Every AI that works in Lumen — the Copilot's API models, your own Claude Code or Codex, and any agent connected to Lumen's MCP server — uses this same set of **91 tools**. This page is generated from the tool registry ([`src/integrations/agent-tools.ts`](../src/integrations/agent-tools.ts) and [`src/integrations/tools/`](../src/integrations/tools)).
+Every AI that works in Lumen — the Copilot's API models, your own Claude Code or Codex, and any agent connected to Lumen's MCP server — uses this same set of **108 tools**. This page is generated from the tool registry ([`src/integrations/agent-tools.ts`](../src/integrations/agent-tools.ts) and [`src/integrations/tools/`](../src/integrations/tools)).
 
 - **Times:** the helper tools take seconds; editor commands take integer frames at the project's fps (see `get_project`).
 - **Pictures:** `get_frame`, `get_contact_sheet`, `get_media_frames` and `get_editor_screenshot` return an image block along with JSON — over MCP as `image` content, and to the Copilot's models as real images.
@@ -14,7 +14,8 @@ Every AI that works in Lumen — the Copilot's API models, your own Claude Code 
 - [Act](#act) — 10 tools
 - [Smart edits](#smart-edits) — 6 tools
 - [Generate and import](#generate-and-import) — 16 tools
-- [Editor commands](#editor-commands) — 47 tools
+- [Timelines and footage](#timelines-and-footage) — 8 tools
+- [Editor commands](#editor-commands) — 56 tools
 
 ## See
 
@@ -65,7 +66,7 @@ What’s said, how it sounds, and everything about the project.
 
 ### `get_project`
 
-Everything about the open project: settings (fps!), tracks with their clips (frames), media library, markers, playhead and selection. Call this before editing.
+Everything about the open project and its open timeline: settings (fps!), tracks with their clips (frames), media library, markers, playhead and selection, and the other timelines. Call this before editing.
 
 _No parameters._
 
@@ -226,11 +227,16 @@ Save the project file. If it has never been saved — or as_new_file is true —
 
 ### `export_video`
 
-Export the edit to a video (or audio) file. The user chooses where to save it in a Save dialog — nothing is written without them — and sees progress with a Cancel button. Waits for the export and returns the file path. Renders the whole timeline unless from_seconds / to_seconds are given. loudness_lufs normalizes the mix to a target (−14 for YouTube and Spotify, −16 for Apple and podcasts, −23 for broadcast), with peaks held under −1 dBFS.
+Export the edit to a video (or audio) file. The user chooses where to save it in a Save dialog — nothing is written without them — and sees progress with a Cancel button. Waits for the export and returns the file path. Renders the open timeline (or timeline_id) whole unless from_seconds / to_seconds are given. loudness_lufs normalizes the mix to a target (−14 for YouTube and Spotify, −16 for Apple and podcasts, −23 for broadcast), with peaks held under −1 dBFS. png exports a folder of numbered frames; transparent keeps the alpha channel (png, or webm with vp9). captions_file saves the captions as .srt / .vtt next to the video; burn_captions false leaves them out of the picture. queue true adds it to the render queue instead of rendering now (see render_queue).
 
 | Parameter | Type | Description |
 | --- | --- | --- |
-| `format` | `mp4` · `mov` · `webm` · `gif` · `wav` · `m4a` | File type (default mp4) |
+| `format` | `mp4` · `mov` · `webm` · `gif` · `png` · `wav` · `m4a` | File type (default mp4) |
+| `timeline_id` | string | Export this timeline instead of the open one (ids from list_timelines) |
+| `transparent` | boolean | Keep transparency: png frames, or webm with the vp9 codec |
+| `captions_file` | `srt` · `vtt` | Also save the captions as a subtitle file next to it |
+| `burn_captions` | boolean | Draw the captions into the picture (default true) |
+| `queue` | boolean | Add to the render queue instead of rendering now |
 | `resolution` | `2160` · `1440` · `1080` · `720` · `480` | Output size by its short side (default: the project’s own size) |
 | `fps` | `24` · `25` · `30` · `50` · `60` | Frame rate (default: the project’s) |
 | `quality` | integer | 10–100 (default 72; 85+ is master quality) |
@@ -504,6 +510,93 @@ Status of a render or generation job. Waits up to wait_seconds for it to finish.
 | `job_id` **(required)** | string | Job id |
 | `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600). If it is still running, poll get_job. |
 
+## Timelines and footage
+
+Several timelines per project, subtitles in and out, and tools that read the footage itself: scene cuts, multicam synced by sound, stabilization, motion tracking — plus the render queue. (Creating, opening and nesting timelines are editor commands below: sequence_*, clip_nest, clip_unnest, multicam_*.)
+
+### `list_timelines`
+
+Every timeline (sequence) in the project: id, name, size, frame rate, length, whether it is open, whether it is a multicam timeline, and which timelines play it (nested). Switch with sequence_open; make one with sequence_create.
+
+_No parameters._
+
+### `import_subtitles`
+
+Bring an SRT or WebVTT subtitle file onto the open timeline as caption clips (styled like add_captions). Give a file path, or the subtitle text itself. offset_seconds shifts every cue; replace takes over the existing Captions track instead of adding a new one.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `path` | string | Absolute path of an .srt or .vtt file |
+| `text` | string | Or the subtitle text (SRT or WebVTT) |
+| `offset_seconds` | number | Shift every caption by this much (default 0) |
+| `replace` | boolean | Replace the captions already on the Captions track |
+
+### `export_subtitles`
+
+The captions on the open timeline (text clips on caption tracks) as SRT or WebVTT. By default the user picks where to save the file in a Save dialog; with save false the text is just returned.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `format` | `srt` · `vtt` | srt (default) or vtt |
+| `file_name` | string | Suggested file name |
+| `save` | boolean | Save a file (default true); false returns the text only |
+
+### `detect_scenes`
+
+Find the shot changes (scene cuts) in a video clip by comparing its frames, then split the clip at each cut (default), add markers there, or just report them. sensitivity 0–100 (default 50; higher finds subtler cuts). One undo step.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `clip_id` **(required)** | string | A video clip on the timeline |
+| `action` | `split` · `markers` · `none` | What to do at the cuts (default split) |
+| `sensitivity` | number | 0–100 (default 50) |
+
+### `create_multicam`
+
+Make a multicam clip from recordings of the same moment (two or more video assets): lines them up by their sound (or by the start of each file), puts each camera on its own angle, keeps one camera’s sound, and places the multicam clip on the main track. Returns the offsets found and how confidently each matched (above ~8 is solid). Then cut between cameras with multicam_switch.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `asset_ids` **(required)** | string[] | The camera recordings (video assets) |
+| `sync` | `sound` · `start` | Line up by their sound (default) or by the start of each file |
+| `audio_asset_id` | string | Whose sound to use (default: the longest recording with sound) |
+| `name` | string | Name for the multicam timeline |
+| `at_seconds` | number | Where on the timeline (default: the playhead) |
+| `place` | boolean | Put the multicam clip on the timeline (default true) |
+
+### `stabilize_clip`
+
+Smooth the camera shake out of a video clip: measures the shake frame by frame, then shifts, turns and zooms each frame back onto a smooth path (zooming just enough to hide the edges). smoothness_seconds (default 1): more is steadier, like a tripod; less keeps intentional moves. Undo removes it.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `clip_id` **(required)** | string | A video clip on the timeline |
+| `smoothness_seconds` | number | 0.2–4 (default 1) |
+| `keep_level` | boolean | Also hold the horizon level (default true) |
+
+### `track_motion`
+
+Make a clip (a title, sticker, image or picture-in-picture) — or one of its masks — follow something moving in the footage under it. Give the box around the thing to follow on a frame where it is visible: box_fraction as fractions of the frame (x, y = its centre from the top-left, 0–1; width, height 0–1 — read them off get_frame), or box in project pixels from the frame centre. direction forward (default), backward or both. Tracking the mask of an adjustment layer with blur makes a moving blur (hide a face or a plate).
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `clip_id` **(required)** | string | The clip that should follow (or whose mask should) |
+| `mask_id` | string | Track this mask of the clip instead of the clip itself |
+| `box_fraction` | object | The area around what to follow, as fractions of the frame: { x, y, width, height } |
+| `box` | object | Or the same area in project pixels from the frame centre |
+| `time_seconds` | number | The frame the box is on (default: the playhead) |
+| `direction` | `forward` · `backward` · `both` | Which way to track from there (default forward) |
+| `source_clip_id` | string | The video to read (default: the video under the clip, or the clip itself for its masks) |
+
+### `render_queue`
+
+The render queue (exports lined up with their files chosen; add to it with export_video queue: true): list the jobs and their progress, start rendering them one after another, or clear the finished ones.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `action` | `list` · `start` · `clear_finished` | What to do (default list) |
+| `wait_seconds` | number | With start: wait up to this long for the queue to finish (max 600, default 0) |
+
 ## Editor commands
 
 Every edit the UI can make, as a typed command: undoable, in the History, frames at the project’s fps. Generated from the command registry.
@@ -520,6 +613,7 @@ Add a clip to a track. Media clips (video/image/audio) reference an asset; text 
 | `start` **(required)** | integer | (≥ 0) |
 | `duration` **(required)** | integer | (≥ 1) |
 | `assetId` | string |  |
+| `sequenceId` | string |  |
 | `inPoint` | integer | (≥ 0) |
 | `name` | string |  |
 | `patch` | object |  |
@@ -937,9 +1031,95 @@ Remove assets from the library, along with every clip that uses them.
 | --- | --- | --- |
 | `ids` **(required)** | string[] |  |
 
+### `sequence_create`
+
+Make a new, empty timeline (sequence) — another cut, or another format of the same media such as a 9:16 version. Settings default to the open timeline’s. It opens unless open is false (sequence_open switches). Returns its id.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `id` | string |  |
+| `name` | string |  |
+| `settings` | object |  |
+| `open` **(required)** | boolean | Default `true`. |
+
+### `sequence_open`
+
+Switch the editor to another timeline (sequence ids are in get_project → timelines). Every other command then works on that timeline. Undo switches back.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `id` **(required)** | string |  |
+
+### `sequence_rename`
+
+Rename a timeline (sequence). Clips that play it keep their own names.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `id` **(required)** | string |  |
+| `name` **(required)** | string |  |
+
+### `sequence_duplicate`
+
+Copy a timeline (sequence) with everything on it — to try another cut without touching the first. Returns the copy’s id; it opens if open is true.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `id` **(required)** | string |  |
+| `name` | string |  |
+| `open` **(required)** | boolean | Default `false`. |
+
+### `sequence_delete`
+
+Delete a timeline (sequence). Not the open one, and not one another timeline still plays (nested) — remove those clips first.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `id` **(required)** | string |  |
+
+### `clip_nest`
+
+Nest clips: move them (and anything linked to them) into a new timeline, and put one clip playing that timeline where they were — then grade, transform, speed up or cut them as one piece. sequence_open the new timeline to edit inside it. Returns { clipId, sequenceId }.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `ids` **(required)** | string[] |  |
+| `name` | string |  |
+
+### `clip_unnest`
+
+Break a nested clip apart: the part of its timeline it shows comes back onto this timeline in its place, on free tracks. The nested clip’s own transform, grade and effects are dropped; its timeline stays in the project. Returns the new clip ids.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `id` **(required)** | string |  |
+
+### `multicam_create`
+
+Make a multicam timeline from recordings of the same moment: one camera angle per video track, lined up by offsets in seconds (the sync_multicam tool measures them from the audio), with the sound of angle `audio` (the other angles’ sound is there, muted). Places a multicam clip on this timeline unless place is false; switch angles with multicam_switch. Returns { sequenceId, clipId }.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `name` | string |  |
+| `angles` **(required)** | object[] |  |
+| `audio` **(required)** | integer | (≥ 0, ≤ 15) Default `0`. |
+| `place` **(required)** | boolean | Default `true`. |
+| `start` | integer | (≥ 0) |
+| `trackId` | string |  |
+
+### `multicam_switch`
+
+Cut to another camera angle of a multicam clip at a frame: the clip is split there and the part after it shows angle `angle` (1 = the first camera). At the clip’s first frame the whole clip switches. clipId defaults to the multicam clip under the frame. Returns the id of the clip now showing that angle.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `frame` **(required)** | integer | (≥ 0) |
+| `angle` **(required)** | integer | (≥ 1, ≤ 16) |
+| `clipId` | string |  |
+
 ### `project_update`
 
-Rename the project or change its settings (width, height, fps, background color). Changing fps re-times every clip so nothing drifts.
+Rename the project or change the open timeline’s settings (width, height, fps, background color). Changing fps re-times every clip so nothing drifts.
 
 | Parameter | Type | Description |
 | --- | --- | --- |

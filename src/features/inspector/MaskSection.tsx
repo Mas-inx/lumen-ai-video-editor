@@ -1,4 +1,4 @@
-import { Circle, Eye, EyeOff, Move, Plus, Square, Trash } from 'lucide-react'
+import { Circle, Crosshair, Eye, EyeOff, Move, Plus, Square, Trash, Unlink } from 'lucide-react'
 import { IconButton } from '@/components/ui/button'
 import { Menu, MenuContent, MenuItem, MenuTrigger } from '@/components/ui/menu'
 import { Row, Section } from '@/components/ui/section'
@@ -7,6 +7,7 @@ import { Switch } from '@/components/ui/switch'
 import { dispatch } from '@/editor/store'
 import type { Clip, Mask } from '@/editor/types'
 import { useUI } from '@/editor/ui-store'
+import { actions } from '@/features/shell/actions'
 import { cn } from '@/lib/cn'
 
 /** Shape masks: show part of a clip (or limit where an adjustment layer grades), with soft edges. */
@@ -17,7 +18,7 @@ export function MaskSection({ clip }: { clip: Clip }) {
     const res = dispatch('mask.add', { clipId: clip.id, mask: { shape, ...(shape === 'rectangle' ? { width: 0.6, height: 0.6 } : {}) } })
     if (res.ok) useUI.getState().setMaskEdit(res.result as string)
   }
-  const set = (m: Mask, patch: Partial<Omit<Mask, 'id'>>, key?: string) => dispatch('mask.update', { clipId: clip.id, maskId: m.id, patch }, key ? { coalesce: `mask:${m.id}:${key}` } : undefined)
+  const set = (m: Mask, patch: Partial<Omit<Mask, 'id' | 'follow'>> & { follow?: Mask['follow'] | null }, key?: string) => dispatch('mask.update', { clipId: clip.id, maskId: m.id, patch }, key ? { coalesce: `mask:${m.id}:${key}` } : undefined)
 
   return (
     <Section
@@ -60,6 +61,14 @@ export function MaskSection({ clip }: { clip: Clip }) {
                   <IconButton size="xs" label={on ? 'Done editing on the canvas' : 'Edit on the canvas'} active={on} onClick={() => useUI.getState().setMaskEdit(on ? null : m.id)}>
                     <Move />
                   </IconButton>
+                  <IconButton size="xs" label={m.follow ? 'Follows a tracked point — track again' : 'Track motion: make this mask follow something'} active={Boolean(m.follow)} onClick={() => actions.trackMotion(clip.id, m.id)}>
+                    <Crosshair />
+                  </IconButton>
+                  {m.follow && (
+                    <IconButton size="xs" label="Stop following" onClick={() => set(m, { follow: null })}>
+                      <Unlink />
+                    </IconButton>
+                  )}
                   <IconButton size="xs" label={m.invert ? 'Showing outside — show inside' : 'Showing inside — show outside'} active={m.invert} onClick={() => set(m, { invert: !m.invert })}>
                     {m.invert ? <EyeOff /> : <Eye />}
                   </IconButton>

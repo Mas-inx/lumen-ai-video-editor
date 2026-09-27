@@ -25,6 +25,9 @@ src/
     ops.ts            timeline rules: magnetic main track, gap-seeking moves, trims, ripple, roll / slip / slide,
                       insert / overwrite, freeze frames, linked sound and groups, range removal
     timing.ts         clip time → source time: speed, speed ramps (integrated), reverse, freeze frames
+    sequences.ts      timelines: switching, views of stored timelines, loops, nesting and breaking apart
+    motion.ts         tracked paths (what follows a point) and stabilization corrections, read at render time
+    subtitles.ts      SRT / WebVTT parsing and writing, captions laid on the timeline
     color-math.ts     tone curves (monotone cubic), colour wheels, HSL bands
     lut.ts            .cube LUT parsing (3D and 1D, custom domains)
     clipboard.ts      copy / paste of clips and their media, across projects
@@ -42,11 +45,18 @@ src/
     mixer.ts          channel and master buses: EQ → compressor → limiter → fader → balance, meters
     eq-response.ts    the EQ's response curve, from the same biquads Web Audio runs
     loudness.ts       ITU-R BS.1770 loudness (LUFS), streamed block by block; peaks, clipping
-    export.ts         render → encode → mux, streamed to disk
-  project/          session (new/open/save/recover, versions, collect), import, proxies, transcription, Whisper worker
+    export.ts         render → encode → mux, streamed to disk; PNG frames and alpha WebM
+    render-queue.ts   exports lined up with their files chosen, rendered one after another
+    analysis.ts       every frame of a stretch of video, decoded small, as pixels
+    scenes.ts         shot changes: frame-to-frame HSV change against its neighbours
+    sync.ts           multicam sync: onset envelopes cross-correlated by FFT, refined at 1 kHz
+    tracker.ts        template tracking (NCC on a two-level pyramid) and camera-motion measurement
+  project/          session (new/open/save/recover, versions, collect), import, proxies, transcription, Whisper worker,
+                    subtitle files, and the footage tools wired to the editor (analysis-actions.ts)
   integrations/     AI brains, Blender / HyperFrames / MCP clients
     agent-tools.ts    the tool registry every AI uses
-    tools/            vision.ts (see) · inspect.ts (hear and read) · control.ts (act) · kit.ts
+    tools/            vision.ts (see) · inspect.ts (hear and read) · control.ts (act) · footage.ts (timelines,
+                      subtitles, scenes, multicam, stabilizing, tracking, render queue) · kit.ts
   features/         UI: home, timeline, preview, media and generate panels, inspector,
                     Copilot, integrations hub, command palette, export
 electron/
@@ -55,7 +65,8 @@ electron/
   project.ts        .lumen files, recent projects, crash recovery, close guard
   versions.ts       version history: a copy per save and periodic snapshots, thinned with age
   collect.ts        Collect project: copies a project and its media into one folder
-  export.ts         streamed export (and proxy) writes
+  export.ts         streamed export (and proxy) writes, image-sequence folders, destinations picked
+                    now and written later (the render queue), subtitle files beside exports
   updater.ts        updates from GitHub Releases (electron-updater)
   app-ipc.ts        file / project / export / window-capture / update IPC for the editor page only
   integrations/     Blender, HyperFrames, MCP host, Lumen's MCP server, media generation
@@ -69,7 +80,27 @@ electron/
 - **Export** replays the same compositor frame by frame, with video decoded frame-exactly by Mediabunny instead of `<video>`, mixes audio offline with the same graph, encodes with WebCodecs (hardware when available) and streams the file to disk in chunks. MP4, MOV, WebM, GIF, WAV and M4A.
   - Audio renders in two-second blocks, each starting a second early so compressors and limiters join seamlessly.
   - Loudness normalization measures the mix first, then renders it with the gain and a limiter.
-- **Stills** for the AI reuse the export's frame feeder, drawn without disturbing the live preview.
+- **Stills** for the AI reuse the export's frame feeder, drawn without disturbing the live preview. Exports swap in their frame-exact frames only while each of their frames is drawn (`withVideoFrames`), so the preview keeps playing live while the render queue works.
+- **Transparent exports** draw with a cleared background instead of the timeline colour: a folder of numbered PNGs, or WebM whose alpha Mediabunny encodes as a second VP9 stream.
+
+## Timelines and nesting
+
+A project holds several timelines. The open one lives in the project's top-level `settings`, `tracks`, `clips`, `markers`, `range` and `master`, so every command, panel and tool edits it unchanged; the others wait in `project.sequences`. `sequence.open` swaps them — an ordinary command, so undo steps back through it — and each timeline keeps its own playhead.
+
+A clip with `sequenceId` plays another timeline. `sequenceView()` presents a stored timeline as a project of its own (sharing media, LUTs and fonts), and:
+
+- **The compositor** draws a nested timeline one level down into a canvas of the size it will cover. Scratch canvases are per level, and players and frame decoders are keyed by the path of nested clips leading to them, so a timeline nested twice plays twice. A multicam clip draws only its angle's track, and can hand every angle to the angle viewer in the same pass so all cameras keep playing.
+- **The audio engine** mixes a nested timeline through its own track buses into a gain stage for the clip that plays it (its volume, fades and crossfades), mapped onto the played timeline by an offset — recursively, for playback and export alike.
+- **Loops** can't happen: a timeline can't be nested in anything it contains (`wouldLoop`), and the open timeline is never looked up as a nested one.
+
+## Reading the footage
+
+Scene detection, multicam sync, tracking and stabilization decode media with Mediabunny (never the preview's players) and write their results through commands, so they undo like any edit:
+
+- **Scenes:** each frame (96 px wide) is compared with the last in hue, saturation and brightness; a cut is a jump several times its neighbours' average and above a floor, kept a minimum shot apart.
+- **Multicam:** every recording's sound becomes an onset envelope (rises in loudness, 100 per second); FFT cross-correlation against the reference finds the offset, refined within ±30 ms at 1 kHz.
+- **Tracking:** a patch is matched frame to frame by normalized cross-correlation, coarse at half size then refined to a fraction of a pixel, following its speed and slowly updating its template. Results map through the footage's placement (fit, transform, stabilization) into what follows: `clip.follow` or `mask.follow`, offsets applied at render time.
+- **Stabilization:** a grid of blocks is matched between consecutive frames; the camera's shift and turn are fitted from the blocks that agree (things moving on their own are dropped) and summed into a path. At render time the path is smoothed (Gaussian, `smooth` seconds) and the difference is taken out of the picture, zoomed to hide the edges.
 
 ## AI
 

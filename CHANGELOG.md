@@ -33,6 +33,23 @@ Every notable change to Lumen, newest first. The format follows [Keep a Changelo
 - **Version history** (Lumen menu › *Version history*). Every save is kept, plus a snapshot every ten minutes while you edit — even if you never save. Restore any version (what you had goes into the history first) or open it as a copy. Older versions thin out to one a day, and the history follows the project when its file moves.
 - **Collect project** (Lumen menu) copies the project and every media file it uses into one folder, ready to archive or take to another computer.
 - The command palette now finds every command that has a keyboard shortcut.
+- **Multiple timelines.** A project can hold as many timelines as you like, each with its own size and frame rate — another cut, or a vertical version.
+  - A menu at the left of the timeline lists them and makes new ones, including a copy of the whole edit in another shape, reframed to fit.
+  - Timelines also appear in the Media panel. Each keeps its own playhead, and undo steps back through switching.
+- **Nesting.** Select clips and choose *Nest into a timeline* (`Ctrl+Alt+N`): they move into a timeline of their own, played by one clip you can grade, transform, speed up or cut as a whole.
+  - Double-click it to edit inside, with a way back. You can also drag any timeline from the Media panel onto the timeline.
+  - The nested timeline's sound plays through, mixed by its own tracks.
+  - Nesting main-track clips keeps everything after them in place. *Break apart* brings the contents back.
+- **Multicam.** Choose two or more camera recordings (*Make a multicam clip…* in the Media panel or command palette). Lumen lines them up by their sound, to about a millisecond, and keeps one camera's sound.
+  - Press `1`–`9` while it plays to cut between cameras at the playhead.
+  - Every angle plays live in a strip under the preview; click one to cut to it.
+- **Scene detection** splits a clip at every shot change, or marks them, telling cuts from fast motion.
+- **Stabilization** measures a clip's camera shake and smooths it away, zooming in just enough to hide the edges. Smoothness, zoom and holding the horizon level are adjustable.
+- **Motion tracking.** Box something in the preview and track it forwards, backwards or both ways. A title, sticker or picture-in-picture follows it, or a mask does — so a blurred adjustment layer can hide a moving face.
+- **Subtitles.** Import **SRT** and **WebVTT** files as captions (drop them on the timeline, or use the Lumen menu), and export the captions as SRT or WebVTT. The Export dialog can burn captions in, leave them out, and/or save a subtitle file beside the video.
+- **Render queue** (`Ctrl+Shift+E`). *Add to queue* in the Export dialog picks the file now; the queue renders its exports one after another while you keep editing, each from the edit as it was when queued. Any timeline can be exported.
+- **Transparent exports:** **PNG frames** (a folder of numbered PNGs) and **WebM with an alpha channel** (VP9), for overlays and compositing in other apps.
+- 17 new AI tools — `list_timelines`, `import_subtitles`, `export_subtitles`, `detect_scenes`, `create_multicam`, `stabilize_clip`, `track_motion` and `render_queue`, plus the timeline, nesting and multicam commands. `export_video` can export another timeline, PNG frames, transparency and subtitle files, or queue the export. That makes 108 AI tools.
 
 - **OpenCode Go** as a Copilot brain: paste your OpenCode Go key and pick from GLM, Kimi, DeepSeek, Qwen, MiniMax, MiMo, Grok, GPT Luna and the rest of its models.
 - **Choose the model and effort for every brain.**

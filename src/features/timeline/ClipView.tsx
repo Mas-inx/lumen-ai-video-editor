@@ -1,10 +1,12 @@
-import { AudioLines, Blend, Film, Gauge, Image as ImageIcon, Link2, Snowflake, Sparkles, Type } from 'lucide-react'
+import { AudioLines, Blend, Crosshair, Film, Gauge, Image as ImageIcon, Layers, Link2, Move, Snowflake, Sparkles, Type, Video } from 'lucide-react'
 import { memo, useMemo } from 'react'
 import { PEAKS_PER_SECOND } from '@/editor/defaults'
 import { allKeyframeFrames } from '@/editor/keyframes'
+import { angleTracks } from '@/editor/sequences'
 import { useEditor } from '@/editor/store'
+import { openTimeline } from '@/editor/timeline-nav'
 import { isRamped, sourceFrameAt, type Timed } from '@/editor/timing'
-import type { Asset, Clip } from '@/editor/types'
+import type { Asset, Clip, Sequence } from '@/editor/types'
 import { useUI } from '@/editor/ui-store'
 import { getPeaks } from '@/engine/audio'
 import { sequenceFrameUrl } from '@/engine/media'
@@ -20,6 +22,7 @@ export const ClipView = memo(function ClipView({ clipId, locked }: { clipId: str
   const { pps, fps, rowTop, rowHeight } = useLayout()
   const clip = useEditor((s) => s.project.clips[clipId])
   const asset = useEditor((s) => (clip?.assetId ? s.project.assets[clip.assetId] : undefined))
+  const nested = useEditor((s) => (clip?.sequenceId ? s.project.sequences?.[clip.sequenceId] : undefined))
   const selected = useUI((s) => s.selection.includes(clipId))
   const aiAt = useUI((s) => s.aiTouched[clipId])
   const preview = useDrag((s) => s.previews[clipId])
@@ -38,7 +41,7 @@ export const ClipView = memo(function ClipView({ clipId, locked }: { clipId: str
   const laneH = rowHeight[trackId] ?? rowHeight[clip.trackId]
   const height = laneH - INSET * 2
   const dy = (rowTop[trackId] ?? 0) - (rowTop[clip.trackId] ?? 0)
-  const color = CLIP_COLOR[clip.kind]
+  const color = clip.sequenceId ? 'var(--color-clip-nest)' : CLIP_COLOR[clip.kind]
   const lifted = held && moving
   // Neighbours making room glide; the clip under the pointer tracks it exactly.
   const gliding = Boolean(preview) && !held
@@ -48,6 +51,7 @@ export const ClipView = memo(function ClipView({ clipId, locked }: { clipId: str
   return (
     <div
       data-clip-id={clip.id}
+      onDoubleClick={clip.sequenceId ? () => openTimeline(clip.sequenceId!, true) : undefined}
       className={cn(
         'group/clip absolute overflow-hidden rounded-[7px] transition-[box-shadow,filter] duration-150',
         'shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)] hover:brightness-110',
@@ -67,9 +71,13 @@ export const ClipView = memo(function ClipView({ clipId, locked }: { clipId: str
         background: clip.kind === 'audio' ? `color-mix(in oklab, ${color} 20%, #121310)` : '#0d0e0c',
       }}
     >
-      <ClipBody clip={clip} asset={asset} inPoint={inPoint} duration={duration} width={width} height={height} />
+      {clip.sequenceId ? (
+        <NestBody clip={clip} seq={nested} inPoint={inPoint} duration={duration} width={width} height={height} />
+      ) : (
+        <ClipBody clip={clip} asset={asset} inPoint={inPoint} duration={duration} width={width} height={height} />
+      )}
 
-      {showLabel && <ClipLabel clip={clip} asset={asset} />}
+      {showLabel && <ClipLabel clip={clip} asset={asset} nested={nested} />}
 
       {clip.kind === 'audio' && <Fades clip={clip} width={width} height={height} />}
 
@@ -143,14 +151,23 @@ function ClipBody({ clip, asset, inPoint, duration, width, height }: { clip: Cli
   }
 }
 
-function ClipLabel({ clip, asset }: { clip: Clip; asset?: Asset }) {
-  const Icon = clip.kind === 'video' ? Film : clip.kind === 'image' ? ImageIcon : clip.kind === 'audio' ? AudioLines : clip.kind === 'text' ? Type : Blend
+function ClipLabel({ clip, asset, nested }: { clip: Clip; asset?: Asset; nested?: Sequence }) {
+  const Icon = nested?.multicam ? Video : clip.sequenceId ? Layers : clip.kind === 'video' ? Film : clip.kind === 'image' ? ImageIcon : clip.kind === 'audio' ? AudioLines : clip.kind === 'text' ? Type : Blend
   const text = clip.kind === 'text' ? clip.text?.content.replace(/\n/g, ' · ') : clip.name
+  const angles = nested?.multicam ? angleTracks(nested) : []
+  const angle = angles.findIndex((t) => t.id === clip.angle)
   return (
     <div className="pointer-events-none absolute inset-x-0 top-0 flex h-[18px] min-w-0 items-center gap-1 px-1.5 pt-px text-[11px] leading-none font-medium text-white [text-shadow:0_1px_2px_rgb(0_0_0/0.7)]">
       <Icon className="size-3 shrink-0 opacity-80" />
+      {angles.length > 0 && (
+        <span className="shrink-0 rounded bg-white px-1 py-px text-[9.5px] font-bold text-black tabular [text-shadow:none]" title={angles[Math.max(0, angle)]?.name}>
+          {Math.max(0, angle) + 1}
+        </span>
+      )}
       <span className="min-w-0 truncate">{text}</span>
       {clip.groupId && <Link2 className="size-3 shrink-0 opacity-80" aria-label="Linked" />}
+      {(clip.follow || clip.masks?.some((m) => m.follow)) && <Crosshair className="size-3 shrink-0 opacity-80" aria-label="Tracked" />}
+      {clip.stabilize && <Move className="size-3 shrink-0 opacity-80" aria-label="Stabilized" />}
       {clip.freeze ? (
         <span className="ml-0.5 flex shrink-0 items-center gap-0.5 rounded bg-black/40 px-1 py-px text-[9.5px] font-semibold">
           <Snowflake className="size-2.5" />
@@ -171,6 +188,61 @@ function ClipLabel({ clip, asset }: { clip: Clip; asset?: Asset }) {
         </span>
       )}
       {asset?.generated && <span className="shrink-0 rounded bg-ai px-1 py-px text-[9px] font-bold text-accent-fg [text-shadow:none]">AI</span>}
+    </div>
+  )
+}
+
+/**
+ * A nested timeline: a miniature of what's inside — its clips as bars, one row
+ * per track, for the stretch this clip shows.
+ */
+function NestBody({ clip, seq, inPoint, duration, width, height }: { clip: Clip; seq?: Sequence; inPoint: number; duration: number; width: number; height: number }) {
+  const { fps } = useLayout()
+  const bars = useMemo(() => {
+    if (!seq) return []
+    // Visible stretch of the nested timeline, in its own frames.
+    const k = seq.settings.fps / fps
+    const a = inPoint * k
+    const b = (inPoint + duration) * k
+    const rows = seq.tracks.filter((t) => (seq.multicam ? t.kind === 'video' : true))
+    return rows.flatMap((t, row) =>
+      Object.values(seq.clips)
+        .filter((c) => c.trackId === t.id && c.start < b && c.start + c.duration > a)
+        .map((c) => ({
+          id: c.id,
+          row,
+          rows: rows.length,
+          left: ((Math.max(a, c.start) - a) / (b - a)) * 100,
+          width: ((Math.min(b, c.start + c.duration) - Math.max(a, c.start)) / (b - a)) * 100,
+          color: CLIP_COLOR[c.kind],
+          active: seq.multicam ? t.id === clip.angle || (!clip.angle && row === 0) : true,
+        })),
+    )
+  }, [seq, inPoint, duration, fps, clip.angle])
+  const top = 20
+  const usable = Math.max(8, height - top - 4)
+  return (
+    <div className="absolute inset-0 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--clip)_30%,#12110f),color-mix(in_oklab,var(--clip)_14%,#0f0f0d))]">
+      <div className="absolute inset-x-0 top-0 h-[2px]" style={{ background: 'var(--clip)' }} />
+      {!seq && <div className="absolute inset-x-0 top-5 px-1.5 text-[10px] text-danger">Timeline missing</div>}
+      {width > 30 &&
+        bars.map((bar) => {
+          const h = Math.max(2, Math.min(7, usable / bar.rows - 2))
+          return (
+            <span
+              key={bar.id}
+              className="absolute rounded-[2px]"
+              style={{
+                left: `${bar.left}%`,
+                width: `max(2px, ${bar.width}%)`,
+                top: top + bar.row * (h + 2),
+                height: h,
+                background: bar.color,
+                opacity: bar.active ? 0.85 : 0.28,
+              }}
+            />
+          )
+        })}
     </div>
   )
 }

@@ -4,12 +4,12 @@
  * than whatever the live preview happens to show. Video is decoded with
  * WebCodecs; the preview is never disturbed.
  */
-import type { Asset, Clip, Project } from '@/editor/types'
-import { clipSourceTime, clipsDrawnAt, renderFrame } from './compositor'
+import type { Asset, Project } from '@/editor/types'
+import { clipSourceTime, mediaDrawnAt, renderFrame } from './compositor'
 import { framesAt, VideoReader } from './decode'
 import { ensureImage, ensureSequenceFrame, sequenceFrame, withVideoFrames } from './media'
 
-/** Decodes, for one frame at a time, exactly the video frames the compositor will draw. */
+/** Decodes, for one frame at a time, exactly the video frames the compositor will draw — inside nested timelines too. */
 export class FrameFeeder {
   private readers = new Map<string, VideoReader>()
   private ready = new Map<string, CanvasImageSource | null>()
@@ -21,13 +21,12 @@ export class FrameFeeder {
 
   async prepare(frame: number) {
     this.ready.clear()
-    const { fps } = this.project.settings
-    for (const { clip, local } of clipsDrawnAt(this.project, frame)) {
-      const asset = clip.assetId ? this.project.assets[clip.assetId] : undefined
+    for (const { clip, local, view, key } of mediaDrawnAt(this.project, frame)) {
+      const asset = clip.assetId ? view.assets[clip.assetId] : undefined
       if (!asset || asset.source.missing) continue
-      const t = clipSourceTime(clip, local, fps)
+      const t = clipSourceTime(clip, local, view.settings.fps)
       if (asset.source.type === 'file' && asset.kind === 'video') {
-        this.ready.set(clip.id, await this.reader(clip, asset.source.url).frameAt(Math.max(0, t)))
+        this.ready.set(key, await this.reader(key, asset.source.url).frameAt(Math.max(0, t)))
       } else if (asset.source.type === 'file' && asset.kind === 'image') {
         await ensureImage(asset.source.url)
       } else if (asset.source.type === 'sequence') {
@@ -36,11 +35,11 @@ export class FrameFeeder {
     }
   }
 
-  private reader(clip: Clip, url: string) {
-    let r = this.readers.get(clip.id)
+  private reader(key: string, url: string) {
+    let r = this.readers.get(key)
     if (!r) {
       r = new VideoReader(url, this.width, this.height)
-      this.readers.set(clip.id, r)
+      this.readers.set(key, r)
     }
     return r
   }

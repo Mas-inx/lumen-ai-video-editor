@@ -123,7 +123,12 @@ const appApi: AppAPI = {
   },
   export: {
     begin: (opts) => invoke(APP_IPC.exportBegin, opts),
+    pick: (opts) => invoke(APP_IPC.exportPick, opts),
+    open: (token) => invoke(APP_IPC.exportOpen, token),
+    forget: (token) => invoke(APP_IPC.exportForget, token),
     write: (id, position, data) => invoke(APP_IPC.exportWrite, id, position, data),
+    writeFrame: (id, index, data) => invoke(APP_IPC.exportFrame, id, index, data),
+    sidecar: (exportPath, extension, text) => invoke(APP_IPC.exportSidecar, exportPath, extension, text),
     finish: (id) => invoke(APP_IPC.exportFinish, id),
     abort: (id) => invoke(APP_IPC.exportAbort, id),
     progress: (value) => ipcRenderer.send(APP_IPC.exportProgress, value),

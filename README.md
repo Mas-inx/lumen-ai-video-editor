@@ -19,7 +19,7 @@ Lumen is a desktop video editor where the AI isn't a chatbot bolted onto a timel
 [![CI](https://img.shields.io/github/actions/workflow/status/Mas-inx/lumen-ai-video-editor/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/Mas-inx/lumen-ai-video-editor/actions/workflows/ci.yml)
 ![License: MIT](https://img.shields.io/badge/license-MIT-d6ee00?style=flat-square)
 ![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-2b2c26?style=flat-square)
-![91 AI tools](https://img.shields.io/badge/AI%20tools-91-d6ee00?style=flat-square)
+![108 AI tools](https://img.shields.io/badge/AI%20tools-108-d6ee00?style=flat-square)
 ![MCP server and client](https://img.shields.io/badge/MCP-server%20%2B%20client-2b2c26?style=flat-square)
 ![Electron 44](https://img.shields.io/badge/Electron-44-2b2c26?style=flat-square&logo=electron)
 ![React 19](https://img.shields.io/badge/React-19-2b2c26?style=flat-square&logo=react)
@@ -32,7 +32,7 @@ Lumen is a desktop video editor where the AI isn't a chatbot bolted onto a timel
 
 ## Why Lumen
 
-- **An AI that edits, not just chats.** Every edit in Lumen is a typed command, and the AI gets all of them — plus tools to look and listen. More than 80 tools in all, each change a normal undo step. [See them all →](docs/AI-TOOLS.md)
+- **An AI that edits, not just chats.** Every edit in Lumen is a typed command, and the AI gets all of them — plus tools to look and listen. More than 100 tools in all, each change a normal undo step. [See them all →](docs/AI-TOOLS.md)
 - **It sees what you'll export.** When the AI checks a frame, it's rendered exactly as the export will be: every track, title, effect and transition. It can watch the whole edit as a contact sheet, look inside footage, and hear loudness, silences and speech.
 - **Bring your own brain.** Use the Claude Code or Codex you already pay for, an API key from any major provider, or a local model. Lumen is also an **MCP server**, so any agent can drive it.
 - **Local-first.** Media is edited in place and never uploaded. Speech-to-text runs on your GPU with Whisper. No account, no watermark, no telemetry.
@@ -68,6 +68,9 @@ It's an open-source alternative to editors like CapCut, Filmora and Descript —
 - Import **MP4, MOV, WebM, MKV, MP3, WAV, FLAC, PNG, JPEG, WebP, GIF** and more — by dialog, folder or drag and drop. Files stay where they are; missing ones can be relinked.
 - `.lumen` **project files** that survive moving folders between drives, crash recovery, and undo for everything. `Ctrl+K` reaches every command.
 - **Built for long, heavy projects:** **proxies** for 4K footage (made automatically in the background; exports always use the originals), hour-long recordings that **stream** instead of filling memory, **version history** (every save, plus a snapshot every ten minutes while you edit, restorable any time) and **Collect project** to gather a project and all its media into one folder.
+- **Multiple timelines and nesting:** as many timelines per project as you like — another cut, or a vertical copy reframed in one click — and **nest** any clips into a timeline of their own to grade, speed up or cut them as one piece (double-click to step inside; picture and sound both play through).
+- **Multicam:** pick the camera recordings and Lumen **lines them up by their sound** (to about a millisecond), then press `1`–`9` while it plays to cut between angles, with every camera live in a strip under the preview.
+- **Reads the footage:** **scene detection** splits or marks a clip at every shot change; **stabilization** smooths away camera shake with just enough zoom; **motion tracking** pins a title, sticker or mask to something moving — including a blur that follows a face.
 
 ### The Copilot sees, hears and edits
 
@@ -104,7 +107,7 @@ One-click suggestions on the timeline, and tools for every AI:
 
 - **Transcribe** on the device with Whisper (GPU via WebGPU, or CPU), or with OpenAI or ElevenLabs.
 - **Remove pauses** — the whole timeline closes up around each cut, so captions, B-roll and markers stay in sync while music plays on; with several speakers it only cuts where everyone is quiet.
-- **Captions** from the transcript, on their own track.
+- **Captions** from the transcript, on their own track — or import **SRT / WebVTT** files (drop them on the timeline), and export the captions as SRT or WebVTT, on their own or next to the video.
 - **Duck music** under speech with volume keyframes.
 - **Reframe** between landscape, vertical, square and portrait.
 - **Hear the mix** — loudness in LUFS against the −14 streaming target, peaks, clipping and silences.
@@ -133,17 +136,18 @@ One-click suggestions on the timeline, and tools for every AI:
 | --- | --- |
 | MP4 | H.264, HEVC, AV1 |
 | MOV | H.264, HEVC |
-| WebM | VP9, AV1 |
+| WebM | VP9 (with **transparency**), AV1 |
+| PNG | numbered frames, with **transparency** |
 | GIF | animated, palette-optimised |
 | WAV · M4A | audio only |
 
-From 480p to 4K in your project's shape, 24–60 fps, with **hardware encoding** where your GPU supports it, a live file-size estimate and progress in the taskbar.
+From 480p to 4K in your timeline's shape, 24–60 fps, with **hardware encoding** where your GPU supports it, a live file-size estimate and progress in the taskbar. Export any timeline, burn captions in or save them as an **SRT / WebVTT** file beside the video, and line several exports up in the **render queue** to render one after another while you keep editing.
 
 ### Connect anything
 
 <img src="docs/screenshots/integrations.jpg" alt="Lumen's integrations hub: AI models, Claude Code and Codex, Blender, HyperFrames, MCP servers and Lumen's own MCP server" />
 
-- **Lumen is an MCP server.** Turn it on and any agent — Claude Code, Claude Desktop, your own — gets the same 80-plus tools, pictures included:
+- **Lumen is an MCP server.** Turn it on and any agent — Claude Code, Claude Desktop, your own — gets the same 100-plus tools, pictures included:
 
   ```bash
   claude mcp add --transport http lumen http://127.0.0.1:47910/mcp --header "Authorization: Bearer <token from Lumen>"
@@ -204,10 +208,13 @@ npm run dev      # the app, with hot reload
 | `Ctrl+C` · `Ctrl+X` · `Ctrl+V` · `Ctrl+Alt+V` | Copy · cut · paste · paste attributes |
 | `Shift+F` · `Ctrl+L` · `Ctrl+G` | Freeze frame · detach audio · group |
 | `Ctrl+Shift+D` | Crossfade with the clip before |
+| `Ctrl+Alt+N` · `Ctrl+Alt+Enter` | Nest the selection · open a nested clip's timeline |
+| `1` – `9` | Multicam: cut to that camera at the playhead |
 | Drag + `Ctrl` · `Shift` | Insert · overwrite (on a trim handle, `Ctrl` ripples) |
 | `=` `-` · `Shift+Z` | Zoom · zoom to fit |
 | `Ctrl+Z` · `Ctrl+Shift+Z` | Undo · redo |
 | `Ctrl+I` · `Ctrl+E` · `Ctrl+S` · `Ctrl+O` | Import · export · save · open |
+| `Ctrl+Shift+E` | Render queue |
 | `Ctrl+K` · `Ctrl+J` · `?` | Command palette · Copilot · all shortcuts |
 
 </details>
@@ -218,7 +225,6 @@ Ideas the project is heading towards — contributions welcome:
 
 - [ ] macOS and Linux builds
 - [ ] Code-signed installer
-- [ ] Render queues
 - [ ] More languages for the interface
 
 ## Contributing

@@ -4,7 +4,7 @@
  */
 import { toast } from 'sonner'
 import { LOOKS, TITLE_PRESETS } from './presets'
-import { adjacentBefore, clipEnd, clipsOnTrack, trackAccepts } from './ops'
+import { adjacentBefore, clipEnd, clipsOnTrack, sourceFrames, trackAccepts } from './ops'
 import { dispatch, getProject, useEditor } from './store'
 import type { ActionSource } from './store'
 import type { Asset, ClipKind, EffectKind, Project, Track, TransitionKind } from './types'
@@ -63,6 +63,28 @@ function ensureTrack(kind: ClipKind, frame: number, duration: number, preferred?
   if (track) return track.id
   const res = dispatch('track.add', { kind: kind === 'audio' ? 'audio' : 'video', ...(role ? { name: ROLE_NAME[role] } : {}) }, { source })
   return res.ok ? (res.result as string) : null
+}
+
+/** Puts a clip playing another timeline (nesting it) at `frame`: picture and sound, or just sound on an audio track. */
+export function placeSequence(sequenceId: string, frame: number, opts: { trackId?: string; source?: ActionSource } = {}) {
+  const project = getProject()
+  const seq = project.sequences?.[sequenceId]
+  if (!seq) {
+    toast(sequenceId in (project.sequences ?? {}) ? 'Timeline missing' : 'A timeline can’t contain itself')
+    return null
+  }
+  const duration = sourceFrames(project, { sequenceId })
+  const wanted = opts.trackId ? project.tracks.find((t) => t.id === opts.trackId) : undefined
+  const kind: ClipKind = wanted?.kind === 'audio' ? 'audio' : 'video'
+  let clipId: string | null = null
+  useEditor.getState().transaction(`Add ${seq.name}`, opts.source ?? 'user', () => {
+    const trackId = ensureTrack(kind, frame, duration, opts.trackId, opts.source)
+    if (!trackId) return
+    const res = dispatch('clip.add', { trackId, kind, start: frame, duration, sequenceId })
+    if (res.ok) clipId = res.result as string
+    else toast(res.error)
+  })
+  return clipId
 }
 
 export function placeAsset(assetId: string, frame: number, opts: { trackId?: string; source?: ActionSource } = {}) {

@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { Group, Panel, useDefaultLayout } from 'react-resizable-panels'
 import { Toaster } from 'sonner'
+import { startTimelineNav } from '@/editor/timeline-nav'
 import { startMediaEngine } from '@/engine/wiring'
 import { HomeScreen } from '@/features/home/HomeScreen'
 import { startSession, useSession } from '@/project/session'
@@ -8,6 +9,8 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { AssetsPanel } from '@/features/assets/AssetsPanel'
 import { CommandPalette } from '@/features/command/CommandPalette'
 import { ExportDialog } from '@/features/export/ExportDialog'
+import { RenderQueueDialog } from '@/features/export/RenderQueue'
+import { MulticamDialog } from '@/features/multicam/MulticamDialog'
 import { AboutDialog } from '@/features/shell/AboutDialog'
 import { AgentApprovals } from '@/features/integrations/AgentApprovals'
 import { IntegrationsHub } from '@/features/integrations/IntegrationsHub'
@@ -19,6 +22,7 @@ import { SidePanel } from '@/features/shell/SidePanel'
 import { TitleBar } from '@/features/shell/TitleBar'
 import { useGlobalShortcuts } from '@/features/shell/useGlobalShortcuts'
 import { PasteAttributesDialog } from '@/features/timeline/PasteAttributesDialog'
+import { RenameTimelineDialog } from '@/features/timeline/TimelineSwitcher'
 import { Timeline } from '@/features/timeline/Timeline'
 import { startAi } from '@/integrations/ai'
 import { startBridgeClient } from '@/integrations/bridge'
@@ -30,6 +34,7 @@ export function App() {
   useEffect(() => {
     void startSession()
     startMediaEngine()
+    startTimelineNav()
     // Blender, HyperFrames and MCP live in the desktop app's main process.
     startIntegrations()
     startBridgeClient()
@@ -54,6 +59,9 @@ export function App() {
         <AboutDialog />
         <PasteAttributesDialog />
         <VersionHistoryDialog />
+        <RenameTimelineDialog />
+        <RenderQueueDialog />
+        <MulticamDialog />
         <IntegrationsHub />
         <AgentApprovals />
         <Toaster

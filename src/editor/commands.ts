@@ -5,6 +5,7 @@
  * undo/redo records them, and the MCP server (phase 2) exposes the exact same
  * definitions as AI tools, so an agent can do anything a user can.
  */
+import { current, isDraft } from 'immer'
 import { z } from 'zod'
 import { uid } from '@/lib/id'
 import { createClip, createTrack, DEFAULT_BUS, DEFAULT_COMPRESSOR, DEFAULT_EQ, DEFAULT_LIMITER, IDENTITY_CURVES, NEUTRAL_WHEELS, TRACK_HEIGHTS } from './defaults'
@@ -39,8 +40,23 @@ import {
   trimClip,
   ungroupClips,
 } from './ops'
+import {
+  angleTracks,
+  blankSequence,
+  copySequence,
+  freshName,
+  getSequence,
+  nestClips,
+  openSequence,
+  openSequenceId,
+  swapIn,
+  TimelineError,
+  unnestClip,
+  usesOf,
+  wouldLoop,
+} from './sequences'
 import { averageSpeed, consumed, localForConsumed, MAX_SPEED, MIN_SPEED } from './timing'
-import type { AnimatableProp, BusMix, Clip, Project } from './types'
+import type { AnimatableProp, BusMix, Clip, Project, Sequence, Track } from './types'
 
 export class CommandError extends Error {}
 
@@ -112,6 +128,18 @@ const gradePatch = grade
   .extend({ curves: curves.partial().nullable(), wheels: wheels.partial().nullable(), hsl: hsl.nullable(), lut: lutRef.partial().nullable() })
   .partial()
 
+/** A tracked point's path (what a clip or mask follows). */
+const trackPath = z.object({ start: z.number().int(), ref: z.number().int().min(0), points: z.array(z.number()).max(400_000) })
+
+const stabilization = z.object({
+  start: z.number().min(0),
+  rate: z.number().positive(),
+  path: z.array(z.number()).max(600_000),
+  smooth: z.number().min(0.1).max(8),
+  zoom: z.number().min(1).max(3),
+  rotation: z.boolean(),
+})
+
 const mask = z.object({
   id,
   shape: z.enum(['rectangle', 'ellipse']),
@@ -124,7 +152,11 @@ const mask = z.object({
   roundness: unit,
   invert: z.boolean(),
   opacity: unit,
+  follow: trackPath.optional(),
 })
+
+/** A change to a mask; `follow: null` stops it following a tracked point. */
+const maskPatch = mask.omit({ id: true }).extend({ follow: trackPath.nullable() }).partial()
 
 const audioMix = z.object({
   volume: z.number().min(-60).max(12),
@@ -214,6 +246,10 @@ export const clipPatch = z
     animation: z.object({ in: animSpec.partial(), out: animSpec.partial() }).partial(),
     crop: crop.partial().nullable(),
     masks: z.array(mask).nullable(),
+    /** Multicam clips: the angle to show (a video track id of the multicam timeline). */
+    angle: id,
+    follow: trackPath.nullable(),
+    stabilize: stabilization.partial().nullable(),
   })
   .partial()
 
@@ -247,6 +283,10 @@ export const clipSnapshot = z.object({
   masks: z.array(mask).optional(),
   groupId: z.string().optional(),
   freeze: z.boolean().optional(),
+  sequenceId: id.optional(),
+  angle: id.optional(),
+  follow: trackPath.optional(),
+  stabilize: stabilization.optional(),
 })
 
 export type ClipSnapshot = z.infer<typeof clipSnapshot>
@@ -329,9 +369,43 @@ function assertEditable(p: Project, clip: Clip) {
 
 const NO_CROP = { left: 0, right: 0, top: 0, bottom: 0, radius: 0 }
 
+/** Timeline operations report problems as TimelineErrors; commands turn them into CommandErrors. */
+function timeline<T>(fn: () => T): T {
+  try {
+    return fn()
+  } catch (err) {
+    if (err instanceof TimelineError) throw new CommandError(err.message)
+    throw err
+  }
+}
+
+const settingsInput = z.object({ width: z.number().int().min(16).max(8192), height: z.number().int().min(16).max(8192), fps: z.number().int().min(1).max(240), background: z.string() })
+
+/** A stored timeline, or the open one — as plain data (never a draft). */
+function plainSequence(p: Project, id: string): Sequence {
+  if (id === openSequenceId(p)) return openSequence(isDraft(p) ? current(p) : p)
+  const seq = p.sequences?.[id]
+  if (!seq) throw new CommandError(`Timeline ${id} not found`)
+  return isDraft(seq) ? current(seq) : seq
+}
+
 function applyPatch(p: Project, clip: Clip, patch: ClipPatch) {
-  const { transform, color, audio, text, animation, speed, crop, masks, ...flat } = patch
+  const { transform, color, audio, text, animation, speed, crop, masks, angle, follow, stabilize, ...flat } = patch
   Object.assign(clip, flat)
+  if (angle !== undefined) {
+    const seq = clip.sequenceId ? p.sequences?.[clip.sequenceId] : undefined
+    if (!seq?.multicam) throw new CommandError(`“${clip.name}” isn’t a multicam clip`)
+    if (!angleTracks(seq).some((t) => t.id === angle)) throw new CommandError(`Angle ${angle} isn’t a camera of “${seq.name}”`)
+    clip.angle = angle
+  }
+  if (follow === null) delete clip.follow
+  else if (follow) clip.follow = follow
+  if (stabilize === null) delete clip.stabilize
+  else if (stabilize) {
+    const next = { ...clip.stabilize, ...stabilize }
+    if (!next.path?.length || next.rate === undefined || next.start === undefined) throw new CommandError('Stabilize the clip first (it needs the measured camera path)')
+    clip.stabilize = { smooth: 1, zoom: 1, rotation: true, ...next } as Clip['stabilize']
+  }
   if (transform) Object.assign(clip.transform, transform)
   if (color) {
     const { curves: cv, wheels: wh, hsl: hs, lut, ...basic } = color
@@ -465,19 +539,30 @@ export const commands = {
       start: frame,
       duration: length,
       assetId: id.optional(),
+      /** Play another timeline (nesting) instead of media — video clips show its picture and sound, audio clips its sound. */
+      sequenceId: id.optional(),
       inPoint: frame.optional(),
       name: z.string().optional(),
       patch: clipPatch.optional(),
       mode: editMode.default('free'),
     }),
-    title: (i) => (i.kind === 'text' ? 'Add title' : i.kind === 'adjustment' ? 'Add adjustment layer' : i.mode === 'insert' ? 'Insert clip' : i.mode === 'overwrite' ? 'Overwrite clip' : 'Add clip'),
+    title: (i) =>
+      i.sequenceId ? 'Add nested timeline' : i.kind === 'text' ? 'Add title' : i.kind === 'adjustment' ? 'Add adjustment layer' : i.mode === 'insert' ? 'Insert clip' : i.mode === 'overwrite' ? 'Overwrite clip' : 'Add clip',
     run(p, i) {
       const track = getTrack(p, i.trackId)
       if (!trackAccepts(track, i.kind)) throw new CommandError(`A ${i.kind} clip can't go on an ${track.kind} track`)
       const source = i.assetId ? p.assets[i.assetId] : undefined
       if (i.assetId && !source) throw new CommandError(`Asset ${i.assetId} not found`)
+      let nestedName: string | undefined
+      if (i.sequenceId) {
+        if (i.kind !== 'video' && i.kind !== 'audio') throw new CommandError('A nested timeline plays as a video or audio clip')
+        const seq = p.sequences?.[i.sequenceId]
+        if (!seq) throw new CommandError(i.sequenceId === openSequenceId(p) ? 'A timeline can’t contain itself' : `Timeline ${i.sequenceId} not found`)
+        if (wouldLoop(p, openSequenceId(p), i.sequenceId)) throw new CommandError(`“${seq.name}” already contains this timeline — nesting it here would make a loop`)
+        nestedName = seq.name
+      }
       const inPoint = i.inPoint ?? 0
-      const available = source?.duration !== undefined ? Math.floor(source.duration * p.settings.fps) - inPoint : Infinity
+      const available = i.sequenceId ? sourceFrames(p, { sequenceId: i.sequenceId }) - inPoint : source?.duration !== undefined ? Math.floor(source.duration * p.settings.fps) - inPoint : Infinity
       const duration = Math.max(1, Math.min(i.duration, available))
       let start: number
       if (i.mode === 'free' || isMagneticTrack(p, track.id)) start = findFreeStart(p, track.id, i.start, duration)
@@ -494,8 +579,10 @@ export const commands = {
         duration,
         assetId: i.assetId,
         inPoint,
-        name: i.name ?? source?.name,
+        name: i.name ?? source?.name ?? nestedName,
+        ...(i.sequenceId ? { sequenceId: i.sequenceId } : {}),
       })
+      if (i.sequenceId && p.sequences?.[i.sequenceId]?.multicam) clip.angle = angleTracks(p.sequences[i.sequenceId])[0]?.id
       if (i.patch) applyPatch(p, clip, i.patch)
       p.clips[clip.id] = clip
       return clip.id
@@ -719,6 +806,10 @@ export const commands = {
         clip.start = m.start + delta - (isMagneticTrack(p, m.trackId) ? 0.5 : 0)
         clip.effects = clip.effects.map((e) => ({ ...e, id: uid('fx') }))
         if (clip.assetId && !p.assets[clip.assetId]) throw new CommandError(`The media of “${clip.name}” isn't in this project`)
+        if (clip.sequenceId) {
+          if (!p.sequences?.[clip.sequenceId]) throw new CommandError(clip.sequenceId === openSequenceId(p) ? `“${clip.name}” plays this timeline — it can't go inside itself` : `The timeline “${clip.name}” plays isn't in this project`)
+          if (wouldLoop(p, openSequenceId(p), clip.sequenceId)) throw new CommandError(`“${clip.name}” already contains this timeline — pasting it here would make a loop`)
+        }
         if (clip.groupId) {
           if (!groups.has(clip.groupId)) groups.set(clip.groupId, uid('grp'))
           clip.groupId = groups.get(clip.groupId)
@@ -923,14 +1014,17 @@ export const commands = {
 
   'mask.update': command({
     description: 'Change a mask: move, resize, rotate, feather, round, invert or fade it (mask ids are in get_clip → masks).',
-    input: z.object({ clipId: id, maskId: id, patch: mask.omit({ id: true }).partial() }),
+    input: z.object({ clipId: id, maskId: id, patch: maskPatch }),
     title: () => 'Edit mask',
     run(p, i) {
       const clip = getClip(p, i.clipId)
       assertEditable(p, clip)
       const m = clip.masks?.find((x) => x.id === i.maskId)
       if (!m) throw new CommandError(`“${clip.name}” has no mask ${i.maskId}`)
-      Object.assign(m, i.patch)
+      const { follow, ...rest } = i.patch
+      Object.assign(m, rest)
+      if (follow === null) delete m.follow
+      else if (follow) m.follow = follow
     },
   }),
 
@@ -1257,20 +1351,182 @@ export const commands = {
     run(p, i) {
       const ids = new Set(i.ids)
       for (const c of Object.values(p.clips)) if (c.assetId && ids.has(c.assetId)) delete p.clips[c.id]
+      // …and from the timelines that aren't open.
+      for (const seq of Object.values(p.sequences ?? {})) for (const c of Object.values(seq.clips)) if (c.assetId && ids.has(c.assetId)) delete seq.clips[c.id]
       for (const assetId of ids) delete p.assets[assetId]
+    },
+  }),
+
+  // Timelines
+  'sequence.create': command({
+    description:
+      'Make a new, empty timeline (sequence) — another cut, or another format of the same media such as a 9:16 version. Settings default to the open timeline’s. It opens unless open is false (sequence_open switches). Returns its id.',
+    input: z.object({ id: id.optional(), name: z.string().min(1).optional(), settings: settingsInput.partial().optional(), open: z.boolean().default(true) }),
+    title: (i) => `New timeline${i.name ? ` “${i.name}”` : ''}`,
+    run(p, i) {
+      if (i.id && getSequence(p, i.id)) throw new CommandError(`A timeline with id ${i.id} already exists`)
+      const seq = blankSequence(i.name ?? freshName(p, 'Timeline'), { ...p.settings, ...i.settings }, i.id)
+      p.sequences ??= {}
+      p.sequences[seq.id] = seq
+      if (i.open) swapIn(p, seq.id)
+      return seq.id
+    },
+  }),
+
+  'sequence.open': command({
+    description: 'Switch the editor to another timeline (sequence ids are in get_project → timelines). Every other command then works on that timeline. Undo switches back.',
+    input: z.object({ id }),
+    title: (i, p) => `Open ${getSequence(p, i.id)?.name ?? 'timeline'}`,
+    run(p, i) {
+      if (i.id === openSequenceId(p)) return
+      if (!p.sequences?.[i.id]) throw new CommandError(`Timeline ${i.id} not found`)
+      swapIn(p, i.id)
+    },
+  }),
+
+  'sequence.rename': command({
+    description: 'Rename a timeline (sequence). Clips that play it keep their own names.',
+    input: z.object({ id, name: z.string().min(1) }),
+    title: () => 'Rename timeline',
+    run(p, i) {
+      if (i.id === openSequenceId(p)) p.sequence = { ...p.sequence, id: openSequenceId(p), name: i.name }
+      else {
+        const seq = p.sequences?.[i.id]
+        if (!seq) throw new CommandError(`Timeline ${i.id} not found`)
+        seq.name = i.name
+      }
+    },
+  }),
+
+  'sequence.duplicate': command({
+    description: 'Copy a timeline (sequence) with everything on it — to try another cut without touching the first. Returns the copy’s id; it opens if open is true.',
+    input: z.object({ id, name: z.string().min(1).optional(), open: z.boolean().default(false) }),
+    title: () => 'Duplicate timeline',
+    run(p, i) {
+      const src = plainSequence(p, i.id)
+      const copy = copySequence(src, i.name ?? freshName(p, `${src.name} copy`))
+      p.sequences ??= {}
+      p.sequences[copy.id] = copy
+      if (i.open) swapIn(p, copy.id)
+      return copy.id
+    },
+  }),
+
+  'sequence.delete': command({
+    description: 'Delete a timeline (sequence). Not the open one, and not one another timeline still plays (nested) — remove those clips first.',
+    input: z.object({ id }),
+    title: (i, p) => `Delete ${getSequence(p, i.id)?.name ?? 'timeline'}`,
+    run(p, i) {
+      if (i.id === openSequenceId(p)) throw new CommandError('That timeline is open — open another one first')
+      const seq = p.sequences?.[i.id]
+      if (!seq) throw new CommandError(`Timeline ${i.id} not found`)
+      const uses = usesOf(p, i.id)
+      if (uses.length) throw new CommandError(`“${seq.name}” is nested in ${uses.map((u) => `“${u.name}”`).join(', ')} — remove it there first`)
+      delete p.sequences![i.id]
+    },
+  }),
+
+  'clip.nest': command({
+    description:
+      'Nest clips: move them (and anything linked to them) into a new timeline, and put one clip playing that timeline where they were — then grade, transform, speed up or cut them as one piece. sequence_open the new timeline to edit inside it. Returns { clipId, sequenceId }.',
+    input: z.object({ ids: z.array(id).min(1), name: z.string().min(1).optional() }),
+    title: (i) => `Nest ${plural(i.ids.length, 'clip')}`,
+    run(p, i) {
+      return timeline(() => nestClips(p, i.ids, i.name))
+    },
+  }),
+
+  'clip.unnest': command({
+    description:
+      'Break a nested clip apart: the part of its timeline it shows comes back onto this timeline in its place, on free tracks. The nested clip’s own transform, grade and effects are dropped; its timeline stays in the project. Returns the new clip ids.',
+    input: z.object({ id }),
+    title: () => 'Break apart nested clip',
+    run(p, i) {
+      const clip = getClip(p, i.id)
+      assertEditable(p, clip)
+      return timeline(() => unnestClip(p, i.id))
+    },
+  }),
+
+  'multicam.create': command({
+    description:
+      'Make a multicam timeline from recordings of the same moment: one camera angle per video track, lined up by offsets in seconds (the sync_multicam tool measures them from the audio), with the sound of angle `audio` (the other angles’ sound is there, muted). Places a multicam clip on this timeline unless place is false; switch angles with multicam_switch. Returns { sequenceId, clipId }.',
+    input: z.object({
+      name: z.string().min(1).optional(),
+      angles: z.array(z.object({ assetId: id, offset: z.number().min(-86400).max(86400), name: z.string().min(1).optional() })).min(2).max(16),
+      audio: z.number().int().min(0).max(15).default(0),
+      place: z.boolean().default(true),
+      start: frame.optional(),
+      trackId: id.optional(),
+    }),
+    title: () => 'Create multicam clip',
+    run(p, i) {
+      const fps = p.settings.fps
+      const first = Math.min(...i.angles.map((a) => a.offset))
+      const tracks: Track[] = []
+      const clips: Record<string, Clip> = {}
+      const soundTracks: Track[] = []
+      i.angles.forEach((a, n) => {
+        const asset = p.assets[a.assetId]
+        if (!asset) throw new CommandError(`Asset ${a.assetId} not found`)
+        if (asset.kind !== 'video') throw new CommandError(`“${asset.name}” isn’t video — every angle needs pictures`)
+        const name = a.name ?? asset.name
+        const start = Math.round((a.offset - first) * fps)
+        const duration = Math.max(1, Math.floor((asset.duration ?? 1) * fps))
+        const video = createTrack('video', { name: `Cam ${n + 1} · ${name}`, height: TRACK_HEIGHTS.video })
+        tracks.push(video)
+        const pic = createClip({ kind: 'video', trackId: video.id, start, duration, assetId: asset.id, name, audio: { detached: true } })
+        clips[pic.id] = pic
+        if (asset.hasAudio !== false) {
+          const sound = createTrack('audio', { name: `Sound ${n + 1} · ${name}`, height: TRACK_HEIGHTS.audio, muted: n !== i.audio })
+          soundTracks.push(sound)
+          const clip = createClip({ kind: 'audio', trackId: sound.id, start, duration, assetId: asset.id, name })
+          clips[clip.id] = clip
+        }
+      })
+      const seq: Sequence = { id: uid('seq'), name: i.name ?? freshName(p, 'Multicam'), settings: { ...p.settings }, tracks: [...tracks, ...soundTracks], clips, markers: [], multicam: true, createdAt: Date.now() }
+      p.sequences ??= {}
+      p.sequences[seq.id] = seq
+      if (!i.place) return { sequenceId: seq.id, clipId: null }
+      const trackId = i.trackId ?? p.tracks.find((t) => t.role === 'main' && !t.locked)?.id ?? p.tracks.find((t) => t.kind === 'video' && !t.locked)?.id
+      if (!trackId) throw new CommandError('No video track to put the multicam clip on')
+      const track = getTrack(p, trackId)
+      if (track.kind !== 'video') throw new CommandError('A multicam clip goes on a video track')
+      const duration = Math.max(1, Math.max(...Object.values(clips).map(clipEnd)))
+      const clip = createClip({ kind: 'video', trackId, start: findFreeStart(p, trackId, i.start ?? 0, duration), duration, name: seq.name, sequenceId: seq.id })
+      clip.angle = tracks[0].id
+      p.clips[clip.id] = clip
+      return { sequenceId: seq.id, clipId: clip.id }
+    },
+  }),
+
+  'multicam.switch': command({
+    description:
+      'Cut to another camera angle of a multicam clip at a frame: the clip is split there and the part after it shows angle `angle` (1 = the first camera). At the clip’s first frame the whole clip switches. clipId defaults to the multicam clip under the frame. Returns the id of the clip now showing that angle.',
+    input: z.object({ frame, angle: z.number().int().min(1).max(16), clipId: id.optional() }),
+    title: (i) => `Cut to angle ${i.angle}`,
+    run(p, i) {
+      const clip = i.clipId ? getClip(p, i.clipId) : multicamAt(p, i.frame)
+      if (!clip) throw new CommandError('No multicam clip at that frame')
+      const seq = clip.sequenceId ? p.sequences?.[clip.sequenceId] : undefined
+      if (!seq?.multicam) throw new CommandError(`“${clip.name}” isn’t a multicam clip`)
+      assertEditable(p, clip)
+      const angle = angleTracks(seq)[i.angle - 1]
+      if (!angle) throw new CommandError(`“${seq.name}” has ${angleTracks(seq).length} angles`)
+      if (i.frame < clip.start || i.frame >= clipEnd(clip)) throw new CommandError('That frame isn’t inside the clip')
+      const target = i.frame > clip.start ? (splitClips(p, [clip], i.frame)[0] ?? clip) : clip
+      target.angle = angle.id
+      return target.id
     },
   }),
 
   // Project
   'project.update': command({
     description:
-      'Rename the project or change its settings (width, height, fps, background color). Changing fps re-times every clip so nothing drifts.',
+      'Rename the project or change the open timeline’s settings (width, height, fps, background color). Changing fps re-times every clip so nothing drifts.',
     input: z.object({
       name: z.string().min(1).optional(),
-      settings: z
-        .object({ width: z.number().int().min(16).max(8192), height: z.number().int().min(16).max(8192), fps: z.number().int().min(1).max(240), background: z.string() })
-        .partial()
-        .optional(),
+      settings: settingsInput.partial().optional(),
     }),
     title: (i) => (i.name ? 'Rename project' : 'Project settings'),
     run(p, i) {
@@ -1301,6 +1557,15 @@ export const commands = {
 }
 
 export type CommandName = keyof typeof commands
+
+/** A clip at `frame` showing a multicam timeline (the topmost one). */
+function multicamAt(p: Project, frame: number) {
+  const order = new Map(p.tracks.map((t, i) => [t.id, i]))
+  return clipsAt(p, frame)
+    .filter((c) => c.sequenceId && p.sequences?.[c.sequenceId]?.multicam)
+    .sort((a, b) => (order.get(a.trackId) ?? 0) - (order.get(b.trackId) ?? 0))[0]
+}
+
 export type CommandInput<N extends CommandName> = z.input<(typeof commands)[N]['input']>
 
 export type AnyCommand = Command<z.ZodType>

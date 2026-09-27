@@ -1,8 +1,9 @@
 /**
  * Media the compositor draws: still images, image sequences (Blender /
  * HyperFrames renders) and video. Preview plays video through <video>
- * elements (hardware decoding, smooth playback); export swaps in frame-exact
- * WebCodecs reads through `setExportFrames`.
+ * elements (hardware decoding, smooth playback); exports and stills draw each
+ * frame with frame-exact WebCodecs reads through `withVideoFrames`, so the
+ * preview keeps playing live while an export runs in the background.
  */
 
 type Entry = HTMLImageElement | 'loading' | 'error'
@@ -135,15 +136,11 @@ interface VideoEntry {
 const videos = new Map<string, VideoEntry>()
 const usedThisFrame = new Set<string>()
 
-/** During export, video frames come from here (frame-exact WebCodecs reads) instead of <video>. */
-type ExportFrames = (clipId: string) => CanvasImageSource | null
+/** While an export (or still) frame is drawn, video frames come from here (frame-exact WebCodecs reads) instead of <video>. */
+type ExportFrames = (key: string) => CanvasImageSource | null
 let exportFrames: ExportFrames | null = null
 
-export function setExportFrames(fn: ExportFrames | null) {
-  exportFrames = fn
-  if (fn) for (const v of videos.values()) v.el.pause()
-}
-
+/** A frame for an export or a still is being drawn right now (not the live preview). */
 export const isExporting = () => exportFrames !== null
 
 export function beginVideoFrame() {
@@ -157,8 +154,9 @@ export function endVideoFrame() {
 }
 
 /**
- * Draws with frame-exact video frames from `source` (stills for the AI, snapshots)
- * without disturbing the live preview. `draw` must be synchronous, like renderFrame.
+ * Draws with frame-exact video frames from `source` (export frames, stills for
+ * the AI, snapshots) without disturbing the live preview. `draw` must be
+ * synchronous, like renderFrame.
  */
 export function withVideoFrames<T>(source: ExportFrames, draw: () => T): T {
   const previous = exportFrames

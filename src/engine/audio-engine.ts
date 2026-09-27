@@ -6,10 +6,13 @@
  * Per clip: decoded source (optionally reversed / denoised) → optional voice
  * enhancement chain → gain (volume, keyframes, fades, crossfades) → its
  * track's channel (EQ, compressor, limiter, fader, pan) → the master bus.
+ * A nested timeline plays through a mix of its own, into a gain stage for the
+ * clip that plays it (its volume, fades and crossfades), into that clip's track.
  */
 import { PEAKS_PER_SECOND } from '@/editor/defaults'
 import { propAt } from '@/editor/keyframes'
 import { adjacentAfter, adjacentBefore, clipEnd } from '@/editor/ops'
+import { sequenceView } from '@/editor/sequences'
 import { isRamped, sourceFrameAt, speedAt } from '@/editor/timing'
 import type { Asset, Clip, Project } from '@/editor/types'
 import { decodeAudio, openAudioStream, type AudioStream } from './decode'
@@ -244,14 +247,40 @@ export async function speechAudio(asset: Asset): Promise<AudioBuffer | null> {
 
 // ─── Scheduling ──────────────────────────────────────────────────────────
 
+/** Whether a clip's track lets it be heard: not muted, and soloed while any track is. */
+function trackHeard(project: Project, clip: Clip) {
+  const track = project.tracks.find((t) => t.id === clip.trackId)
+  if (!track || track.muted) return false
+  return track.solo || !project.tracks.some((t) => t.solo)
+}
+
 /** Whether a clip makes sound at all: freeze frames and video whose sound was detached are silent, and while any track is soloed only soloed tracks play. */
 export function isAudible(project: Project, clip: Clip) {
   if (clip.kind !== 'audio' && clip.kind !== 'video') return false
-  if (clip.freeze || (clip.kind === 'video' && clip.audio.detached)) return false
-  const track = project.tracks.find((t) => t.id === clip.trackId)
-  if (!track || track.muted) return false
-  if (!track.solo && project.tracks.some((t) => t.solo)) return false
+  if (clip.freeze || (clip.kind === 'video' && clip.audio.detached) || clip.sequenceId) return false
+  if (!trackHeard(project, clip)) return false
   return Boolean(clip.assetId && audioSourceUrl(project.assets[clip.assetId]))
+}
+
+/** A nested clip is heard at normal speed, forwards (its timeline's mix isn't re-timed). */
+function nestHeard(project: Project, clip: Clip) {
+  if (!clip.sequenceId || (clip.kind !== 'audio' && clip.kind !== 'video')) return false
+  if (clip.freeze || clip.reverse || clip.speed !== 1 || isRamped(clip) || (clip.kind === 'video' && clip.audio.detached)) return false
+  return trackHeard(project, clip)
+}
+
+const MAX_NESTING = 8
+
+/** Every clip whose sound is heard, nested timelines opened up — each with the timeline it's on. */
+export function audioLeaves(project: Project, level = 0, out: { clip: Clip; view: Project }[] = []) {
+  for (const clip of Object.values(project.clips)) {
+    if (isAudible(project, clip)) out.push({ clip, view: project })
+    else if (level < MAX_NESTING && nestHeard(project, clip)) {
+      const inner = sequenceView(project, clip.sequenceId!)
+      if (inner && inner !== project) audioLeaves(inner, level + 1, out)
+    }
+  }
+  return out
 }
 
 /** Gain of a clip (volume, keyframes and fades) at a local frame. */
@@ -392,6 +421,91 @@ function audibleSpan(project: Project, clip: Clip): [number, number] {
   return [clip.start / fps, (clipEnd(clip) + crossfades(project, clip).tail) / fps]
 }
 
+/** A clip whose sound is heard, where it goes, and how its timeline lines up with the one being played. */
+interface Voice {
+  clip: Clip
+  /** The timeline the clip is on (a nested one for clips inside nests). */
+  view: Project
+  dest: AudioNode
+  /** Seconds added to a time on the clip's timeline give the time on the played one. */
+  offset: number
+  /** The stretch of the played timeline it can be heard in (inside its nested clip). */
+  window: [number, number]
+}
+
+/** Played-timeline seconds a voice is heard for. */
+function voiceSpan(v: Voice): [number, number] {
+  const [a, b] = audibleSpan(v.view, v.clip)
+  return [Math.max(v.window[0], a + v.offset), Math.min(v.window[1], b + v.offset)]
+}
+
+/** Schedules the part of a voice inside played window [from, to), `at` being the context time of `from`. */
+function scheduleVoice(ctx: BaseAudioContext, v: Voice, buffer: AudioBuffer, from: number, to: number, at: number, bufferStart = 0) {
+  const a = Math.max(from, v.window[0])
+  const b = Math.min(to, v.window[1])
+  if (b - a <= 1e-4) return null
+  return scheduleClip(ctx, v.dest, v.view, v.clip, buffer, a - v.offset, b - v.offset, at + (a - from), bufferStart)
+}
+
+/** Nodes made for nested timelines while scheduling — torn down with the rest. */
+interface NestNodes {
+  graphs: MixGraph[]
+  gains: GainNode[]
+}
+
+/**
+ * Every voice of `project`, nested timelines opened up: each nested clip gets a
+ * gain stage (its volume, fades and crossfades, automated from `clock`) fed by
+ * a mix of its timeline's own tracks.
+ */
+function voices(ctx: BaseAudioContext, project: Project, graph: MixGraph, clock: { from: number; at: number }, nodes: NestNodes): Voice[] {
+  const out: Voice[] = []
+  const walk = (view: Project, channel: (clip: Clip) => AudioNode, offset: number, window: [number, number], level: number) => {
+    const fps = view.settings.fps
+    for (const clip of Object.values(view.clips)) {
+      if (isAudible(view, clip)) {
+        out.push({ clip, view, dest: channel(clip), offset, window })
+        continue
+      }
+      if (level >= MAX_NESTING || !nestHeard(view, clip)) continue
+      const inner = sequenceView(view, clip.sequenceId!)
+      if (!inner || inner === view) continue
+      const xf = crossfades(view, clip)
+      const t0 = clip.start / fps + offset
+      const t1 = (clipEnd(clip) + xf.tail) / fps + offset
+      const w: [number, number] = [Math.max(window[0], t0), Math.min(window[1], t1)]
+      if (w[1] - w[0] <= 1e-4) continue
+      const gain = ctx.createGain()
+      gain.connect(channel(clip))
+      nodes.gains.push(gain)
+      const a = Math.max(w[0], clock.from)
+      if (w[1] > a) {
+        const local = (T: number) => (T - offset) * fps - clip.start
+        if (!clip.keyframes.volume?.length && !clip.audio.fadeIn && !clip.audio.fadeOut && !xf.fadeIn && !xf.tail) gain.gain.value = clipGainAt(clip, 0)
+        else {
+          const dur = w[1] - a
+          const steps = Math.max(2, Math.min(24000, Math.ceil(dur * 60)))
+          const curve = new Float32Array(steps)
+          for (let i = 0; i < steps; i++) curve[i] = mixGainAt(clip, local(a + (dur * i) / (steps - 1)), xf)
+          gain.gain.setValueCurveAtTime(curve, clock.at + (a - clock.from), Math.max(0.001, dur))
+        }
+      }
+      const sub = createGraph(ctx, inner, gain, false)
+      nodes.graphs.push(sub)
+      walk(inner, (c) => channelFor(sub, c), offset + (clip.start - clip.inPoint) / fps, w, level + 1)
+    }
+  }
+  walk(project, (c) => channelFor(graph, c), 0, [-Infinity, Infinity], 0)
+  return out
+}
+
+function disposeNest(nodes: NestNodes) {
+  for (const g of nodes.graphs) disposeGraph(g)
+  for (const n of nodes.gains) n.disconnect()
+  nodes.graphs = []
+  nodes.gains = []
+}
+
 // ─── Live playback ───────────────────────────────────────────────────────
 
 let ctx: AudioContext | null = null
@@ -404,13 +518,15 @@ let masterLevel = 0.8
 
 /** Long recordings play in chunks decoded just ahead of the playhead. */
 interface Streamer {
-  clip: Clip
+  voice: Voice
   asset: Asset
-  /** Timeline second scheduled up to. */
+  /** Played-timeline second scheduled up to. */
   until: number
   busy: boolean
 }
 let streamers: Streamer[] = []
+/** Mixes of nested timelines for the current playback. */
+const liveNest: NestNodes = { graphs: [], gains: [] }
 let streamTimer: ReturnType<typeof setInterval> | undefined
 let generation = 0
 const LOOKAHEAD = 12
@@ -419,17 +535,17 @@ const CHUNK = 8
 function topUpStreams() {
   if (!running || !ctx || !graph) return
   const gen = generation
-  const project = running.project
   const nowT = running.from + (ctx.currentTime - running.at)
   for (const s of streamers) {
     if (s.busy) continue
-    const [, end] = audibleSpan(project, s.clip)
+    const [, end] = voiceSpan(s.voice)
     if (s.until >= end - 1e-3 || s.until > nowT + LOOKAHEAD) continue
     s.busy = true
     const a = Math.max(s.until, nowT)
     const b = Math.min(end, a + CHUNK)
-    const [s0, s1] = sourceSpan(project, s.clip, a, b)
-    void streamChunk(s.asset, s.clip, s0, s1)
+    const v = s.voice
+    const [s0, s1] = sourceSpan(v.view, v.clip, a - v.offset, b - v.offset)
+    void streamChunk(s.asset, v.clip, s0, s1)
       .then((chunk) => {
         if (gen !== generation || !running || !ctx || !graph) return
         s.until = b
@@ -437,7 +553,7 @@ function topUpStreams() {
         // A decode that ran late joins in where playback is now, still in sync.
         const now = running.from + (ctx.currentTime - running.at) + 0.03
         const from = Math.max(a, now)
-        const scheduled = scheduleClip(ctx, channelFor(graph, s.clip), project, s.clip, chunk.buffer, from, b, running.at + (from - running.from), chunk.start)
+        const scheduled = scheduleVoice(ctx, v, chunk.buffer, from, b, running.at + (from - running.from), chunk.start)
         if (scheduled) active.push(scheduled)
       })
       .catch((err) => console.warn('Streaming audio failed', err))
@@ -504,6 +620,7 @@ export const audioEngine = {
       s.nodes.forEach((n) => n.disconnect())
     }
     active = []
+    disposeNest(liveNest)
   },
 
   /** The project changed while playing: pick up the new mix from where we are. */
@@ -547,20 +664,19 @@ export const audioEngine = {
 
 function scheduleAll(project: Project, from: number, at: number) {
   if (!ctx || !graph) return
-  for (const clip of Object.values(project.clips)) {
-    if (!isAudible(project, clip)) continue
-    const [start, end] = audibleSpan(project, clip)
-    if (end <= from) continue
-    const asset = project.assets[clip.assetId!]
+  for (const v of voices(ctx, project, graph, { from, at }, liveNest)) {
+    const [start, end] = voiceSpan(v)
+    if (end <= from || end - start <= 1e-4) continue
+    const asset = v.view.assets[v.clip.assetId!]
     if (isLongAudio(asset)) {
-      streamers.push({ clip, asset, until: Math.max(from, start), busy: false })
+      streamers.push({ voice: v, asset, until: Math.max(from, start), busy: false })
       continue
     }
-    const buffer = clipBufferNow(asset, clip)
+    const buffer = clipBufferNow(asset, v.clip)
     if (buffer) {
-      const s = scheduleClip(ctx, channelFor(graph, clip), project, clip, buffer, from, Infinity, at)
+      const s = scheduleVoice(ctx, v, buffer, from, Infinity, at)
       if (s) active.push(s)
-    } else void clipBuffer(asset, clip) // ready later → onAudioReady → refresh
+    } else void clipBuffer(asset, v.clip) // ready later → onAudioReady → refresh
   }
   if (streamers.length) {
     topUpStreams()
@@ -578,11 +694,11 @@ onAudioReady(() => {
 /** Makes sure every audible clip's audio is decoded (and processed) before an export. */
 export async function prepareAudio(project: Project, onProgress?: (done: number, total: number) => void) {
   // Long recordings are read block by block while exporting, not decoded up front.
-  const clips = Object.values(project.clips).filter((c) => isAudible(project, c) && !isLongAudio(project.assets[c.assetId!]))
+  const leaves = audioLeaves(project).filter(({ clip, view }) => !isLongAudio(view.assets[clip.assetId!]))
   let done = 0
-  for (const clip of clips) {
-    await clipBuffer(project.assets[clip.assetId!], clip)
-    onProgress?.(++done, clips.length)
+  for (const { clip, view } of leaves) {
+    await clipBuffer(view.assets[clip.assetId!], clip)
+    onProgress?.(++done, leaves.length)
   }
 }
 
@@ -615,19 +731,18 @@ export async function renderMix(project: Project, from: number, to: number, opts
     out = gain
   }
   const mix = createGraph(off, project, out, false)
-  for (const clip of Object.values(project.clips)) {
-    if (!isAudible(project, clip)) continue
-    const [a, b] = audibleSpan(project, clip)
-    if (b <= start || a >= to) continue
-    const asset = project.assets[clip.assetId!]
+  for (const v of voices(off, project, mix, { from: start, at: 0 }, { graphs: [], gains: [] })) {
+    const [a, b] = voiceSpan(v)
+    if (b <= start || a >= to || b - a <= 1e-4) continue
+    const asset = v.view.assets[v.clip.assetId!]
     if (isLongAudio(asset)) {
-      const [s0, s1] = sourceSpan(project, clip, Math.max(a, start), Math.min(b, to))
-      const chunk = await streamChunk(asset, clip, s0, s1)
-      if (chunk) scheduleClip(off, channelFor(mix, clip), project, clip, chunk.buffer, start, to, 0, chunk.start)
+      const [s0, s1] = sourceSpan(v.view, v.clip, Math.max(a, start) - v.offset, Math.min(b, to) - v.offset)
+      const chunk = await streamChunk(asset, v.clip, s0, s1)
+      if (chunk) scheduleVoice(off, v, chunk.buffer, start, to, 0, chunk.start)
       continue
     }
-    const buffer = await clipBuffer(asset, clip)
-    if (buffer) scheduleClip(off, channelFor(mix, clip), project, clip, buffer, start, to, 0)
+    const buffer = await clipBuffer(asset, v.clip)
+    if (buffer) scheduleVoice(off, v, buffer, start, to, 0)
   }
   const rendered = await off.startRendering()
   const skip = Math.round(lead * sampleRate)

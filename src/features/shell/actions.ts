@@ -12,6 +12,8 @@ import type { Tool } from '@/editor/ui-store'
 import { useUI } from '@/editor/ui-store'
 import { importDropped, pickAndImport } from '@/project/media-import'
 import { openProject, saveProject, saveProjectAs, showHome } from '@/project/session'
+import { openTimeline } from '@/editor/timeline-nav'
+import { AnalysisCancelled, initialTrackBox, scenesInClip, stabilizeClip, withProgress } from '@/project/analysis-actions'
 
 const ui = () => useUI.getState()
 const frame = () => usePlayback.getState().frame
@@ -144,6 +146,81 @@ export const actions = {
     useEditor.getState().transaction(clips.length > 1 ? 'Add crossfades' : 'Add crossfade', 'user', () => {
       for (const c of clips) dispatch('clip.setTransition', { id: c.id, transition: c.transitionIn ?? { kind: 'dissolve', duration: Math.max(2, Math.min(duration, c.duration)) } })
     })
+  },
+
+  // ── Timelines & multicam ──
+
+  /** Moves the selected clips (and anything linked) into a new timeline played by one clip. */
+  nestSelection() {
+    const ids = ui().selection
+    if (!ids.length) return void toast('Select the clips to nest first')
+    const res = dispatch('clip.nest', { ids })
+    if (!ok(res)) return
+    const { clipId, sequenceId } = res.result as { clipId: string; sequenceId: string }
+    ui().select([clipId])
+    toast.success('Nested into a new timeline', { action: { label: 'Open it', onClick: () => openTimeline(sequenceId, true) } })
+  },
+
+  /** Steps into the timeline a nested clip plays. */
+  openNested(clipId?: string) {
+    const id = clipId ?? ui().selection.find((x) => getProject().clips[x]?.sequenceId)
+    const seq = id ? getProject().clips[id]?.sequenceId : undefined
+    if (seq) openTimeline(seq, true)
+  },
+
+  /** Brings a nested clip's contents back onto this timeline. */
+  unnestSelection() {
+    const id = ui().selection.find((x) => getProject().clips[x]?.sequenceId)
+    if (!id) return void toast('Select a nested clip to break apart')
+    const res = dispatch('clip.unnest', { id })
+    if (ok(res)) ui().select(res.result as string[])
+  },
+
+  /** Multicam: cut to camera `n` (1–9) at the playhead. */
+  cutToAngle(n: number) {
+    const p = getProject()
+    const f = frame()
+    if (!clipsAt(p, f).some((c) => c.sequenceId && p.sequences?.[c.sequenceId]?.multicam)) return
+    ok(dispatch('multicam.switch', { frame: f, angle: n }))
+  },
+
+  // ── Reading the footage ──
+
+  /** Splits the selected video clip (or the one under the playhead) where its shots change — or marks them. */
+  async detectScenes(action: 'split' | 'markers' = 'split') {
+    const clip = targetClips(['video']).find((c) => c.assetId)
+    if (!clip) return void toast('Select a video clip first')
+    try {
+      const r = await withProgress('Finding scene cuts', (onProgress, signal) => scenesInClip(clip.id, { action }, onProgress, signal))
+      if (!r.cuts.length) toast('No scene cuts found in that clip')
+      else toast.success(`${action === 'split' ? 'Split at' : 'Marked'} ${plural(r.cuts.length, 'scene cut')}`)
+    } catch (err) {
+      if (!(err instanceof AnalysisCancelled)) toast.error('Scene detection failed', { description: err instanceof Error ? err.message : String(err) })
+    }
+  },
+
+  /** Smooths the camera shake out of the selected video clip. */
+  async stabilize(clipId?: string) {
+    const clip = clipId ? getProject().clips[clipId] : targetClips(['video']).find((c) => c.assetId)
+    if (!clip) return void toast('Select a video clip first')
+    try {
+      const r = await withProgress('Stabilizing', (onProgress, signal) => stabilizeClip(clip.id, {}, onProgress, signal))
+      toast.success('Stabilized', { description: r.zoom > 1.001 ? `Zoomed in ${Math.round((r.zoom - 1) * 100)}% to hide the moving edges.` : undefined })
+    } catch (err) {
+      if (!(err instanceof AnalysisCancelled)) toast.error('Couldn’t stabilize', { description: err instanceof Error ? err.message : String(err) })
+    }
+  },
+
+  /** Starts placing a box on the preview for the selected clip (or its mask) to follow. */
+  trackMotion(clipId?: string, maskId?: string) {
+    const clip = clipId ? getProject().clips[clipId] : targetClips().find((c) => c.kind !== 'audio')
+    if (!clip) return void toast('Select the clip that should follow something')
+    const f = frame()
+    if (f < clip.start || f >= clipEnd(clip)) return void toast('Put the playhead over the clip, on a frame where what it should follow is visible')
+    if (!maskId && clip.kind === 'adjustment') return void toast('Adjustment layers don’t move — track one of their masks instead')
+    playback.pause()
+    ui().select([clip.id])
+    ui().setTrackEdit({ clipId: clip.id, maskId, box: initialTrackBox(getProject(), clip, maskId, f) })
   },
 
   // ── In & out points ──

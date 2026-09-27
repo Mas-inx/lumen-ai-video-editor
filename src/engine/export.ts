@@ -21,16 +21,17 @@ import { GIFEncoder, applyPalette, quantize } from 'gifenc'
 import type { ExportHandle } from '@shared/app'
 import { projectDuration } from '@/editor/ops'
 import { playback } from '@/editor/playback'
+import { cuesInRange, formatCues, withoutCaptions, type SubtitleFormat } from '@/editor/subtitles'
 import type { Project } from '@/editor/types'
 import { desktop } from '@/lib/platform'
 import { prepareAudio, renderMix, type MixOptions } from './audio-engine'
 import { renderFrame } from './compositor'
 import { LoudnessMeter } from './loudness'
-import { setExportFrames } from './media'
+import { withVideoFrames } from './media'
 import { FrameFeeder } from './stills'
 import { encodeWav } from './wav'
 
-export type ExportFormat = 'mp4' | 'mov' | 'webm' | 'gif' | 'wav' | 'm4a'
+export type ExportFormat = 'mp4' | 'mov' | 'webm' | 'gif' | 'png' | 'wav' | 'm4a'
 export type ExportVideoCodec = 'avc' | 'hevc' | 'av1' | 'vp9'
 
 export interface ExportSettings {
@@ -47,6 +48,19 @@ export interface ExportSettings {
   range?: [number, number]
   /** Normalize the mix to this integrated loudness (LUFS), with peaks held under `peak` dBFS. */
   loudness?: { lufs: number; peak: number }
+  /** A transparent background (PNG sequences, and WebM with VP9) instead of the project's background colour. */
+  alpha?: boolean
+  /** Draw the caption tracks into the picture (default true). */
+  burnCaptions?: boolean
+  /** Also save the captions as a subtitle file next to the export. */
+  sidecar?: SubtitleFormat | null
+}
+
+export interface ExportResult {
+  path: string
+  size: number
+  /** The subtitle file saved beside it. */
+  sidecar?: string
 }
 
 /** Loudness targets people deliver to. */
@@ -85,14 +99,18 @@ export class ExportCancelled extends Error {
   }
 }
 
-export const FORMAT_INFO: Record<ExportFormat, { label: string; extension: string; filter: string; video: boolean }> = {
+export const FORMAT_INFO: Record<ExportFormat, { label: string; extension: string; filter: string; video: boolean; folder?: boolean }> = {
   mp4: { label: 'MP4', extension: 'mp4', filter: 'MP4 video', video: true },
   mov: { label: 'MOV', extension: 'mov', filter: 'QuickTime movie', video: true },
   webm: { label: 'WebM', extension: 'webm', filter: 'WebM video', video: true },
   gif: { label: 'GIF', extension: 'gif', filter: 'Animated GIF', video: true },
+  png: { label: 'PNG', extension: 'png', filter: 'PNG frames', video: true, folder: true },
   wav: { label: 'WAV', extension: 'wav', filter: 'WAV audio', video: false },
   m4a: { label: 'M4A', extension: 'm4a', filter: 'M4A audio', video: false },
 }
+
+/** Formats that can keep a transparent background. */
+export const canAlpha = (format: ExportFormat, codec: ExportVideoCodec) => format === 'png' || (format === 'webm' && codec === 'vp9')
 
 /** Video codecs each container can carry, best first. */
 export const CODECS_FOR: Record<'mp4' | 'mov' | 'webm', ExportVideoCodec[]> = {
@@ -195,7 +213,7 @@ let running = false
 export const exportRunning = () => running
 
 /** Renders the project to the file behind `handle`. Resolves with the finished file. */
-export async function runExport(project: Project, settings: ExportSettings, handle: ExportHandle, onProgress: (p: ExportProgress) => void, signal: AbortSignal) {
+export async function runExport(project: Project, settings: ExportSettings, handle: ExportHandle, onProgress: (p: ExportProgress) => void, signal: AbortSignal): Promise<ExportResult> {
   if (running) {
     await desktop?.export.abort(handle.id).catch(() => {})
     throw new Error('Another export is already running — wait for it to finish.')
@@ -208,10 +226,21 @@ export async function runExport(project: Project, settings: ExportSettings, hand
   }
 }
 
-async function exportOnce(project: Project, settings: ExportSettings, handle: ExportHandle, onProgress: (p: ExportProgress) => void, signal: AbortSignal) {
+async function exportOnce(source: Project, settings: ExportSettings, handle: ExportHandle, onProgress: (p: ExportProgress) => void, signal: AbortSignal): Promise<ExportResult> {
+  const res = await renderTo(source, settings, handle, onProgress, signal)
+  const range = settings.range ?? [0, projectDuration(source)]
+  if (settings.sidecar && desktop) {
+    const cues = cuesInRange(source, range)
+    if (cues.length) return { ...res, sidecar: await desktop.export.sidecar(res.path, settings.sidecar, formatCues(cues, settings.sidecar)) }
+  }
+  return res
+}
+
+async function renderTo(source: Project, settings: ExportSettings, handle: ExportHandle, onProgress: (p: ExportProgress) => void, signal: AbortSignal): Promise<ExportResult> {
   if (!desktop) throw new Error('Exporting needs the desktop app.')
   playback.pause()
   const api = desktop
+  const project = settings.burnCaptions === false ? withoutCaptions(source) : source
   const range = settings.range ?? [0, projectDuration(project)]
   const seconds = (range[1] - range[0]) / project.settings.fps
   if (seconds <= 0) throw new Error('The timeline is empty — add some clips first.')
@@ -220,8 +249,9 @@ async function exportOnce(project: Project, settings: ExportSettings, handle: Ex
   }
 
   try {
-    onProgress({ phase: 'preparing', done: 0, total: 1, speed: 0, eta: 0, message: 'Preparing audio…' })
+    onProgress({ phase: 'preparing', done: 0, total: 1, speed: 0, eta: 0, message: settings.format === 'png' ? 'Preparing…' : 'Preparing audio…' })
     await document.fonts.ready
+    if (settings.format === 'png') return await exportFrames(project, settings, range, handle, onProgress, check)
     await prepareAudio(project, (done, total) => onProgress({ phase: 'preparing', done, total, speed: 0, eta: 0, message: `Preparing audio (${done}/${total})…` }))
     check()
     const mixOpts = settings.loudness && settings.format !== 'gif' && hasAudio(project) ? await normalization(project, range, settings.loudness, onProgress, check) : {}
@@ -238,7 +268,6 @@ async function exportOnce(project: Project, settings: ExportSettings, handle: Ex
     await api.export.abort(handle.id).catch(() => {})
     throw err
   } finally {
-    setExportFrames(null)
     api.export.progress(null)
   }
 }
@@ -270,6 +299,8 @@ async function exportMedia(
 
   let canvas: HTMLCanvasElement | null = null
   let videoSource: CanvasSource | null = null
+  // Transparency rides along as a second VP9 stream in the WebM.
+  const alpha = Boolean(settings.alpha) && canAlpha(settings.format, settings.codec)
   if (video) {
     canvas = document.createElement('canvas')
     canvas.width = settings.width
@@ -280,6 +311,7 @@ async function exportMedia(
       keyFrameInterval: 2,
       latencyMode: 'quality',
       hardwareAcceleration: settings.hardware ? 'prefer-hardware' : 'no-preference',
+      ...(alpha ? { alpha: 'keep' as const } : {}),
     })
     output.addVideoTrack(videoSource, { frameRate: settings.fps })
   }
@@ -291,15 +323,15 @@ async function exportMedia(
   }
   if (!videoSource && !audioSource) throw new Error('There’s no audio to export.')
 
+  // Frame-exact frames only while each export frame is drawn — the preview keeps its live players meanwhile.
   const feeder = video ? new FrameFeeder(project, settings.width, settings.height) : null
-  if (feeder) setExportFrames(feeder.frame)
   await output.start()
   try {
     const totalFrames = video ? Math.max(1, Math.round(duration * settings.fps)) : 0
     const block = 2
     const blocks = Math.ceil(duration / block)
     const progress = makeProgress(onProgress, video ? totalFrames : blocks, canvas)
-    const ctx = canvas?.getContext('2d', { alpha: false, willReadFrequently: false }) ?? null
+    const ctx = canvas?.getContext('2d', { alpha, willReadFrequently: false }) ?? null
     let frame = 0
     for (let b = 0; b < blocks; b++) {
       check()
@@ -315,7 +347,7 @@ async function exportMedia(
         check()
         const projectFrame = range[0] + (frame / settings.fps) * projectFps
         await feeder!.prepare(projectFrame)
-        renderFrame(ctx!, project, projectFrame)
+        withVideoFrames(feeder!.frame, () => renderFrame(ctx!, project, projectFrame, { transparent: alpha }))
         await videoSource!.add(frame / settings.fps, 1 / settings.fps)
         progress(frame + 1)
       }
@@ -334,6 +366,42 @@ async function exportMedia(
   }
 }
 
+/** An image sequence: one PNG per frame, transparent unless `alpha` is false. */
+async function exportFrames(project: Project, settings: ExportSettings, range: [number, number], handle: ExportHandle, onProgress: (p: ExportProgress) => void, check: () => void) {
+  const api = desktop!
+  const projectFps = project.settings.fps
+  const duration = (range[1] - range[0]) / projectFps
+  const total = Math.max(1, Math.round(duration * settings.fps))
+  const canvas = document.createElement('canvas')
+  canvas.width = settings.width
+  canvas.height = settings.height
+  const ctx = canvas.getContext('2d', { alpha: true })!
+  const feeder = new FrameFeeder(project, settings.width, settings.height)
+  const progress = makeProgress(onProgress, total, canvas)
+  const transparent = settings.alpha !== false
+  // Encoding one PNG overlaps with drawing the next.
+  let pending: Promise<void> = Promise.resolve()
+  try {
+    for (let i = 0; i < total; i++) {
+      check()
+      const projectFrame = range[0] + (i / settings.fps) * projectFps
+      await feeder.prepare(projectFrame)
+      withVideoFrames(feeder.frame, () => renderFrame(ctx, project, projectFrame, { transparent }))
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+      if (!blob) throw new Error('Couldn’t encode a PNG frame.')
+      await pending
+      pending = blob.arrayBuffer().then((buf) => api.export.writeFrame(handle.id, i, new Uint8Array(buf)))
+      progress(i + 1)
+    }
+    await pending
+    progress(total, true)
+    onProgress({ phase: 'finishing', done: 1, total: 1, speed: 0, eta: 0, message: 'Finishing…' })
+    return await api.export.finish(handle.id)
+  } finally {
+    feeder.dispose()
+  }
+}
+
 async function exportGif(project: Project, settings: ExportSettings, range: [number, number], handle: ExportHandle, onProgress: (p: ExportProgress) => void, check: () => void) {
   const api = desktop!
   const fps = Math.min(settings.fps, 20)
@@ -345,7 +413,6 @@ async function exportGif(project: Project, settings: ExportSettings, range: [num
   canvas.height = settings.height
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!
   const feeder = new FrameFeeder(project, settings.width, settings.height)
-  setExportFrames(feeder.frame)
   const gif = GIFEncoder()
   const progress = makeProgress(onProgress, total, canvas)
   const delay = Math.round(1000 / fps)
@@ -354,7 +421,7 @@ async function exportGif(project: Project, settings: ExportSettings, range: [num
       check()
       const projectFrame = range[0] + (i / fps) * projectFps
       await feeder.prepare(projectFrame)
-      renderFrame(ctx, project, projectFrame)
+      withVideoFrames(feeder.frame, () => renderFrame(ctx, project, projectFrame))
       const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height)
       const palette = quantize(data, 256)
       gif.writeFrame(applyPalette(data, palette), canvas.width, canvas.height, { palette, delay })

@@ -25,7 +25,8 @@ export interface ProbeResult {
 
 export class MediaError extends Error {}
 
-const open = (url: string) =>
+/** Opens a media file for reading (byte ranges over lumen-media://). */
+export const openInput = (url: string) =>
   new Input({
     source: new UrlSource(url, { maxCacheSize: 48 * 1024 * 1024, parallelism: 2, getRetryDelay: (n) => (n < 2 ? 0.2 : null) }),
     formats: ALL_FORMATS,
@@ -58,7 +59,7 @@ export async function probeMedia(url: string, mime: string): Promise<ProbeResult
     const img = await loadImage(url)
     return { kind, width: img.naturalWidth, height: img.naturalHeight, hasAudio: false }
   }
-  const input = open(url)
+  const input = openInput(url)
   try {
     const [video, audio] = await Promise.all([input.getPrimaryVideoTrack(), input.getPrimaryAudioTrack()])
     const audioOk = audio ? await audio.canDecode() : false
@@ -161,7 +162,7 @@ async function pumpFilmstrips() {
 }
 
 async function buildFilmstrip(key: string, url: string, duration: number) {
-  const input = open(url)
+  const input = openInput(url)
   try {
     const track = await input.getPrimaryVideoTrack()
     if (!track || !(await track.canDecode())) return
@@ -197,7 +198,7 @@ async function buildFilmstrip(key: string, url: string, duration: number) {
  * The canvases are copies the caller owns; null where a frame couldn't be decoded.
  */
 export async function framesAt(url: string, times: number[], maxWidth: number, maxHeight: number): Promise<(HTMLCanvasElement | null)[]> {
-  const input = open(url)
+  const input = openInput(url)
   try {
     const track = await input.getPrimaryVideoTrack()
     if (!track || !(await track.canDecode())) return times.map(() => null)
@@ -255,7 +256,7 @@ export class VideoReader {
   private lastT = -Infinity
 
   constructor(url: string, maxWidth: number, maxHeight: number) {
-    this.input = open(url)
+    this.input = openInput(url)
     this.sink = this.input.getPrimaryVideoTrack().then(async (track: InputVideoTrack | null) => {
       if (!track || !(await track.canDecode())) return null
       const scale = Math.min(1, maxWidth / track.displayWidth, maxHeight / track.displayHeight)
@@ -323,7 +324,7 @@ async function decodeWithBrowser(url: string): Promise<AudioBuffer | null> {
  * at its native sample rate. Returns null when the file has no decodable audio.
  */
 export async function decodeAudio(url: string): Promise<AudioBuffer | null> {
-  const input = open(url)
+  const input = openInput(url)
   try {
     const track = await input.getPrimaryAudioTrack()
     if (!track) return null
@@ -386,7 +387,7 @@ export interface AudioStream {
 }
 
 export async function openAudioStream(url: string): Promise<AudioStream | null> {
-  const input = open(url)
+  const input = openInput(url)
   try {
     const track = await input.getPrimaryAudioTrack()
     if (!track || !(await track.canDecode())) {

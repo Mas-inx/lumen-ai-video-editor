@@ -354,6 +354,41 @@ export interface Mask {
   invert: boolean
   /** 0..1 */
   opacity: number
+  /** Moves with a point tracked in the footage (positions as fractions of the frame). */
+  follow?: TrackPath
+}
+
+/**
+ * A tracked point: one position per frame from `start` (clip frames). What
+ * follows it moves by how far the point has travelled since frame `ref` —
+ * before the path it holds the first offset, after it the last.
+ */
+export interface TrackPath {
+  /** Clip frame of the first point. */
+  start: Frame
+  /** Index of the point tracking began from (where the follower sits as placed). */
+  ref: number
+  /** x, y pairs — project pixels from the centre for a clip, fractions of the frame for a mask. */
+  points: number[]
+}
+
+/**
+ * Stabilization: the camera's path measured in the footage, smoothed; the
+ * difference is taken out of every frame, zoomed in just enough to hide the edges.
+ */
+export interface Stabilization {
+  /** Source second of the first measured frame. */
+  start: number
+  /** Measured frames per second. */
+  rate: number
+  /** The camera path: x, y (fractions of the picture) and angle (radians) per measured frame. */
+  path: number[]
+  /** Seconds of smoothing — more is steadier (0.2..4). */
+  smooth: number
+  /** Scale that hides the moving edges (1..2). */
+  zoom: number
+  /** Also hold the horizon steady. */
+  rotation: boolean
 }
 
 export type BlendMode =
@@ -409,6 +444,14 @@ export interface Clip {
   groupId?: string
   /** Holds the frame at `inPoint` for the whole clip (a freeze frame). */
   freeze?: boolean
+  /** A nested timeline this clip plays instead of media: video clips show its picture and sound, audio clips its sound. */
+  sequenceId?: string
+  /** Multicam: the camera angle shown — a video track of the multicam timeline. */
+  angle?: string
+  /** Moves with a point tracked in the footage. */
+  follow?: TrackPath
+  /** Camera shake measured in the footage and smoothed away. */
+  stabilize?: Stabilization
 }
 
 export interface ProjectLut {
@@ -455,6 +498,35 @@ export interface TimelineRange {
   out: Frame
 }
 
+/** A timeline that isn't open: everything a timeline holds, kept while another one is edited. */
+export interface Sequence {
+  id: string
+  name: string
+  settings: ProjectSettings
+  tracks: Track[]
+  clips: Record<string, Clip>
+  markers: Marker[]
+  range?: TimelineRange | null
+  master?: BusMix
+  /** A multicam source: each video track is one camera angle, its audio tracks the sound. */
+  multicam?: boolean
+  createdAt: number
+}
+
+/** Which timeline is open. */
+export interface SequenceRef {
+  id: string
+  name: string
+  multicam?: boolean
+  createdAt?: number
+}
+
+/**
+ * A project holds one or more timelines. The open one lives in `settings`,
+ * `tracks`, `clips`, `markers`, `range` and `master` (so everything edits it
+ * directly); the others wait in `sequences`. Clips can play another timeline
+ * (`Clip.sequenceId`) — nesting.
+ */
 export interface Project {
   id: string
   name: string
@@ -470,5 +542,9 @@ export interface Project {
   luts?: Record<string, ProjectLut>
   /** Imported fonts (from files or the system), embedded so the project travels. */
   fonts?: Record<string, ProjectFont>
+  /** The open timeline (missing in projects from before timelines: the main timeline). */
+  sequence?: SequenceRef
+  /** The project's other timelines, by id. */
+  sequences?: Record<string, Sequence>
   createdAt: number
 }

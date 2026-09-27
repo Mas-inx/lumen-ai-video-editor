@@ -11,6 +11,14 @@ export type SelectMode = 'replace' | 'toggle' | 'add'
 export const ZOOM_MIN = 6
 export const ZOOM_MAX = 720
 
+/** The box being placed to track motion, in project pixels (top-left based) at the playhead. */
+export interface TrackEdit {
+  clipId: string
+  /** Track one of the clip's masks rather than the clip itself. */
+  maskId?: string
+  box: { x: number; y: number; w: number; h: number }
+}
+
 interface UIState {
   leftTab: LeftTab
   rightTab: RightTab
@@ -30,6 +38,15 @@ interface UIState {
   maskEdit: string | null
   pasteAttributesOpen: boolean
   versionsOpen: boolean
+  queueOpen: boolean
+  /** The multicam dialog, with the media it starts from. */
+  multicam: { assetIds: string[] } | null
+  /** The camera-angle strip under the preview (for multicam clips). */
+  angleViewer: boolean
+  /** Placing a box to track motion (hides the other gizmos). */
+  trackEdit: TrackEdit | null
+  /** A timeline being renamed. */
+  renamingTimeline: string | null
   paletteOpen: boolean
   exportOpen: boolean
   shortcutsOpen: boolean
@@ -53,6 +70,11 @@ interface UIState {
   setMaskEdit: (id: string | null) => void
   setPasteAttributesOpen: (v: boolean) => void
   setVersionsOpen: (v: boolean) => void
+  setQueueOpen: (v: boolean) => void
+  setMulticam: (v: { assetIds: string[] } | null) => void
+  setAngleViewer: (v: boolean) => void
+  setTrackEdit: (v: TrackEdit | null) => void
+  setRenamingTimeline: (id: string | null) => void
   setPaletteOpen: (v: boolean) => void
   setExportOpen: (v: boolean) => void
   setShortcutsOpen: (v: boolean) => void
@@ -77,6 +99,11 @@ export const useUI = create<UIState>()(
       maskEdit: null,
       pasteAttributesOpen: false,
       versionsOpen: false,
+      queueOpen: false,
+      multicam: null,
+      angleViewer: true,
+      trackEdit: null,
+      renamingTimeline: null,
       paletteOpen: false,
       exportOpen: false,
       shortcutsOpen: false,
@@ -108,6 +135,11 @@ export const useUI = create<UIState>()(
       setMaskEdit: (maskEdit) => set({ maskEdit, ...(maskEdit ? { cropMode: false } : {}) }),
       setPasteAttributesOpen: (pasteAttributesOpen) => set({ pasteAttributesOpen }),
       setVersionsOpen: (versionsOpen) => set({ versionsOpen }),
+      setQueueOpen: (queueOpen) => set({ queueOpen }),
+      setMulticam: (multicam) => set({ multicam }),
+      setAngleViewer: (angleViewer) => set({ angleViewer }),
+      setTrackEdit: (trackEdit) => set({ trackEdit, ...(trackEdit ? { cropMode: false, maskEdit: null } : {}) }),
+      setRenamingTimeline: (renamingTimeline) => set({ renamingTimeline }),
       setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
       setExportOpen: (exportOpen) => set({ exportOpen }),
       setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
@@ -131,6 +163,7 @@ export const useUI = create<UIState>()(
         showGuides: s.showGuides,
         useProxies: s.useProxies,
         autoProxies: s.autoProxies,
+        angleViewer: s.angleViewer,
       }),
     },
   ),
@@ -144,7 +177,7 @@ useEditor.subscribe((state, prev) => {
   if (alive.length !== selection.length) useUI.setState({ selection: alive })
 })
 
-// Crop and mask editing belong to one clip: selecting something else leaves them.
+// Crop, mask and tracking-box editing belong to one clip: selecting something else leaves them.
 useUI.subscribe((state, prev) => {
-  if ((state.cropMode || state.maskEdit) && state.selection !== prev.selection) useUI.setState({ cropMode: false, maskEdit: null })
+  if ((state.cropMode || state.maskEdit || state.trackEdit) && state.selection !== prev.selection) useUI.setState({ cropMode: false, maskEdit: null, trackEdit: null })
 })

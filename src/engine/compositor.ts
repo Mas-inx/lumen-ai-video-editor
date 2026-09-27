@@ -6,10 +6,12 @@
  * adjustment layers and titles. Preview and export both render through here.
  */
 import { propAt } from '@/editor/keyframes'
+import { followOffset, stabilizeAt, type Correction } from '@/editor/motion'
 import { adjacentBefore, clipEnd } from '@/editor/ops'
 import { is3dEffect, is3dTransition } from '@/editor/presets'
+import { angleTrackOf, angleTracks, sequenceView } from '@/editor/sequences'
 import { sourceFrameAt, speedAt } from '@/editor/timing'
-import type { AnimPreset, BlendMode, Clip, Crop, Effect, EffectKind, Mask, Project, Transition } from '@/editor/types'
+import type { AnimPreset, BlendMode, Clip, Crop, Effect, EffectKind, Mask, Project, Track, Transition } from '@/editor/types'
 import { clamp, easeInOutCubic, easeOutBack, easeOutCubic, lerp, noise1 } from '@/lib/math'
 import { gradeFilter, gradeOverlays } from './color'
 import { fontCss, fontFileUrl } from './fonts'
@@ -17,7 +19,7 @@ import { gpuGrade, needsGpuGrade } from './gl-grade'
 import { usePlayback } from '@/editor/playback'
 import { useUI } from '@/editor/ui-store'
 import { grainCanvas } from './grain'
-import { beginVideoFrame, endVideoFrame, getImage, sequenceFrame, sourceSize, videoFrame } from './media'
+import { beginVideoFrame, endVideoFrame, getImage, isExporting, sequenceFrame, sourceSize, videoFrame } from './media'
 import { renderLayer3D } from './three/layer'
 import { createStage, frameStage, scratchCanvas as scratchLayer, type Stage } from './three/stage'
 import { renderText3D } from './three/text'
@@ -45,6 +47,11 @@ export interface RenderResult {
   bounds: Map<string, ClipBounds>
 }
 
+export interface RenderOptions {
+  /** Leave what nothing covers transparent instead of filling the background colour (alpha exports). */
+  transparent?: boolean
+}
+
 interface Mods {
   alpha?: number
   offsetX?: number
@@ -66,9 +73,6 @@ const BLEND: Record<BlendMode, GlobalCompositeOperation> = {
   difference: 'difference',
 }
 
-let layerCanvas: HTMLCanvasElement | null = null
-let scratchCanvas: HTMLCanvasElement | null = null
-
 function sized(canvas: HTMLCanvasElement | null, w: number, h: number) {
   const c = canvas ?? document.createElement('canvas')
   if (c.width !== w || c.height !== h) {
@@ -76,6 +80,37 @@ function sized(canvas: HTMLCanvasElement | null, w: number, h: number) {
     c.height = h
   }
   return c
+}
+
+// ─── Nesting ─────────────────────────────────────────────────────────────
+// A nested timeline renders into a canvas of its own, one level down. Scratch
+// canvases are per level, so drawing a nested clip never disturbs the level
+// above; players and decoders of clips inside go by the path of nested clips
+// leading to them, so a timeline nested twice plays twice.
+
+const MAX_DEPTH = 8
+let depth = 0
+let keyPrefix = ''
+const scratchCanvases = new Map<string, HTMLCanvasElement>()
+
+function scratch(name: string, w: number, h: number) {
+  const key = `${name}@${depth}`
+  const c = sized(scratchCanvases.get(key) ?? null, w, h)
+  scratchCanvases.set(key, c)
+  return c
+}
+
+/** The key a clip's player and frame decoder go by. */
+export const renderKey = (clip: Pick<Clip, 'id'>, prefix = '') => prefix + clip.id
+
+/**
+ * The multicam angle viewer: while the preview draws a multicam clip, it can
+ * draw each camera angle too (same players, so they all keep playing).
+ */
+export type AngleSink = (clip: Clip, angles: Track[], draw: (trackId: string, ctx: CanvasRenderingContext2D) => void) => void
+let angleSink: AngleSink | null = null
+export function setAngleSink(sink: AngleSink | null) {
+  angleSink = sink
 }
 
 function resetCtx(ctx: CanvasRenderingContext2D) {
@@ -126,7 +161,7 @@ export function clipsDrawnAt(project: Project, frame: number): { clip: Clip; loc
   return out
 }
 
-export function renderFrame(ctx: CanvasRenderingContext2D, project: Project, frame: number): RenderResult {
+export function renderFrame(ctx: CanvasRenderingContext2D, project: Project, frame: number, opts: RenderOptions = {}): RenderResult {
   const W = ctx.canvas.width
   const H = ctx.canvas.height
   const bounds = new Map<string, ClipBounds>()
@@ -134,19 +169,38 @@ export function renderFrame(ctx: CanvasRenderingContext2D, project: Project, fra
 
   ctx.save()
   resetCtx(ctx)
-  ctx.fillStyle = project.settings.background
-  ctx.fillRect(0, 0, W, H)
-
-  const clipsByTrack = new Map<string, Clip[]>()
-  for (const c of Object.values(project.clips)) {
-    const list = clipsByTrack.get(c.trackId)
-    if (list) list.push(c)
-    else clipsByTrack.set(c.trackId, [c])
+  if (opts.transparent) ctx.clearRect(0, 0, W, H)
+  else {
+    ctx.fillStyle = project.settings.background
+    ctx.fillRect(0, 0, W, H)
   }
+  drawTracks(ctx, project, frame, bounds)
+  ctx.restore()
+  endVideoFrame()
+  return { bounds }
+}
 
-  const visual = project.tracks.filter((t) => t.kind === 'video' && !t.hidden)
+const byTrackCache = new WeakMap<Record<string, Clip>, Map<string, Clip[]>>()
+function clipsByTrack(project: Project) {
+  let map = byTrackCache.get(project.clips)
+  if (!map) {
+    map = new Map()
+    for (const c of Object.values(project.clips)) {
+      const list = map.get(c.trackId)
+      if (list) list.push(c)
+      else map.set(c.trackId, [c])
+    }
+    byTrackCache.set(project.clips, map)
+  }
+  return map
+}
+
+/** A timeline's video tracks, bottom to top — or only one of them (a multicam angle). */
+function drawTracks(ctx: CanvasRenderingContext2D, project: Project, frame: number, bounds: Map<string, ClipBounds>, only?: string) {
+  const byTrack = clipsByTrack(project)
+  const visual = project.tracks.filter((t) => t.kind === 'video' && (only ? t.id === only : !t.hidden))
   for (let i = visual.length - 1; i >= 0; i--) {
-    const clip = clipsByTrack.get(visual[i].id)?.find((c) => frame >= c.start && frame < clipEnd(c))
+    const clip = byTrack.get(visual[i].id)?.find((c) => frame >= c.start && frame < clipEnd(c))
     if (!clip) continue
     const local = frame - clip.start
     const tr = clip.transitionIn
@@ -154,10 +208,44 @@ export function renderFrame(ctx: CanvasRenderingContext2D, project: Project, fra
     if (tr && prev) drawTransition(ctx, project, prev, clip, frame, tr, local / tr.duration, bounds)
     else drawClip(ctx, project, clip, frame, {}, bounds)
   }
+}
 
-  ctx.restore()
-  endVideoFrame()
-  return { bounds }
+/**
+ * A nested clip's picture: its timeline at the frame it shows, drawn one level
+ * down at the size it will cover (so nothing is scaled twice). Null when its
+ * timeline is missing.
+ */
+function nestedPicture(project: Project, clip: Clip, local: number, W: number, H: number): HTMLCanvasElement | null {
+  const view = clip.sequenceId ? sequenceView(project, clip.sequenceId) : null
+  if (!view || view === project || depth >= MAX_DEPTH) return null
+  const { width: NW, height: NH, fps: NF } = view.settings
+  const r = Math.min(W / NW, H / NH)
+  const w = Math.max(2, Math.round(NW * r))
+  const h = Math.max(2, Math.round(NH * r))
+  const frame = clipSourceTime(clip, local, project.settings.fps) * NF
+  const multicam = Boolean(view.sequence?.multicam)
+  const angle = multicam ? angleTrackOf(view, clip) : undefined
+  const prefix = keyPrefix
+  depth++
+  keyPrefix = `${prefix}${clip.id}>`
+  try {
+    const canvas = scratch('nested', w, h)
+    const nctx = canvas.getContext('2d')!
+    resetCtx(nctx)
+    nctx.clearRect(0, 0, w, h)
+    drawTracks(nctx, view, frame, new Map(), angle)
+    if (multicam && depth === 1 && angleSink && !isExporting()) {
+      angleSink(clip, angleTracks(view), (trackId, actx) => {
+        resetCtx(actx)
+        actx.clearRect(0, 0, actx.canvas.width, actx.canvas.height)
+        drawTracks(actx, view, frame, new Map(), trackId)
+      })
+    }
+    return canvas
+  } finally {
+    depth--
+    keyPrefix = prefix
+  }
 }
 
 function drawTransition(
@@ -174,9 +262,9 @@ function drawTransition(
     // Composite each shot on its own, then hand both to the 3D stage.
     const W = ctx.canvas.width
     const H = ctx.canvas.height
-    const a = scratchLayer('transition-a', W, H)
+    const a = scratchLayer(`transition-a@${depth}`, W, H)
     drawClip(a.ctx, project, prev, frame, {}, bounds)
-    const b = scratchLayer('transition-b', W, H)
+    const b = scratchLayer(`transition-b@${depth}`, W, H)
     drawClip(b.ctx, project, clip, frame, {}, bounds)
     const out = renderTransition3D(stage3D(W, H, project), tr.kind, p, a.canvas, b.canvas)
     if (out) {
@@ -320,6 +408,12 @@ function drawClip(ctx: CanvasRenderingContext2D, project: Project, clip: Clip, f
 
   let x = propAt(clip, 'x', local) + anim.dx + (mods.offsetX ?? 0)
   let y = propAt(clip, 'y', local) + anim.dy
+  if (clip.follow) {
+    // Tracked motion: the clip moves with the point it follows.
+    const [fx0, fy0] = followOffset(clip.follow, local)
+    x += fx0
+    y += fy0
+  }
   let rotation = propAt(clip, 'rotation', local)
   let scale = propAt(clip, 'scale', local) * anim.scale * (mods.scale ?? 1)
   const opacity = propAt(clip, 'opacity', local) * anim.alpha * (mods.alpha ?? 1)
@@ -434,21 +528,22 @@ function draw3D(ctx: CanvasRenderingContext2D, project: Project, clip: Clip, loc
   const { width: PW, height: PH, fps } = project.settings
   const k = W / PW
   const t = local / fps
-  const s3 = stage3D(W, H, project)
+  // Taken when needed: drawing a nested timeline's layer can use (and reframe) the stage.
+  const s3 = () => stage3D(W, H, project)
   const place = { x: p.x, y: p.y, z: p.z, scale: p.scale, rotation: p.rotation, rotateX: p.rotateX, rotateY: p.rotateY, opacity: p.opacity, t }
   let out: HTMLCanvasElement | null = null
   let bw = PW * p.scale
   let bh = PH * p.scale
 
   if (p.text3d && clip.text) {
-    const r = renderText3D(s3, { style: clip.text, fontUrl: fontFileUrl(project, clip.text.font), ...place })
+    const r = renderText3D(s3(), { style: clip.text, fontUrl: fontFileUrl(project, clip.text.font), ...place })
     if (r) {
       out = r.canvas
       bw = r.width * p.scale
       bh = r.height * p.scale
     }
   } else {
-    const flat = scratchLayer('flat-layer', W, H)
+    const flat = scratchLayer(`flat-layer@${depth}`, W, H)
     const wipe = Math.min(p.anim.wipe, p.mods.wipe ?? 1)
     if (clip.kind === 'text' && clip.text) {
       flat.ctx.translate(W / 2, H / 2)
@@ -466,7 +561,7 @@ function draw3D(ctx: CanvasRenderingContext2D, project: Project, clip: Clip, loc
       flat.ctx.filter = graded ? blurFilter(blur * k) : gradeFilter(clip.color, { mono: fx(clip, 'mono')?.amount ?? 0, blur: blur * k })
       flat.ctx.drawImage(layer, 0, 0, W, H)
     }
-    out = renderLayer3D(s3, { canvas: flat.canvas, ...place, effects: p.fx3d })
+    out = renderLayer3D(s3(), { canvas: flat.canvas, ...place, effects: p.fx3d })
   }
 
   if (out) {
@@ -492,7 +587,9 @@ function draw3D(ctx: CanvasRenderingContext2D, project: Project, clip: Clip, loc
  * Returns the layer, the rect the visible picture covers and the rect of the whole picture before cropping.
  */
 function renderMediaLayer(project: Project, clip: Clip, local: number, W: number, H: number): { canvas: HTMLCanvasElement; rect: Rect; full: Rect; graded: boolean } {
-  layerCanvas = sized(layerCanvas, W, H)
+  // A nested timeline is drawn first, one level down, before this level's layer is touched.
+  const nested = clip.sequenceId ? nestedPicture(project, clip, local, W, H) : null
+  const layerCanvas = scratch('layer', W, H)
   const lctx = layerCanvas.getContext('2d')!
   resetCtx(lctx)
   lctx.clearRect(0, 0, W, H)
@@ -500,27 +597,31 @@ function renderMediaLayer(project: Project, clip: Clip, local: number, W: number
   const fps = project.settings.fps
   const asset = clip.assetId ? project.assets[clip.assetId] : undefined
   const t = clipSourceTime(clip, local, fps)
+  const stab = clip.stabilize ? stabilizeAt(clip.stabilize, t) : undefined
   let rect = { x: 0, y: 0, w: W, h: H }
 
-  if (!asset) drawSlate(lctx, W, H, 'Media missing')
+  if (clip.sequenceId) {
+    if (nested) rect = drawContain(lctx, nested, W, H, stab)
+    else if (!project.sequences?.[clip.sequenceId]) drawSlate(lctx, W, H, 'Timeline missing')
+  } else if (!asset) drawSlate(lctx, W, H, 'Media missing')
   else if (asset.source.missing) drawSlate(lctx, W, H, `Media offline — ${asset.source.type === 'file' ? asset.source.fileName : asset.name}`)
   else if (asset.source.type === 'file' && asset.kind === 'video') {
     // The preview plays a proxy when there is one; exports read the original (see media.ts).
     const url = asset.proxy && useUI.getState().useProxies ? asset.proxy.url : asset.source.url
-    const video = videoFrame(clip.id, url, t, usePlayback.getState().playing, playRate(clip, local))
-    if (video) rect = drawContain(lctx, video, W, H)
+    const video = videoFrame(renderKey(clip, keyPrefix), url, t, usePlayback.getState().playing, playRate(clip, local))
+    if (video) rect = drawContain(lctx, video, W, H, stab)
     else if (asset.source.poster) {
       const img = getImage(asset.source.poster)
-      if (img instanceof HTMLImageElement) rect = drawContain(lctx, img, W, H)
+      if (img instanceof HTMLImageElement) rect = drawContain(lctx, img, W, H, stab)
     }
   } else if (asset.source.type === 'file') {
     const img = getImage(asset.source.url)
     if (img === 'error') drawSlate(lctx, W, H, 'Media offline')
-    else if (img) rect = drawContain(lctx, img, W, H)
+    else if (img) rect = drawContain(lctx, img, W, H, stab)
   } else if (asset.source.type === 'sequence') {
     const img = sequenceFrame(asset.source, t)
     if (img === 'error') drawSlate(lctx, W, H, 'Frames missing')
-    else if (img) rect = drawContain(lctx, img, W, H)
+    else if (img) rect = drawContain(lctx, img, W, H, stab)
   }
 
   const full = rect
@@ -535,12 +636,14 @@ function renderMediaLayer(project: Project, clip: Clip, local: number, W: number
     lctx.globalCompositeOperation = 'source-over'
   }
 
-  if (clip.masks?.length) applyMasks(lctx, clip.masks, W, H)
+  if (clip.masks?.length) applyMasks(lctx, clip.masks, W, H, local)
 
+  // Pictures with see-through parts (titles with alpha, nested timelines with gaps) get no colour washes over them.
+  const seeThrough = Boolean(asset?.alpha || clip.sequenceId)
   // Curves, wheels, HSL, LUTs, keys and sharpening run on the GPU.
   let graded = false
   if (needsGpuGrade(clip)) {
-    const out = gpuGrade(layerCanvas, { color: clip.color, effects: clip.effects, mono: fx(clip, 'mono')?.amount ?? 0, washes: !asset?.alpha }, project)
+    const out = gpuGrade(layerCanvas, { color: clip.color, effects: clip.effects, mono: fx(clip, 'mono')?.amount ?? 0, washes: !seeThrough }, project)
     if (out) {
       lctx.clearRect(0, 0, W, H)
       lctx.drawImage(out, 0, 0)
@@ -548,7 +651,7 @@ function renderMediaLayer(project: Project, clip: Clip, local: number, W: number
     }
   }
 
-  const overlays = asset?.alpha || graded ? [] : gradeOverlays(clip.color)
+  const overlays = seeThrough || graded ? [] : gradeOverlays(clip.color)
   const vignette = clip.color.vignette + (fx(clip, 'vignette')?.amount ?? 0)
   const grain = fx(clip, 'grain')
   const leak = fx(clip, 'leak')
@@ -577,14 +680,13 @@ function renderMediaLayer(project: Project, clip: Clip, local: number, W: number
   return { canvas: layerCanvas, rect, full, graded }
 }
 
-let maskCanvas: HTMLCanvasElement | null = null
-
 /**
  * Cuts a layer down to its masks: shapes add up, inverted ones cut holes (with
  * only inverted masks, the rest of the frame shows), edges feathered by a blur.
+ * Masks following a tracked point move with it.
  */
-function applyMasks(ctx: CanvasRenderingContext2D, masks: Mask[], W: number, H: number) {
-  maskCanvas = sized(maskCanvas, W, H)
+function applyMasks(ctx: CanvasRenderingContext2D, masks: Mask[], W: number, H: number, local: number) {
+  const maskCanvas = scratch('mask', W, H)
   const m = maskCanvas.getContext('2d')!
   resetCtx(m)
   m.clearRect(0, 0, W, H)
@@ -596,7 +698,8 @@ function applyMasks(ctx: CanvasRenderingContext2D, masks: Mask[], W: number, H: 
     m.globalCompositeOperation = mask.invert ? 'destination-out' : 'source-over'
     m.globalAlpha = mask.opacity
     m.filter = mask.feather > 0 ? `blur(${(mask.feather * short * 0.5).toFixed(1)}px)` : 'none'
-    m.translate(mask.x * W, mask.y * H)
+    const [ox, oy] = mask.follow ? followOffset(mask.follow, local) : [0, 0]
+    m.translate((mask.x + ox) * W, (mask.y + oy) * H)
     m.rotate((mask.rotation * Math.PI) / 180)
     const w = mask.width * W
     const h = mask.height * H
@@ -622,8 +725,6 @@ export function cropRect(r: Rect, crop: Crop): Rect {
   return { x: r.x + r.w * left, y: r.y + r.h * top, w: r.w * w, h: r.h * h }
 }
 
-let adjustCanvas: HTMLCanvasElement | null = null
-
 /**
  * An adjustment layer grades everything beneath it: the frame so far is copied,
  * graded (on the GPU for curves, wheels, HSL and LUTs), cut to the layer's masks
@@ -635,13 +736,13 @@ function drawAdjustment(ctx: CanvasRenderingContext2D, project: Project, clip: C
   const anim = animState(clip, local)
   const strength = propAt(clip, 'opacity', local) * anim.alpha * (mods.alpha ?? 1)
   if (strength <= 0.002) return
-  scratchCanvas = sized(scratchCanvas, W, H)
+  const scratchCanvas = scratch('below', W, H)
   const sctx = scratchCanvas.getContext('2d')!
   resetCtx(sctx)
   sctx.clearRect(0, 0, W, H)
   sctx.drawImage(ctx.canvas, 0, 0)
 
-  adjustCanvas = sized(adjustCanvas, W, H)
+  const adjustCanvas = scratch('adjust', W, H)
   const actx = adjustCanvas.getContext('2d')!
   resetCtx(actx)
   actx.clearRect(0, 0, W, H)
@@ -671,7 +772,7 @@ function drawAdjustment(ctx: CanvasRenderingContext2D, project: Project, clip: C
   if (leak) drawLeak(actx, W, H, local / fps, leak.amount / 100)
   const grain = fx(clip, 'grain')
   if (grain) drawGrain(actx, W, H, local, grain.amount / 100)
-  if (clip.masks?.length) applyMasks(actx, clip.masks, W, H)
+  if (clip.masks?.length) applyMasks(actx, clip.masks, W, H, local)
 
   ctx.save()
   resetCtx(ctx)
@@ -779,7 +880,8 @@ function drawText(ctx: CanvasRenderingContext2D, project: Project, clip: Clip, k
 
 // ─── Texture helpers ─────────────────────────────────────────────────────
 
-function drawContain(ctx: CanvasRenderingContext2D, img: CanvasImageSource, W: number, H: number) {
+/** Fits a picture in the frame; a stabilized clip's picture is shifted, turned and zoomed inside its own box. */
+function drawContain(ctx: CanvasRenderingContext2D, img: CanvasImageSource, W: number, H: number, stab?: Correction) {
   const { w: iw, h: ih } = sourceSize(img)
   if (!iw || !ih) return { x: 0, y: 0, w: W, h: H }
   const r = Math.min(W / iw, H / ih)
@@ -787,7 +889,18 @@ function drawContain(ctx: CanvasRenderingContext2D, img: CanvasImageSource, W: n
   const h = ih * r
   const rect = { x: (W - w) / 2, y: (H - h) / 2, w, h }
   ctx.imageSmoothingQuality = 'high'
-  ctx.drawImage(img, rect.x, rect.y, w, h)
+  if (stab && (stab.dx || stab.dy || stab.angle || stab.zoom !== 1)) {
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(rect.x, rect.y, w, h)
+    ctx.clip()
+    ctx.translate(rect.x + w / 2, rect.y + h / 2)
+    ctx.scale(stab.zoom, stab.zoom)
+    ctx.rotate(stab.angle)
+    ctx.translate(stab.dx * w, stab.dy * h)
+    ctx.drawImage(img, -w / 2, -h / 2, w, h)
+    ctx.restore()
+  } else ctx.drawImage(img, rect.x, rect.y, w, h)
   return rect
 }
 
@@ -840,10 +953,60 @@ function drawLeak(ctx: CanvasRenderingContext2D, W: number, H: number, t: number
 }
 
 /** Renders a frame into a fresh canvas (thumbnails, export preview, snapshots). */
-export function renderToCanvas(project: Project, frame: number, width: number) {
+export function renderToCanvas(project: Project, frame: number, width: number, opts: RenderOptions = {}) {
   const canvas = document.createElement('canvas')
   canvas.width = width
   canvas.height = Math.round((width * project.settings.height) / project.settings.width)
-  renderFrame(canvas.getContext('2d')!, project, frame)
+  renderFrame(canvas.getContext('2d')!, project, frame, opts)
   return canvas
+}
+
+// ─── What gets drawn ─────────────────────────────────────────────────────
+
+/** Every player key the open timeline can draw, nested timelines included. */
+export function allRenderKeys(project: Project, prefix = '', level = 0, out = new Set<string>()): Set<string> {
+  for (const c of Object.values(project.clips)) {
+    out.add(prefix + c.id)
+    if (!c.sequenceId || level >= MAX_DEPTH) continue
+    const view = sequenceView(project, c.sequenceId)
+    if (view && view !== project) allRenderKeys(view, `${prefix}${c.id}>`, level + 1, out)
+  }
+  return out
+}
+
+export interface DrawnMedia {
+  clip: Clip
+  /** Frame within the clip. */
+  local: number
+  /** The timeline the clip belongs to (a nested one for clips inside nests). */
+  view: Project
+  /** Its player / decoder key. */
+  key: string
+}
+
+/**
+ * Every media clip a frame draws, nested timelines opened up (only the shown
+ * angle of a multicam clip) — what an export decodes before drawing the frame.
+ */
+export function mediaDrawnAt(project: Project, frame: number, prefix = '', level = 0, only?: string): DrawnMedia[] {
+  const out: DrawnMedia[] = []
+  const visual = project.tracks.filter((t) => t.kind === 'video' && (only ? t.id === only : !t.hidden))
+  const byTrack = clipsByTrack(project)
+  for (let i = visual.length - 1; i >= 0; i--) {
+    const clip = byTrack.get(visual[i].id)?.find((c) => frame >= c.start && frame < clipEnd(c))
+    if (!clip) continue
+    const local = frame - clip.start
+    const tr = clip.transitionIn
+    const prev = tr && local < tr.duration ? adjacentBefore(project, clip) : undefined
+    for (const [c, l] of prev ? ([[prev, frame - prev.start], [clip, local]] as const) : ([[clip, local]] as const)) {
+      if (c.sequenceId) {
+        const view = sequenceView(project, c.sequenceId)
+        if (!view || view === project || level >= MAX_DEPTH) continue
+        const nf = clipSourceTime(c, l, project.settings.fps) * view.settings.fps
+        const angle = view.sequence?.multicam ? angleTrackOf(view, c) : undefined
+        out.push(...mediaDrawnAt(view, nf, `${prefix}${c.id}>`, level + 1, angle))
+      } else out.push({ clip: c, local: l, view: project, key: renderKey(c, prefix) })
+    }
+  }
+  return out
 }

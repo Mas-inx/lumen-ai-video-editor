@@ -5,9 +5,9 @@
  */
 import { activeRegions, activeRegionsStreamed, isAudible, isLongAudio, loadAudio } from '@/engine/audio-engine'
 import { speechScript } from '@/engine/audio'
-import { clipEnd, clipsOnTrack } from './ops'
-import { TITLE_PRESETS } from './presets'
+import { clipEnd } from './ops'
 import { dispatch, getProject, useEditor } from './store'
+import { layCaptions } from './subtitles'
 import { consumed, localForSource } from './timing'
 import type { Clip, Project } from './types'
 
@@ -275,7 +275,6 @@ export function untranscribed(project: Project) {
 /** Lays captions from every transcribed speech clip on a Captions track (replacing previous captions). */
 export function addCaptions(opts: { maxWords?: number; size?: number; y?: number; uppercase?: boolean } = {}) {
   const project = getProject()
-  const fps = project.settings.fps
   const maxWords = opts.maxWords ?? 6
   const lines: { start: number; end: number; text: string }[] = []
   for (const clip of voiceClips(project)) {
@@ -298,44 +297,7 @@ export function addCaptions(opts: { maxWords?: number; size?: number; y?: number
     }
   }
   if (!lines.length) return { added: 0, trackId: null as string | null }
-  const preset = TITLE_PRESETS.find((t) => t.id === 'subtitle') ?? TITLE_PRESETS[0]
-  const size = opts.size ?? Math.round(Math.min(project.settings.width, project.settings.height) * 0.045)
-  const y = opts.y ?? Math.round(project.settings.height * 0.36)
-  const ids: string[] = []
-  let trackId = project.tracks.find((t) => t.role === 'captions')?.id ?? null
-  useEditor.getState().transaction('Add captions', 'ai', () => {
-    if (trackId) {
-      const existing = clipsOnTrack(getProject(), trackId).map((c) => c.id)
-      if (existing.length) dispatch('clip.delete', { ids: existing }, ai)
-    } else {
-      const res = dispatch('track.add', { kind: 'video', name: 'Captions', index: 0, role: 'captions' }, ai)
-      trackId = res.ok ? (res.result as string) : null
-    }
-    if (!trackId) return
-    lines.sort((a, b) => a.start - b.start)
-    for (let i = 0; i < lines.length; i++) {
-      const l = lines[i]
-      const next = lines[i + 1]
-      const end = Math.min(next ? next.start : Infinity, Math.max(l.end, l.start + Math.round(fps * 0.5)))
-      const res = dispatch(
-        'clip.add',
-        {
-          trackId,
-          kind: 'text',
-          start: l.start,
-          duration: Math.max(2, end - l.start),
-          name: l.text,
-          patch: {
-            text: { ...preset.text, content: l.text, size, uppercase: opts.uppercase ?? false },
-            transform: { y },
-            animation: { in: { preset: 'fade', duration: 3 }, out: { preset: 'fade', duration: 3 } },
-          },
-        },
-        ai,
-      )
-      if (res.ok) ids.push(res.result as string)
-    }
-  })
+  const { ids, trackId } = layCaptions(lines, { label: 'Add captions', source: 'ai', size: opts.size, y: opts.y, uppercase: opts.uppercase })
   return { added: ids.length, trackId }
 }
 
@@ -401,18 +363,19 @@ export async function duckMusic(opts: { depth?: number; musicClipIds?: string[];
  * Changes the canvas size and reframes: media that filled the old frame is
  * scaled to fill the new one (centered crop), titles move and resize proportionally.
  */
-export function reframe(width: number, height: number) {
+export function reframe(width: number, height: number, source: 'user' | 'ai' = 'ai') {
+  const how = { source }
   const project = getProject()
   const { width: W0, height: H0 } = project.settings
   if (W0 === width && H0 === height) return { changed: false }
   const sx = width / W0
   const sy = height / H0
   const textScale = Math.sqrt(Math.min(sx, sy) * Math.max(Math.min(sx, sy), 0.5))
-  useEditor.getState().transaction(`Canvas ${width}×${height}`, 'ai', () => {
-    dispatch('project.update', { settings: { width, height } }, ai)
+  useEditor.getState().transaction(`Canvas ${width}×${height}`, source, () => {
+    dispatch('project.update', { settings: { width, height } }, how)
     for (const c of Object.values(getProject().clips)) {
       if (c.kind === 'text') {
-        dispatch('clip.update', { ids: [c.id], patch: { transform: { x: Math.round(c.transform.x * sx), y: Math.round(c.transform.y * sy) }, text: { size: Math.round((c.text?.size ?? 96) * textScale) } } }, ai)
+        dispatch('clip.update', { ids: [c.id], patch: { transform: { x: Math.round(c.transform.x * sx), y: Math.round(c.transform.y * sy) }, text: { size: Math.round((c.text?.size ?? 96) * textScale) } } }, how)
       } else if ((c.kind === 'video' || c.kind === 'image') && c.assetId) {
         const asset = getProject().assets[c.assetId]
         if (!asset?.width || !asset.height || Math.abs(c.transform.scale - 1) > 0.001 || asset.alpha) continue
@@ -422,7 +385,7 @@ export function reframe(width: number, height: number) {
         if (Math.abs(containOld - coverOld) / coverOld > 0.02) continue
         const containNew = Math.min(width / asset.width, height / asset.height)
         const coverNew = Math.max(width / asset.width, height / asset.height)
-        dispatch('clip.update', { ids: [c.id], patch: { transform: { scale: Math.round((coverNew / containNew) * 1000) / 1000, x: Math.round(c.transform.x * sx), y: Math.round(c.transform.y * sy) } } }, ai)
+        dispatch('clip.update', { ids: [c.id], patch: { transform: { scale: Math.round((coverNew / containNew) * 1000) / 1000, x: Math.round(c.transform.x * sx), y: Math.round(c.transform.y * sy) } } }, how)
       }
     }
   })

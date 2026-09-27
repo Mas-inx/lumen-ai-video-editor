@@ -80,6 +80,22 @@ export interface ExportHandle {
   path: string
 }
 
+/** A destination chosen now and written later (the render queue). */
+export interface ExportTarget {
+  token: string
+  path: string
+  /** An image sequence: a folder of numbered frames. */
+  folder: boolean
+}
+
+export interface ExportRequest {
+  defaultName: string
+  extension: string
+  filterName: string
+  /** An image sequence: frames go into a folder of their own. */
+  folder?: boolean
+}
+
 /**
  * Updates from the GitHub Releases page.
  * unsupported — a development build (only the installed app updates itself).
@@ -129,6 +145,11 @@ export const APP_IPC = {
   closeWindow: 'lumen:app:close-window',
 
   exportBegin: 'lumen:export:begin',
+  exportPick: 'lumen:export:pick',
+  exportOpen: 'lumen:export:open',
+  exportForget: 'lumen:export:forget',
+  exportFrame: 'lumen:export:frame',
+  exportSidecar: 'lumen:export:sidecar',
   exportWrite: 'lumen:export:write',
   exportFinish: 'lumen:export:finish',
   exportAbort: 'lumen:export:abort',
@@ -201,9 +222,18 @@ export interface AppAPI {
     onCollectProgress(cb: (p: CollectProgress) => void): () => void
   }
   export: {
-    /** Save dialog for an export. Null if cancelled. */
-    begin(opts: { defaultName: string; extension: string; filterName: string }): Promise<ExportHandle | null>
+    /** Save dialog (or folder picker, for image sequences) and open the file. Null if cancelled. */
+    begin(opts: ExportRequest): Promise<ExportHandle | null>
+    /** Only asks where an export goes; `open` it when it's time to write. Null if cancelled. */
+    pick(opts: ExportRequest): Promise<ExportTarget | null>
+    open(token: string): Promise<ExportHandle>
+    /** Lets go of a picked destination that won't be written. */
+    forget(token: string): Promise<void>
     write(id: string, position: number, data: Uint8Array): Promise<void>
+    /** One numbered PNG of an image-sequence export (index from 0). */
+    writeFrame(id: string, index: number, data: Uint8Array): Promise<void>
+    /** Captions (.srt / .vtt) saved next to a file exported this session. Returns the caption file's path. */
+    sidecar(exportPath: string, extension: 'srt' | 'vtt', text: string): Promise<string>
     finish(id: string): Promise<{ path: string; size: number }>
     /** Stops an export and deletes the partial file. */
     abort(id: string): Promise<void>

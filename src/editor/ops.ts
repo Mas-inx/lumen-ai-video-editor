@@ -34,7 +34,15 @@ export function trackAccepts(track: Pick<Track, 'kind'>, kind: ClipKind) {
 }
 
 /** Source length in project frames (Infinity for stills, titles and adjustment layers). */
-export function sourceFrames(p: Project, clip: Pick<Clip, 'assetId'>): number {
+export function sourceFrames(p: Project, clip: Pick<Clip, 'assetId' | 'sequenceId'>): number {
+  if (clip.sequenceId) {
+    // A nested timeline runs as long as its last clip (in this timeline's frames).
+    const seq = p.sequences?.[clip.sequenceId]
+    if (!seq) return Infinity
+    let end = 0
+    for (const c of Object.values(seq.clips)) end = Math.max(end, clipEnd(c))
+    return Math.max(1, Math.floor((end / seq.settings.fps) * p.settings.fps))
+  }
   if (!clip.assetId) return Infinity
   const asset = p.assets[clip.assetId]
   if (!asset || asset.duration === undefined) return Infinity
@@ -226,6 +234,7 @@ export function setClipStart(clip: Clip, frame: Frame) {
   clip.start += delta
   clip.duration -= delta
   shiftKeyframes(clip, -delta)
+  shiftFollow(clip, -delta)
 }
 
 /** Moves a clip's end edge to `frame` (no bounds checks). */
@@ -271,6 +280,12 @@ export function rippleTrimClip(p: Project, clip: Clip, edge: 'start' | 'end', fr
   if (change) for (const c of later) c.start = Math.max(0, c.start + change)
 }
 
+/** Tracked paths are in clip frames: they move with the clip's head. */
+function shiftFollow(clip: Clip, by: number) {
+  if (clip.follow) clip.follow.start += by
+  for (const m of clip.masks ?? []) if (m.follow) m.follow.start += by
+}
+
 function shiftKeyframes(clip: Clip, by: number) {
   for (const prop of ANIMATABLE) {
     const kfs = clip.keyframes[prop]
@@ -297,6 +312,7 @@ export function splitClip(p: Project, clip: Clip, frame: Frame): Clip | null {
   right.transitionIn = null
   right.animation.in = { ...right.animation.in, preset: 'none' }
   right.audio.fadeIn = 0
+  shiftFollow(right, -leftDuration)
 
   // Keyframes: both halves keep an exact keyframe at the cut so motion is continuous.
   right.keyframes = {}

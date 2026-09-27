@@ -21,9 +21,9 @@ export const CANVAS_PRESETS: CanvasPreset[] = [
 
 export const FRAME_RATES = [24, 25, 30, 50, 60]
 
-/** A blank project with the standard track layout: titles and overlays over a magnetic main track, then audio. */
-export function createEmptyProject(name = 'Untitled', settings: Partial<ProjectSettings> = {}): Project {
-  const tracks = [
+/** The standard track layout: titles and overlays over a magnetic main track, then audio. */
+export function defaultTracks() {
+  return [
     createTrack('video', { name: 'Titles', role: 'titles', height: TRACK_HEIGHTS.titles }),
     createTrack('video', { name: 'Overlay', height: TRACK_HEIGHTS.video }),
     createTrack('video', { name: 'Main', role: 'main', height: TRACK_HEIGHTS.main }),
@@ -31,6 +31,11 @@ export function createEmptyProject(name = 'Untitled', settings: Partial<ProjectS
     createTrack('audio', { name: 'Music', height: TRACK_HEIGHTS.audio }),
     createTrack('audio', { name: 'Sound effects', height: TRACK_HEIGHTS.sfx }),
   ]
+}
+
+/** A blank project with the standard track layout. */
+export function createEmptyProject(name = 'Untitled', settings: Partial<ProjectSettings> = {}): Project {
+  const tracks = defaultTracks()
   return {
     id: uid('proj'),
     name,

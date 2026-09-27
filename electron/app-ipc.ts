@@ -2,7 +2,7 @@ import { BrowserWindow, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } fr
 import { APP_IPC, type MediaFolder } from '../shared/app'
 import path from 'node:path'
 import { collectProject } from './collect'
-import { abortExport, beginExport, beginFile, finishExport, writeExport } from './export'
+import { abortExport, beginExport, beginFile, finishExport, forgetPicked, openPicked, pickExport, writeExport, writeFrame, writeSidecar, type ExportRequest } from './export'
 import { mediaRoot } from './integrations/paths'
 import { listVersions } from './versions'
 import { openPath, pickMedia, register, relink, reveal, saveMedia, urlForPath } from './files'
@@ -71,11 +71,17 @@ export function registerAppIpc(isTrustedUrl: (url: string) => boolean, getStartu
   on(APP_IPC.projectState, (win, state: unknown) => setProjectState(win, (state ?? {}) as Record<string, unknown>))
   on(APP_IPC.closeWindow, (win) => closeNow(win))
 
-  handle(APP_IPC.exportBegin, (win, opts: unknown) => {
-    const o = (opts ?? {}) as { defaultName?: unknown; extension?: unknown; filterName?: unknown }
-    return beginExport(win, { defaultName: str(o.defaultName), extension: str(o.extension), filterName: str(o.filterName) })
-  })
+  const request = (opts: unknown): ExportRequest => {
+    const o = (opts ?? {}) as { defaultName?: unknown; extension?: unknown; filterName?: unknown; folder?: unknown }
+    return { defaultName: str(o.defaultName), extension: str(o.extension), filterName: str(o.filterName), folder: o.folder === true }
+  }
+  handle(APP_IPC.exportBegin, (win, opts: unknown) => beginExport(win, request(opts)))
+  handle(APP_IPC.exportPick, (win, opts: unknown) => pickExport(win, request(opts)))
+  handle(APP_IPC.exportOpen, (_win, token: unknown) => openPicked(str(token)))
+  handle(APP_IPC.exportForget, (_win, token: unknown) => forgetPicked(str(token)))
   handle(APP_IPC.exportWrite, (_win, id: unknown, position: unknown, data: unknown) => writeExport(str(id), Number(position), data as Uint8Array))
+  handle(APP_IPC.exportFrame, (_win, id: unknown, index: unknown, data: unknown) => writeFrame(str(id), Number(index), data as Uint8Array))
+  handle(APP_IPC.exportSidecar, (_win, file: unknown, ext: unknown, text: unknown) => writeSidecar(str(file), str(ext), str(text)))
   handle(APP_IPC.exportFinish, (_win, id: unknown) => finishExport(str(id)))
   handle(APP_IPC.exportAbort, (_win, id: unknown) => abortExport(str(id)))
   on(APP_IPC.exportProgress, (win, value: unknown) => {

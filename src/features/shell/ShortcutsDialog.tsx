@@ -3,7 +3,7 @@ import { Kbd } from '@/components/ui/kbd'
 import { useUI } from '@/editor/ui-store'
 import { SHORTCUTS, type Shortcut } from './shortcuts'
 
-const GROUPS: Shortcut['group'][] = ['Playback', 'Editing', 'Tools', 'View', 'App']
+const GROUPS: Shortcut['group'][] = ['Playback', 'Editing', 'Multicam', 'Tools', 'View', 'App']
 
 export function ShortcutsDialog() {
   const open = useUI((s) => s.shortcutsOpen)

@@ -12,6 +12,7 @@ export type DragPayload =
   | { type: 'transition'; kind: TransitionKind }
   | { type: 'look'; lookId: string }
   | { type: 'sfx'; sfxId: string }
+  | { type: 'sequence'; sequenceId: string }
 
 const MIME = 'application/x-lumen'
 let current: DragPayload | null = null

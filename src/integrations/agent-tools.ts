@@ -8,6 +8,7 @@ import type { BridgeToolResult, Job } from '@shared/integrations'
 import { commands, toolDefinitions, type CommandName } from '@/editor/commands'
 import { clipEnd, projectDuration } from '@/editor/ops'
 import { placeAsset } from '@/editor/placement'
+import { allSequences, openSequenceId, openSequenceName } from '@/editor/sequences'
 import { playback, usePlayback } from '@/editor/playback'
 import { dispatch, getProject } from '@/editor/store'
 import { useUI } from '@/editor/ui-store'
@@ -23,6 +24,7 @@ import { requestApproval } from './approvals'
 import { api, elevenMusic, elevenSfx, elevenSpeak, generateImage, generateVideo, importLink, loadGenModels, renderBlender, renderMotion, useGenModels, useIntegrations, type GenProvider } from './store'
 import { CONTROL_TOOLS } from './tools/control'
 import { emitToolImages } from './tools/events'
+import { FOOTAGE_TOOLS } from './tools/footage'
 import { INSPECT_TOOLS } from './tools/inspect'
 import { bool, num, obj, str, WithImages, type AgentTool } from './tools/kit'
 import { VISION_TOOLS } from './tools/vision'
@@ -131,12 +133,19 @@ function projectSummary() {
         ...(c.crop ? { cropped: true } : {}),
         ...(c.masks?.length ? { masks: c.masks.length } : {}),
         ...(c.color.lut ? { lut: c.color.lut.id } : {}),
+        ...(c.sequenceId ? { plays_timeline: c.sequenceId } : {}),
+        ...(c.sequenceId && p.sequences?.[c.sequenceId]?.multicam ? { multicam_angle: Math.max(1, p.sequences[c.sequenceId].tracks.filter((t) => t.kind === 'video').findIndex((t) => t.id === c.angle) + 1) } : {}),
+        ...(c.follow ? { follows_tracked_motion: true } : {}),
+        ...(c.stabilize ? { stabilized: true } : {}),
       }))
   const duration = projectDuration(p)
+  const timelines = allSequences(p)
   return {
     name: p.name,
     file: useSession.getState().path,
     unsaved_changes: isDirty(),
+    timeline: { id: openSequenceId(p), name: openSequenceName(p), ...(p.sequence?.multicam ? { multicam: true } : {}) },
+    ...(timelines.length > 1 ? { other_timelines: timelines.filter((s) => s.id !== openSequenceId(p)).map((s) => ({ id: s.id, name: s.name, ...(s.multicam ? { multicam: true } : {}) })) } : {}),
     settings: p.settings,
     duration_frames: duration,
     duration_seconds: Math.round((duration / fps) * 100) / 100,
@@ -193,7 +202,7 @@ const MATERIALS = ['chrome', 'gold', 'glass', 'plastic', 'neon', 'clay', 'matte'
 const INTEGRATION_TOOLS: AgentTool[] = [
   {
     name: 'get_project',
-    description: 'Everything about the open project: settings (fps!), tracks with their clips (frames), media library, markers, playhead and selection. Call this before editing.',
+    description: 'Everything about the open project and its open timeline: settings (fps!), tracks with their clips (frames), media library, markers, playhead and selection, and the other timelines. Call this before editing.',
     inputSchema: obj({}),
     run: async () => projectSummary(),
   },
@@ -612,7 +621,7 @@ function editorTools(): AgentTool[] {
 
 let cache: AgentTool[] | null = null
 export function agentTools(): AgentTool[] {
-  cache ??= [...INTEGRATION_TOOLS, ...VISION_TOOLS, ...INSPECT_TOOLS, ...CONTROL_TOOLS, ...editorTools()]
+  cache ??= [...INTEGRATION_TOOLS, ...VISION_TOOLS, ...INSPECT_TOOLS, ...CONTROL_TOOLS, ...FOOTAGE_TOOLS, ...editorTools()]
   return cache
 }
 

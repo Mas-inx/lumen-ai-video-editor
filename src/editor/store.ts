@@ -8,7 +8,7 @@ import { commands, CommandError, type AnyCommand, type CommandInput, type Comman
 import { DEFAULT_TEXT, DEFAULT_TRANSFORM } from './defaults'
 import { createEmptyProject } from './new-project'
 import { normalizeProject } from './ops'
-import type { Project } from './types'
+import type { Clip, Project } from './types'
 
 enablePatches()
 
@@ -64,9 +64,18 @@ export function migrateProject(p: Project): Project {
   p.assets ??= {}
   p.clips ??= {}
   p.markers ??= []
-  for (const c of Object.values(p.clips)) {
-    c.transform = { ...DEFAULT_TRANSFORM, ...c.transform }
-    if (c.kind === 'text' && c.text) c.text = { ...DEFAULT_TEXT, ...c.text }
+  const fill = (clips: Record<string, Clip>) => {
+    for (const c of Object.values(clips)) {
+      c.transform = { ...DEFAULT_TRANSFORM, ...c.transform }
+      if (c.kind === 'text' && c.text) c.text = { ...DEFAULT_TEXT, ...c.text }
+    }
+  }
+  fill(p.clips)
+  for (const seq of Object.values(p.sequences ?? {})) {
+    seq.clips ??= {}
+    seq.markers ??= []
+    seq.tracks ??= []
+    fill(seq.clips)
   }
   return p
 }

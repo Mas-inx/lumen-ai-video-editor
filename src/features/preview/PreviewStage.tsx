@@ -1,12 +1,16 @@
+import { ArrowLeft, ArrowLeftRight, ArrowRight, LoaderCircle } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { toast } from 'sonner'
 import { create } from 'zustand'
 import { FONTS } from '@/editor/defaults'
 import { setAnimatable } from '@/editor/edit'
+import { followOffset } from '@/editor/motion'
 import { clipEnd } from '@/editor/ops'
 import { usePlayback } from '@/editor/playback'
 import { dispatch, getProject, useEditor } from '@/editor/store'
 import type { Clip, Crop, Mask } from '@/editor/types'
-import { useUI } from '@/editor/ui-store'
+import { useUI, type TrackEdit } from '@/editor/ui-store'
+import { AnalysisCancelled, trackMotion, withProgress } from '@/project/analysis-actions'
 import { renderFrame, type ClipBounds } from '@/engine/compositor'
 import { onMediaReady } from '@/engine/media'
 import { useElementSize } from '@/lib/hooks'
@@ -223,9 +227,10 @@ const rot = (x: number, y: number, deg: number) => {
  * Edits a mask on the canvas: drag inside to move it, the edges and corners to
  * resize it (the opposite side stays put), the top knob to rotate it.
  */
-function MaskGizmo({ clip, mask, layer, pw, ph, scale }: { clip: Clip; mask: Mask; layer: NonNullable<ClipBounds['layer']>; pw: number; ph: number; scale: number }) {
-  // The mask lives in the clip's full-frame layer; place it in project pixels.
-  const offset = rot((mask.x - 0.5) * pw * layer.scale, (mask.y - 0.5) * ph * layer.scale, layer.rotation)
+function MaskGizmo({ clip, mask, layer, pw, ph, scale, frame }: { clip: Clip; mask: Mask; layer: NonNullable<ClipBounds['layer']>; pw: number; ph: number; scale: number; frame: number }) {
+  // The mask lives in the clip's full-frame layer (moved along its tracked path); place it in project pixels.
+  const [fx, fy] = mask.follow ? followOffset(mask.follow, frame - clip.start) : [0, 0]
+  const offset = rot((mask.x + fx - 0.5) * pw * layer.scale, (mask.y + fy - 0.5) * ph * layer.scale, layer.rotation)
   const cx = layer.cx + offset.x
   const cy = layer.cy + offset.y
   const w = mask.width * pw * layer.scale
@@ -323,6 +328,109 @@ function MaskGizmo({ clip, mask, layer, pw, ph, scale }: { clip: Clip; mask: Mas
   )
 }
 
+// ─── Tracking box ────────────────────────────────────────────────────────
+
+type BoxHandle = 'move' | 'nw' | 'ne' | 'sw' | 'se'
+
+/**
+ * The box to track: drag it over what the clip (or mask) should follow, then
+ * track forwards, backwards or both ways from the playhead.
+ */
+function TrackGizmo({ edit, pw, ph, scale }: { edit: TrackEdit; pw: number; ph: number; scale: number }) {
+  const [busy, setBusy] = useState(false)
+  const { box } = edit
+
+  const startDrag = (e: ReactPointerEvent, handle: BoxHandle) => {
+    if (busy) return
+    e.stopPropagation()
+    e.preventDefault()
+    const start = { ...box }
+    const x0 = e.clientX
+    const y0 = e.clientY
+    const move = (ev: PointerEvent) => {
+      const dx = (ev.clientX - x0) / scale
+      const dy = (ev.clientY - y0) / scale
+      const next = { ...start }
+      const min = 12
+      if (handle === 'move') {
+        next.x = Math.max(-start.w / 2, Math.min(pw - start.w / 2, start.x + dx))
+        next.y = Math.max(-start.h / 2, Math.min(ph - start.h / 2, start.y + dy))
+      } else {
+        if (handle.includes('w')) {
+          next.x = Math.min(start.x + start.w - min, start.x + dx)
+          next.w = start.w - (next.x - start.x)
+        }
+        if (handle.includes('e')) next.w = Math.max(min, start.w + dx)
+        if (handle.includes('n')) {
+          next.y = Math.min(start.y + start.h - min, start.y + dy)
+          next.h = start.h - (next.y - start.y)
+        }
+        if (handle.includes('s')) next.h = Math.max(min, start.h + dy)
+      }
+      const current = useUI.getState().trackEdit
+      if (current) useUI.getState().setTrackEdit({ ...current, box: next })
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
+  const run = async (direction: 'forward' | 'backward' | 'both') => {
+    const current = useUI.getState().trackEdit
+    if (!current || busy) return
+    const b = current.box
+    setBusy(true)
+    try {
+      const r = await withProgress('Tracking', (onProgress, signal) =>
+        trackMotion({ targetId: current.clipId, maskId: current.maskId, box: { x: b.x + b.w / 2 - pw / 2, y: b.y + b.h / 2 - ph / 2, width: b.w, height: b.h }, direction }, onProgress, signal),
+      )
+      toast.success(`Tracked ${r.frames} frames`, { description: r.lost ? 'It lost sight of the point before the end — move the playhead there and track again to go on.' : undefined })
+      useUI.getState().setTrackEdit(null)
+    } catch (err) {
+      if (!(err instanceof AnalysisCancelled)) toast.error('Couldn’t track that', { description: err instanceof Error ? err.message : String(err) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const knob = (h: BoxHandle, className: string, cursor: string) => (
+    <span key={h} onPointerDown={(e) => startDrag(e, h)} className={cn('absolute z-10 size-2.5 rounded-[3px] border-[1.5px] border-accent bg-white shadow-[0_1px_4px_rgb(0_0_0/0.5)]', className)} style={{ cursor }} />
+  )
+  const btn = 'flex h-7 items-center gap-1.5 rounded-full px-2.5 text-xs font-semibold transition-colors disabled:opacity-50'
+
+  return (
+    <>
+      <div className="absolute cursor-move" onPointerDown={(e) => startDrag(e, 'move')} style={{ left: box.x * scale, top: box.y * scale, width: box.w * scale, height: box.h * scale }}>
+        <div className="pointer-events-none absolute inset-0 rounded-[2px] border-[1.5px] border-accent shadow-[0_0_0_9999px_rgb(0_0_0/0.3)]" />
+        <span className="pointer-events-none absolute top-1/2 left-1/2 h-3 w-px -translate-x-1/2 -translate-y-1/2 bg-accent" />
+        <span className="pointer-events-none absolute top-1/2 left-1/2 h-px w-3 -translate-x-1/2 -translate-y-1/2 bg-accent" />
+        {knob('nw', '-top-[5px] -left-[5px]', 'nwse-resize')}
+        {knob('ne', '-top-[5px] -right-[5px]', 'nesw-resize')}
+        {knob('sw', '-bottom-[5px] -left-[5px]', 'nesw-resize')}
+        {knob('se', '-right-[5px] -bottom-[5px]', 'nwse-resize')}
+      </div>
+      <div onPointerDown={(e) => e.stopPropagation()} className="popover absolute top-2 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full p-1 shadow-[0_6px_20px_-6px_rgb(0_0_0/0.8)]">
+        <span className="px-2 text-2xs font-medium whitespace-nowrap text-fg-3">{busy ? 'Tracking…' : `Box what the ${edit.maskId ? 'mask' : 'clip'} should follow`}</span>
+        <button type="button" disabled={busy} onClick={() => void run('backward')} className={cn(btn, 'text-fg-2 hover:bg-white/[0.08] hover:text-fg')} title="Track back from the playhead">
+          <ArrowLeft className="size-3.5" /> Back
+        </button>
+        <button type="button" disabled={busy} onClick={() => void run('both')} className={cn(btn, 'text-fg-2 hover:bg-white/[0.08] hover:text-fg')} title="Track both ways from the playhead">
+          <ArrowLeftRight className="size-3.5" /> Both
+        </button>
+        <button type="button" disabled={busy} onClick={() => void run('forward')} className={cn(btn, 'bg-accent text-accent-fg hover:bg-accent-2')} title="Track forward from the playhead">
+          {busy ? <LoaderCircle className="size-3.5 animate-spin" /> : <ArrowRight className="size-3.5" />} Track
+        </button>
+        <button type="button" disabled={busy} onClick={() => useUI.getState().setTrackEdit(null)} className={cn(btn, 'text-fg-3 hover:bg-white/[0.08] hover:text-fg')}>
+          Cancel
+        </button>
+      </div>
+    </>
+  )
+}
+
 // ─── Transform gizmo ─────────────────────────────────────────────────────
 
 type Handle = 'move' | 'nw' | 'ne' | 'sw' | 'se' | 'rotate'
@@ -348,10 +456,11 @@ function Gizmo({ scale }: { scale: number }) {
   // Adjustment layers cover the frame untransformed; other clips report where their layer sits.
   const layer = b?.layer ?? (clip?.kind === 'adjustment' ? { cx: pw / 2, cy: ph / 2, scale: 1, rotation: 0 } : undefined)
   const masking = Boolean(mask && onScreen && layer)
+  const trackEdit = useUI((s) => s.trackEdit)
 
   const onCanvasPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     // Click-to-select: pick the top-most visible clip under the pointer.
-    if (e.target !== e.currentTarget) return
+    if (e.target !== e.currentTarget || trackEdit) return
     const r = e.currentTarget.getBoundingClientRect()
     const x = (e.clientX - r.left) / scale
     const y = (e.clientY - r.top) / scale
@@ -425,8 +534,9 @@ function Gizmo({ scale }: { scale: number }) {
       {guides.v && <div className="pointer-events-none absolute top-0 bottom-0 left-1/2 w-px bg-accent-2 shadow-[0_0_6px_var(--color-accent)]" />}
       {guides.h && <div className="pointer-events-none absolute top-1/2 right-0 left-0 h-px bg-accent-2 shadow-[0_0_6px_var(--color-accent)]" />}
       {cropping && clip && b && !playing && <CropGizmo clip={clip} b={b} scale={scale} />}
-      {masking && clip && mask && layer && !playing && <MaskGizmo clip={clip} mask={mask} layer={layer} pw={pw} ph={ph} scale={scale} />}
-      {active && b && !playing && !cropping && !masking && (
+      {trackEdit && !playing && <TrackGizmo edit={trackEdit} pw={pw} ph={ph} scale={scale} />}
+      {masking && clip && mask && layer && !playing && !trackEdit && <MaskGizmo clip={clip} mask={mask} layer={layer} pw={pw} ph={ph} scale={scale} frame={frame} />}
+      {active && b && !playing && !cropping && !masking && !trackEdit && (
         <div
           className="absolute cursor-move"
           onPointerDown={(e) => startDrag(e, 'move')}

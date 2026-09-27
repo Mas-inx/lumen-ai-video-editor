@@ -5,8 +5,10 @@ import { ContextMenu } from 'radix-ui'
 import { ContextContent, ContextItem, ContextSeparator, ContextSub } from '@/components/ui/menu'
 import { AiSparkle } from '@/components/brand'
 import { useClipboard } from '@/editor/clipboard'
-import { clipEnd, findFreeStart, isMagneticTrack, magneticLayout, projectDuration, trackAccepts } from '@/editor/ops'
-import { applyEffect, applyLook, applyTransition, assetFrames, placeAsset, placeTitle } from '@/editor/placement'
+import { clipEnd, findFreeStart, isMagneticTrack, magneticLayout, projectDuration, sourceFrames, trackAccepts } from '@/editor/ops'
+import { applyEffect, applyLook, applyTransition, assetFrames, placeAsset, placeSequence, placeTitle } from '@/editor/placement'
+import { angleTracks } from '@/editor/sequences'
+import { openTimeline } from '@/editor/timeline-nav'
 import { usePlayback } from '@/editor/playback'
 import { SPEED_RAMPS, TITLE_PRESETS } from '@/editor/presets'
 import { dispatch, getProject, useEditor } from '@/editor/store'
@@ -178,6 +180,13 @@ export function Timeline() {
       kind = 'audio'
       length = Math.round(item.duration * fps)
       label = item.name
+    } else if (payload.type === 'sequence') {
+      const seq = project.sequences?.[payload.sequenceId]
+      if (!seq) return null
+      // Dropped on an audio track, a timeline plays just its sound.
+      kind = track?.kind === 'audio' ? 'audio' : 'video'
+      length = sourceFrames(project, { sequenceId: payload.sequenceId })
+      label = seq.name
     } else return null
     const trackId = track && !track.locked && trackAccepts(track, kind) ? track.id : null
     if (trackId && isMagneticTrack(project, trackId)) {
@@ -245,6 +254,9 @@ export function Timeline() {
         break
       case 'title':
         select(placeTitle(payload.presetId, ghost?.start ?? frame, { trackId: ghost?.trackId ?? undefined }))
+        break
+      case 'sequence':
+        select(placeSequence(payload.sequenceId, ghost?.start ?? frame, { trackId: ghost?.trackId ?? undefined }))
         break
       case 'sfx': {
         try {
@@ -408,6 +420,7 @@ const SPEEDS = [0.25, 0.5, 1, 1.5, 2, 4]
 
 function TimelineMenu({ clipId, frame }: { clipId: string | null; frame: number }) {
   const clip = useEditor((s) => (clipId ? s.project.clips[clipId] : undefined))
+  const nested = useEditor((s) => (clip?.sequenceId ? s.project.sequences?.[clip.sequenceId] : undefined))
   const range = useEditor((s) => s.project.range)
   const canPaste = useClipboard((s) => Boolean(s.data?.clips.length))
   const selection = () => useUI.getState().selection
@@ -477,6 +490,44 @@ function TimelineMenu({ clipId, frame }: { clipId: string | null; frame: number 
         <ContextItem shortcut="x" onSelect={actions.markSelection}>
           Mark in and out around clip
         </ContextItem>
+        <ContextSeparator />
+        {nested?.multicam && (
+          <ContextSub label="Camera angle">
+            {angleTracks(nested).map((t, i) => (
+              <ContextItem key={t.id} shortcut={i < 9 ? String(i + 1) : undefined} onSelect={() => dispatch('clip.update', { ids: [clip.id], patch: { angle: t.id } })}>
+                {t.name} {(clip.angle ?? angleTracks(nested)[0]?.id) === t.id && <span className="text-accent-2">•</span>}
+              </ContextItem>
+            ))}
+          </ContextSub>
+        )}
+        {clip.sequenceId ? (
+          <>
+            <ContextItem shortcut="mod+alt+enter" onSelect={() => openTimeline(clip.sequenceId!, true)}>
+              Open {nested?.multicam ? 'multicam' : 'nested'} timeline
+            </ContextItem>
+            <ContextItem onSelect={actions.unnestSelection}>Break apart</ContextItem>
+          </>
+        ) : (
+          <ContextItem shortcut="mod+alt+n" onSelect={actions.nestSelection}>
+            Nest into a timeline
+          </ContextItem>
+        )}
+        {clip.kind === 'video' && clip.assetId && !clip.freeze && (
+          <ContextSub label="Scene cuts">
+            <ContextItem onSelect={() => void actions.detectScenes('split')}>Split at scene cuts</ContextItem>
+            <ContextItem onSelect={() => void actions.detectScenes('markers')}>Add markers at scene cuts</ContextItem>
+          </ContextSub>
+        )}
+        {clip.kind === 'video' && clip.assetId && !clip.freeze &&
+          (clip.stabilize ? (
+            <ContextItem onSelect={() => dispatch('clip.update', { ids: [clip.id], patch: { stabilize: null } })}>Remove stabilization</ContextItem>
+          ) : (
+            <ContextItem onSelect={() => void actions.stabilize(clip.id)}>Stabilize</ContextItem>
+          ))}
+        {clip.kind !== 'audio' && clip.kind !== 'adjustment' && (
+          <ContextItem onSelect={() => actions.trackMotion(clip.id)}>{clip.follow ? 'Track motion again…' : 'Track motion…'}</ContextItem>
+        )}
+        {clip.follow && <ContextItem onSelect={() => dispatch('clip.update', { ids: [clip.id], patch: { follow: null } })}>Stop following</ContextItem>}
         <ContextSeparator />
         <ContextItem icon={<AiSparkle />} onSelect={() => askCopilotAbout(clip.id)}>
           Ask Copilot about this clip

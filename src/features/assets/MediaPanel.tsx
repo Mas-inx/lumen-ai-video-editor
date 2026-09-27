@@ -1,4 +1,4 @@
-import { AudioLines, Captions, FolderSearch, Gauge, Heart, Image as ImageIcon, Link2, Pause, Play, Plus, Trash, TriangleAlert, Upload } from 'lucide-react'
+import { AudioLines, Captions, FolderSearch, Gauge, Heart, Image as ImageIcon, Link2, Pause, Play, Plus, Trash, TriangleAlert, Upload, Video } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useMemo, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { useShallow } from 'zustand/react/shallow'
@@ -20,6 +20,7 @@ import { cancelProxy, canProxy, makeProxy, removeProxy, useProxyJobs } from '@/p
 import { canTranscribe, ensureTranscripts, TRANSCRIBER_NAMES, transcribers } from '@/project/transcribe'
 import { FrameCanvas, stripFrame, useFilmstrip } from './frames'
 import { assetThumb, Chip, MiniWave, PanelHeader, scrollArea, SectionLabel } from './shared'
+import { TimelinesSection } from './TimelinesSection'
 
 type Filter = 'all' | AssetKind
 
@@ -86,6 +87,7 @@ export function MediaPanel() {
       </div>
 
       <div className={scrollArea}>
+        <TimelinesSection query={query} />
         {!assets.length && <EmptyDrop />}
         {visual.length > 0 && (
           <>
@@ -183,6 +185,11 @@ function AssetMenu({ asset, children }: { asset: Asset; children: ReactNode }) {
         {canTranscribe(asset) && (
           <ContextItem icon={<Captions />} onSelect={transcribe}>
             {asset.transcript?.length ? 'Transcribe again' : 'Transcribe'} · {TRANSCRIBER_NAMES[transcribers()[0]]}
+          </ContextItem>
+        )}
+        {asset.kind === 'video' && !missing(asset) && (
+          <ContextItem icon={<Video />} onSelect={() => useUI.getState().setMulticam({ assetIds: [asset.id] })}>
+            Make a multicam clip…
           </ContextItem>
         )}
         {path && desktop && !missing(asset) && (

@@ -8,10 +8,11 @@ import type { MediaFileInfo } from '@shared/app'
 import { dispatch, getProject, useEditor } from '@/editor/store'
 import type { Asset } from '@/editor/types'
 import { useUI } from '@/editor/ui-store'
-import { audioSourceUrl, computePeaks, computePeaksStreamed, isLongAudio, loadAudio, pruneAudio } from '@/engine/audio-engine'
+import { audioLeaves, audioSourceUrl, computePeaks, computePeaksStreamed, isLongAudio, loadAudio, pruneAudio } from '@/engine/audio-engine'
 import { kindFromMime, MediaError, probeMedia } from '@/engine/decode'
 import { uid } from '@/lib/id'
 import { desktop } from '@/lib/platform'
+import { loadSubtitleFile } from './subtitle-files'
 
 const stripExtension = (name: string) => name.replace(/\.[^.]+$/, '')
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
@@ -99,6 +100,11 @@ export async function pickAndImport() {
 
 /** Files (or folders) dropped from Explorer / Finder. */
 export async function importDropped(files: File[]): Promise<Asset[]> {
+  // Subtitle files become captions rather than media.
+  const subs = files.filter((f) => /\.(srt|vtt)$/i.test(f.name))
+  for (const f of subs) await loadSubtitleFile(f)
+  files = files.filter((f) => !subs.includes(f))
+  if (!files.length) return []
   if (!desktop) {
     toast.error('Importing files needs the Lumen desktop app.')
     return []
@@ -176,10 +182,11 @@ export async function analyzeAssets(ids?: string[], force = false) {
   releaseUnusedAudio()
 }
 
-/** Keeps decoded audio only for media that's actually on the timeline. */
+/** Keeps decoded audio only for media that's actually on the timeline (nested timelines included). */
 export function releaseUnusedAudio() {
+  const project = getProject()
   const used = new Set(
-    Object.values(getProject().clips)
+    [...Object.values(project.clips), ...audioLeaves(project).map((l) => l.clip)]
       .map((c) => c.assetId)
       .filter((id): id is string => Boolean(id)),
   )

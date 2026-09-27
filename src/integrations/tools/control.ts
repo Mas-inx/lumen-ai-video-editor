@@ -10,7 +10,10 @@ import { playback, usePlayback } from '@/editor/playback'
 import { TITLE_PRESETS } from '@/editor/presets'
 import { dispatch, getProject, rollbackTo, savepoint, useEditor } from '@/editor/store'
 import { useUI } from '@/editor/ui-store'
-import { CODECS_FOR, codecSupport, ExportCancelled, exportRunning, FORMAT_INFO, runExport, type ExportFormat, type ExportVideoCodec } from '@/engine/export'
+import { openSequenceName, withSequenceOpen } from '@/editor/sequences'
+import { timelineCues } from '@/editor/subtitles'
+import { canAlpha, CODECS_FOR, codecSupport, ExportCancelled, exportRunning, FORMAT_INFO, runExport, type ExportFormat, type ExportSettings, type ExportVideoCodec } from '@/engine/export'
+import { queueExport } from '@/engine/render-queue'
 import { desktop } from '@/lib/platform'
 import { saveProject, saveProjectAs, useSession } from '@/project/session'
 import { bool, clampNum, int, list, num, number, obj, oneOf, seconds, str, text, toFrame, trackById, type AgentTool } from './kit'
@@ -226,9 +229,14 @@ export const CONTROL_TOOLS: AgentTool[] = [
   {
     name: 'export_video',
     description:
-      'Export the edit to a video (or audio) file. The user chooses where to save it in a Save dialog — nothing is written without them — and sees progress with a Cancel button. Waits for the export and returns the file path. Renders the whole timeline unless from_seconds / to_seconds are given. loudness_lufs normalizes the mix to a target (−14 for YouTube and Spotify, −16 for Apple and podcasts, −23 for broadcast), with peaks held under −1 dBFS.',
+      'Export the edit to a video (or audio) file. The user chooses where to save it in a Save dialog — nothing is written without them — and sees progress with a Cancel button. Waits for the export and returns the file path. Renders the open timeline (or timeline_id) whole unless from_seconds / to_seconds are given. loudness_lufs normalizes the mix to a target (−14 for YouTube and Spotify, −16 for Apple and podcasts, −23 for broadcast), with peaks held under −1 dBFS. png exports a folder of numbered frames; transparent keeps the alpha channel (png, or webm with vp9). captions_file saves the captions as .srt / .vtt next to the video; burn_captions false leaves them out of the picture. queue true adds it to the render queue instead of rendering now (see render_queue).',
     inputSchema: obj({
-      format: oneOf('File type (default mp4)', ['mp4', 'mov', 'webm', 'gif', 'wav', 'm4a']),
+      format: oneOf('File type (default mp4)', ['mp4', 'mov', 'webm', 'gif', 'png', 'wav', 'm4a']),
+      timeline_id: str('Export this timeline instead of the open one (ids from list_timelines)'),
+      transparent: bool('Keep transparency: png frames, or webm with the vp9 codec'),
+      captions_file: oneOf('Also save the captions as a subtitle file next to it', ['srt', 'vtt']),
+      burn_captions: bool('Draw the captions into the picture (default true)'),
+      queue: bool('Add to the render queue instead of rendering now'),
       resolution: int('Output size by its short side (default: the project’s own size)', { enum: [2160, 1440, 1080, 720, 480] }),
       fps: int('Frame rate (default: the project’s)', { enum: [24, 25, 30, 50, 60] }),
       quality: int('10–100 (default 72; 85+ is master quality)', { minimum: 10, maximum: 100 }),
@@ -240,8 +248,9 @@ export const CONTROL_TOOLS: AgentTool[] = [
     }),
     run: async (a) => {
       if (!desktop) throw new Error('Exporting needs the desktop app.')
-      if (exportRunning()) throw new Error('An export is already running — wait for it to finish, then try again.')
-      const p = getProject()
+      const queue = a.queue === true
+      if (!queue && exportRunning()) throw new Error('An export is already running — wait for it to finish, then try again (or pass queue: true).')
+      const p = text(a, 'timeline_id') ? withSequenceOpen(getProject(), text(a, 'timeline_id')!) : getProject()
       const end = projectDuration(p)
       if (end <= 0) throw new Error('The timeline is empty — add some clips first.')
       const format = (text(a, 'format') ?? 'mp4') as ExportFormat
@@ -260,16 +269,39 @@ export const CONTROL_TOOLS: AgentTool[] = [
         width = 720
       }
       let codec: ExportVideoCodec = 'avc'
+      const transparent = a.transparent === true
+      if (transparent && format !== 'png' && format !== 'webm') throw new Error('Transparency needs format png or webm.')
       if (format === 'mp4' || format === 'mov' || format === 'webm') {
         const support = await codecSupport(width, height, fps, true)
-        const wanted = text(a, 'codec') as ExportVideoCodec | undefined
+        const wanted = (transparent ? 'vp9' : text(a, 'codec')) as ExportVideoCodec | undefined
         const options = CODECS_FOR[format]
         if (wanted && !options.includes(wanted)) throw new Error(`${info.label} can’t carry ${wanted}; use one of ${options.join(', ')}.`)
         const pick = [wanted, ...options].find((c) => c && support[c]) as ExportVideoCodec | undefined
         if (!pick) throw new Error(`This computer can’t encode ${info.label} at ${width}×${height} — try a smaller resolution or another format.`)
         codec = pick
       }
-      const handle = await desktop.export.begin({ defaultName: text(a, 'file_name') ?? p.name, extension: info.extension, filterName: info.filter })
+      const captions = timelineCues(p).length > 0
+      const settings: ExportSettings = {
+        format,
+        codec,
+        width,
+        height,
+        fps,
+        quality: Math.round(clampNum(number(a, 'quality') ?? 72, 10, 100)),
+        hardware: true,
+        range: [fromF, toF],
+        ...(number(a, 'loudness_lufs') !== undefined ? { loudness: { lufs: clampNum(number(a, 'loudness_lufs')!, -36, -6), peak: -1 } } : {}),
+        ...(transparent && canAlpha(format, codec) ? { alpha: true } : format === 'png' ? { alpha: false } : {}),
+        ...(captions ? { burnCaptions: a.burn_captions !== false, sidecar: (text(a, 'captions_file') as 'srt' | 'vtt' | undefined) ?? null } : {}),
+      }
+      const request = { defaultName: text(a, 'file_name') ?? p.name, extension: info.extension, filterName: info.filter, folder: Boolean(info.folder) }
+      if (queue) {
+        const target = await desktop.export.pick(request)
+        if (!target) return { queued: false, reason: 'The user closed the Save dialog without choosing a file.' }
+        const job = queueExport({ label: `${text(a, 'file_name') ?? p.name} · ${openSequenceName(p)}`, detail: `${info.label} · ${width}×${height}`, project: p, settings, target })
+        return { queued: true, job_id: job.id, path: target.path, note: 'Start the queue with render_queue action start (or the user can, from the Render queue dialog).' }
+      }
+      const handle = await desktop.export.begin(request)
       if (!handle) return { exported: false, reason: 'The user closed the Save dialog without choosing a file.' }
       const controller = new AbortController()
       const id = toast.loading('Exporting…', { description: 'Started by the Copilot', action: { label: 'Cancel', onClick: () => controller.abort() }, duration: Infinity })
@@ -277,17 +309,7 @@ export const CONTROL_TOOLS: AgentTool[] = [
       try {
         const res = await runExport(
           p,
-          {
-            format,
-            codec,
-            width,
-            height,
-            fps,
-            quality: Math.round(clampNum(number(a, 'quality') ?? 72, 10, 100)),
-            hardware: true,
-            range: [fromF, toF],
-            ...(number(a, 'loudness_lufs') !== undefined ? { loudness: { lufs: clampNum(number(a, 'loudness_lufs')!, -36, -6), peak: -1 } } : {}),
-          },
+          settings,
           handle,
           (prog) => {
             if (prog.phase === 'rendering' && prog.total) toast.loading(`Exporting… ${Math.round((prog.done / prog.total) * 100)}%`, { id, description: 'Started by the Copilot', action: { label: 'Cancel', onClick: () => controller.abort() }, duration: Infinity })
@@ -298,6 +320,7 @@ export const CONTROL_TOOLS: AgentTool[] = [
         return {
           exported: true,
           path: res.path,
+          ...(res.sidecar ? { captions_file: res.sidecar } : {}),
           size_mb: Math.round((res.size / 1e6) * 10) / 10,
           format,
           ...(info.video ? { size: `${width}x${height}`, fps, codec } : {}),

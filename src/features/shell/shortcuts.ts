@@ -5,7 +5,7 @@ import { actions } from './actions'
 export interface Shortcut {
   id: string
   label: string
-  group: 'Playback' | 'Editing' | 'Tools' | 'View' | 'App'
+  group: 'Playback' | 'Editing' | 'Multicam' | 'Tools' | 'View' | 'App'
   /** One or more combos, e.g. "mod+shift+z". The first is shown in the UI. */
   keys: string[]
   run: () => void
@@ -59,6 +59,11 @@ export const SHORTCUTS: Shortcut[] = [
   { id: 'group', label: 'Group clips', group: 'Editing', keys: ['mod+g'], run: actions.group },
   { id: 'crossfade', label: 'Crossfade with the clip before', group: 'Editing', keys: ['mod+shift+d'], run: actions.crossfade },
   { id: 'ungroup', label: 'Ungroup clips', group: 'Editing', keys: ['mod+shift+g'], run: actions.ungroup },
+  { id: 'nest', label: 'Nest selection into a timeline', group: 'Editing', keys: ['mod+alt+n'], run: actions.nestSelection },
+  { id: 'open-nested', label: 'Open the nested timeline', group: 'Editing', keys: ['mod+alt+enter'], run: () => actions.openNested() },
+
+  // Multicam
+  ...Array.from({ length: 9 }, (_, i): Shortcut => ({ id: `angle-${i + 1}`, label: `Cut to camera ${i + 1}`, group: 'Multicam', keys: [String(i + 1)], run: () => actions.cutToAngle(i + 1) })),
 
   // Tools
   { id: 'tool-select', label: 'Select tool', group: 'Tools', keys: ['v'], run: () => ui().setTool('select') },
@@ -79,6 +84,7 @@ export const SHORTCUTS: Shortcut[] = [
   { id: 'copilot', label: 'Toggle Copilot', group: 'App', keys: ['mod+j'], run: actions.toggleCopilot, global: true },
   { id: 'import', label: 'Import media', group: 'App', keys: ['mod+i'], run: actions.importMedia, global: true },
   { id: 'export', label: 'Export', group: 'App', keys: ['mod+e'], run: () => ui().setExportOpen(true), global: true },
+  { id: 'queue', label: 'Render queue', group: 'App', keys: ['mod+shift+e'], run: () => ui().setQueueOpen(true), global: true },
   { id: 'save', label: 'Save', group: 'App', keys: ['mod+s'], run: () => void actions.save(), global: true },
   { id: 'save-as', label: 'Save as…', group: 'App', keys: ['mod+shift+s'], run: actions.saveAs, global: true },
   { id: 'open', label: 'Open project…', group: 'App', keys: ['mod+o'], run: actions.open, global: true },

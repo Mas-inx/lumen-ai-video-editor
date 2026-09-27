@@ -1,4 +1,4 @@
-import { Activity, Camera, Gauge, Grid3x3, Maximize2, Pause, Play, Repeat, SkipBack, SkipForward, StepBack, StepForward } from 'lucide-react'
+import { Activity, Camera, Gauge, Grid3x3, Maximize2, Pause, Play, Repeat, SkipBack, SkipForward, StepBack, StepForward, Video } from 'lucide-react'
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { toast } from 'sonner'
 import { desktop } from '@/lib/platform'
@@ -18,6 +18,7 @@ import { actions } from '@/features/shell/actions'
 import { cn } from '@/lib/cn'
 import { clamp } from '@/lib/math'
 import { formatTimecode } from '@/lib/time'
+import { AngleViewer } from './AngleViewer'
 import { PreviewStage } from './PreviewStage'
 import { Scopes } from './Scopes'
 
@@ -30,6 +31,8 @@ export function PreviewPanel() {
   const settings = useEditor((s) => s.project.settings)
   const showGuides = useUI((s) => s.showGuides)
   const setShowGuides = useUI((s) => s.setShowGuides)
+  const angleViewer = useUI((s) => s.angleViewer)
+  const hasMulticam = useEditor((s) => Object.values(s.project.clips).some((c) => c.sequenceId && s.project.sequences?.[c.sequenceId]?.multicam))
 
   /** Saves the current frame (full resolution, frame-exact) into the media library as a still. */
   const snapshot = async () => {
@@ -85,6 +88,11 @@ export function PreviewPanel() {
               <Gauge />
             </IconButton>
           )}
+          {hasMulticam && (
+            <IconButton label="Camera angles" active={angleViewer} onClick={() => useUI.getState().setAngleViewer(!angleViewer)}>
+              <Video />
+            </IconButton>
+          )}
           <IconButton label="Scopes" active={scopes} onClick={() => setScopes(!scopes)}>
             <Activity />
           </IconButton>
@@ -103,6 +111,7 @@ export function PreviewPanel() {
         <PreviewStage q={quality} />
         {scopes && <Scopes />}
       </div>
+      <AngleViewer />
       <Transport />
     </div>
   )

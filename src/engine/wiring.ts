@@ -7,14 +7,14 @@ import { useEditor } from '@/editor/store'
 import type { Project } from '@/editor/types'
 import { analyzeAssets, releaseUnusedAudio } from '@/project/media-import'
 import { ensureProxies } from '@/project/proxies'
-import { audioEngine, audioStream, isAudible, isLongAudio, loadAudio } from './audio-engine'
+import { audioEngine, audioLeaves, audioStream, isLongAudio, loadAudio } from './audio-engine'
+import { allRenderKeys } from './compositor'
 import { registerProjectFonts } from './fonts'
 import { pruneVideos } from './media'
 
 function prefetch(project: Project) {
-  for (const clip of Object.values(project.clips)) {
-    if (!isAudible(project, clip)) continue
-    const asset = project.assets[clip.assetId!]
+  for (const { clip, view } of audioLeaves(project)) {
+    const asset = view.assets[clip.assetId!]
     // Long recordings stream; just have their reader ready.
     if (isLongAudio(asset)) void audioStream(asset)
     else void loadAudio(asset)
@@ -39,7 +39,7 @@ export function startMediaEngine() {
       clearTimeout(pruneTimer)
       pruneTimer = setTimeout(() => {
         const project = useEditor.getState().project
-        pruneVideos(new Set(Object.keys(project.clips)))
+        pruneVideos(allRenderKeys(project))
         releaseUnusedAudio()
       }, 4000)
     }

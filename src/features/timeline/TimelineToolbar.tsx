@@ -11,6 +11,7 @@ import { formatDuration } from '@/lib/time'
 import { suggestFor, type Suggestion } from '@/editor/smart'
 import { useCopilot } from '@/features/copilot/store'
 import { actions } from '@/features/shell/actions'
+import { TimelineSwitcher } from './TimelineSwitcher'
 
 export function TimelineToolbar() {
   const tool = useUI((s) => s.tool)
@@ -23,6 +24,8 @@ export function TimelineToolbar() {
 
   return (
     <div className="flex h-11 shrink-0 items-center gap-1 border-b border-line px-2">
+      <TimelineSwitcher />
+      <div className="mx-1 h-4 w-px bg-line-2" />
       <div className="flex items-center gap-0.5 rounded-[9px] bg-black/25 p-[3px] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.04)]">
         <IconButton size="xs" label="Select" shortcut="v" active={tool === 'select'} onClick={() => setTool('select')}>
           <MousePointer2 />
