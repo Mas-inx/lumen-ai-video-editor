@@ -28,6 +28,11 @@ Every notable change to Lumen, newest first. The format follows [Keep a Changelo
 - **Titles:** outlines, and any font — import a font file or pick one installed on your computer; it's embedded in the project so it opens the same anywhere, 3D titles included.
 - *Sharpen* now actually sharpens.
 - 7 new AI tools (masks, LUTs and fonts), and effects take settings, for 91 AI tools in all.
+- **Proxies.** Lumen makes a small, quick-seeking 540p copy of 4K footage in the background (or of any video, from its menu in the Media panel), and the preview plays it; exports, frame grabs and the AI always read the original. A button in the preview switches between proxies and originals, and the Lumen menu can turn the automatic proxies off.
+- **Long recordings stream.** Audio longer than ten minutes is no longer decoded whole — an hour of stereo is well over a gigabyte once decoded. Playback, export, waveforms, pause detection, transcription and the AI's audio analysis read it a window at a time.
+- **Version history** (Lumen menu › *Version history*). Every save is kept, plus a snapshot every ten minutes while you edit — even if you never save. Restore any version (what you had goes into the history first) or open it as a copy. Older versions thin out to one a day, and the history follows the project when its file moves.
+- **Collect project** (Lumen menu) copies the project and every media file it uses into one folder, ready to archive or take to another computer.
+- The command palette now finds every command that has a keyboard shortcut.
 
 - **OpenCode Go** as a Copilot brain: paste your OpenCode Go key and pick from GLM, Kimi, DeepSeek, Qwen, MiniMax, MiMo, Grok, GPT Luna and the rest of its models.
 - **Choose the model and effort for every brain.**

@@ -13,10 +13,10 @@ import { timelineTranscript, untranscribed } from '@/editor/smart'
 import { getProject, useEditor } from '@/editor/store'
 import { consumed, isRamped } from '@/editor/timing'
 import type { Asset, Clip, Project } from '@/editor/types'
-import { activeRegions, isAudible, loadAudio, prepareAudio, renderMix } from '@/engine/audio-engine'
+import { activeRegions, audioStream, isAudible, isLongAudio, levelFrames, loadAudio, prepareAudio, regionsFromLevels, renderMix } from '@/engine/audio-engine'
 import { speechScript } from '@/engine/audio'
 import { clipSourceTime } from '@/engine/compositor'
-import { measureLoudness } from '@/engine/loudness'
+import { LoudnessMeter, measureLoudness, type LoudnessReport } from '@/engine/loudness'
 import { SFX } from '@/engine/sfx'
 import { assetById, bool, clampNum, frameArg, int, list, num, number, obj, oneOf, rangeArg, seconds, str, text, trackName, type AgentTool } from './kit'
 
@@ -90,8 +90,37 @@ function view(channels: Float32Array[], sampleRate: number) {
 }
 
 function audioReport(channels: Float32Array[], sampleRate: number, offset: number) {
-  const r = measureLoudness(channels, sampleRate)
-  const regions = activeRegions(view(channels, sampleRate)).map(([a, b]) => [round(a + offset, 2)!, round(b + offset, 2)!] as [number, number])
+  return reportFrom(measureLoudness(channels, sampleRate), activeRegions(view(channels, sampleRate)), offset)
+}
+
+/**
+ * A long recording's report, measured a minute at a time (loudness streams through
+ * the meter, levels through the speech detector) so nothing big is ever decoded.
+ */
+async function streamedReport(asset: Asset, from: number, to: number) {
+  const stream = await audioStream(asset)
+  if (!stream) throw new Error(`“${asset.name}” has no sound Lumen can decode.`)
+  const a = Math.min(from, stream.duration)
+  const b = Math.min(Math.max(to, a), stream.duration)
+  const meter = new LoudnessMeter(stream.sampleRate)
+  const levels: Float32Array[] = []
+  for (let t = a; t < b; t += 60) {
+    const buf = await stream.read(t, Math.min(b, t + 60))
+    if (!buf) continue
+    meter.push(Array.from({ length: buf.numberOfChannels }, (_, c) => buf.getChannelData(c)))
+    levels.push(levelFrames(buf))
+  }
+  const db = new Float32Array(levels.reduce((n, l) => n + l.length, 0))
+  let o = 0
+  for (const l of levels) {
+    db.set(l, o)
+    o += l.length
+  }
+  return { from: a, report: reportFrom(meter.result(), regionsFromLevels(db), a) }
+}
+
+function reportFrom(r: LoudnessReport, found: [number, number][], offset: number) {
+  const regions = found.map(([a, b]) => [round(a + offset, 2)!, round(b + offset, 2)!] as [number, number])
   const end = offset + r.seconds
   const silences: [number, number][] = []
   let cursor = offset
@@ -267,6 +296,10 @@ export const INSPECT_TOOLS: AgentTool[] = [
       if (text(a, 'asset_id')) {
         const asset = assetById(String(a.asset_id))
         if (asset.kind === 'image') throw new Error(`“${asset.name}” is an image — it has no sound.`)
+        if (isLongAudio(asset)) {
+          const { from, report } = await streamedReport(asset, number(a, 'from_seconds') ?? 0, number(a, 'to_seconds') ?? Infinity)
+          return { asset_id: asset.id, name: asset.name, from_seconds: round(from, 2), ...report }
+        }
         const buffer = await loadAudio(asset)
         if (!buffer) throw new Error(`“${asset.name}” has no sound Lumen can decode.`)
         const from = clampNum(number(a, 'from_seconds') ?? 0, 0, buffer.duration)

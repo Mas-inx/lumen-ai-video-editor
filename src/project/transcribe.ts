@@ -7,7 +7,7 @@ import { toast } from 'sonner'
 import type { TranscriptSegment } from '@shared/integrations'
 import { dispatch, getProject } from '@/editor/store'
 import type { Asset } from '@/editor/types'
-import { loadAudio } from '@/engine/audio-engine'
+import { speechAudio } from '@/engine/audio-engine'
 import { speechWav } from '@/engine/wav'
 import { useAi } from '@/integrations/ai'
 import { api, transcribeAsset as elevenJob, useIntegrations } from '@/integrations/store'
@@ -77,7 +77,8 @@ export function transcribeMedia(assetId: string, opts: { using?: Transcriber; la
     if (!canTranscribe(asset)) throw new Error('Only audio and video with sound can be transcribed.')
     const using = opts.using ?? transcribers()[0]
     if (using === 'elevenlabs') return await withElevenLabs(asset, opts.language)
-    const buffer = await loadAudio(asset)
+    // Long recordings arrive already mixed down to 16 kHz mono, streamed a minute at a time.
+    const buffer = await speechAudio(asset)
     if (!buffer) throw new Error('This media has no sound to transcribe.')
     const segments = using === 'openai' ? await withOpenAI(buffer, opts.language) : await transcribeLocally(buffer, { language: opts.language, onProgress: opts.onProgress })
     if (getProject().assets[assetId]) {

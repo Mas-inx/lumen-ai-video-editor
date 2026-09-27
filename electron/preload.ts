@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { AgentEvent } from '../shared/ai'
-import { APP_IPC, type AppAPI, type UpdateState } from '../shared/app'
+import { APP_IPC, type AppAPI, type CollectProgress, type UpdateState } from '../shared/app'
 import { IPC, type BridgeRequest, type BridgeState, type IntegrationsAPI, type Job, type McpServerState } from '../shared/integrations'
 
 // The only surface the renderer sees: typed methods, never raw ipcRenderer.
@@ -98,6 +98,7 @@ const appApi: AppAPI = {
     open: (path) => invoke(APP_IPC.openFile, path),
     saveMedia: (folder, fileName, data) => invoke(APP_IPC.saveMedia, folder, fileName, data),
     urlForPath: (path) => invoke(APP_IPC.mediaUrlForPath, path),
+    beginProxy: (key) => invoke(APP_IPC.proxyBegin, key),
   },
   project: {
     open: (path) => invoke(APP_IPC.projectOpen, path),
@@ -114,6 +115,11 @@ const appApi: AppAPI = {
     onOpenRequest: (cb) => subscribe<string>(APP_IPC.openRequest, cb),
     onSaveBeforeClose: (cb) => subscribe<void>(APP_IPC.saveBeforeClose, () => cb()),
     closeWindow: () => ipcRenderer.send(APP_IPC.closeWindow),
+    versions: (projectId) => invoke(APP_IPC.projectVersions, projectId),
+    readVersion: (projectId, versionId, projectPath) => invoke(APP_IPC.projectReadVersion, projectId, versionId, projectPath),
+    snapshot: (snap) => invoke(APP_IPC.projectSnapshot, snap),
+    collect: (name, text) => invoke(APP_IPC.projectCollect, name, text),
+    onCollectProgress: (cb) => subscribe<CollectProgress>(APP_IPC.collectProgress, cb),
   },
   export: {
     begin: (opts) => invoke(APP_IPC.exportBegin, opts),

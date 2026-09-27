@@ -20,11 +20,16 @@ interface UIState {
   pxPerSecond: number
   selection: string[]
   showGuides: boolean
+  /** The preview plays proxies where there are some. */
+  useProxies: boolean
+  /** Make proxies for 4K footage automatically. */
+  autoProxies: boolean
   /** The preview gizmo edits the selected clip's crop instead of its transform. */
   cropMode: boolean
   /** The mask being edited on the canvas (on the selected clip). */
   maskEdit: string | null
   pasteAttributesOpen: boolean
+  versionsOpen: boolean
   paletteOpen: boolean
   exportOpen: boolean
   shortcutsOpen: boolean
@@ -42,9 +47,12 @@ interface UIState {
   select: (ids: string[], mode?: SelectMode) => void
   clearSelection: () => void
   setShowGuides: (v: boolean) => void
+  setUseProxies: (v: boolean) => void
+  setAutoProxies: (v: boolean) => void
   setCropMode: (v: boolean) => void
   setMaskEdit: (id: string | null) => void
   setPasteAttributesOpen: (v: boolean) => void
+  setVersionsOpen: (v: boolean) => void
   setPaletteOpen: (v: boolean) => void
   setExportOpen: (v: boolean) => void
   setShortcutsOpen: (v: boolean) => void
@@ -63,9 +71,12 @@ export const useUI = create<UIState>()(
       pxPerSecond: 36,
       selection: [],
       showGuides: false,
+      useProxies: true,
+      autoProxies: true,
       cropMode: false,
       maskEdit: null,
       pasteAttributesOpen: false,
+      versionsOpen: false,
       paletteOpen: false,
       exportOpen: false,
       shortcutsOpen: false,
@@ -91,9 +102,12 @@ export const useUI = create<UIState>()(
         }),
       clearSelection: () => set({ selection: [] }),
       setShowGuides: (showGuides) => set({ showGuides }),
+      setUseProxies: (useProxies) => set({ useProxies }),
+      setAutoProxies: (autoProxies) => set({ autoProxies }),
       setCropMode: (cropMode) => set({ cropMode, ...(cropMode ? { maskEdit: null } : {}) }),
       setMaskEdit: (maskEdit) => set({ maskEdit, ...(maskEdit ? { cropMode: false } : {}) }),
       setPasteAttributesOpen: (pasteAttributesOpen) => set({ pasteAttributesOpen }),
+      setVersionsOpen: (versionsOpen) => set({ versionsOpen }),
       setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
       setExportOpen: (exportOpen) => set({ exportOpen }),
       setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
@@ -115,6 +129,8 @@ export const useUI = create<UIState>()(
         snapping: s.snapping,
         pxPerSecond: s.pxPerSecond,
         showGuides: s.showGuides,
+        useProxies: s.useProxies,
+        autoProxies: s.autoProxies,
       }),
     },
   ),

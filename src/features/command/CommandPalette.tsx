@@ -11,7 +11,10 @@ import {
   Flag,
   FolderOpen,
   Grid3x3,
+  FolderArchive,
+  History,
   Keyboard,
+  SlidersVertical,
   Magnet,
   Music,
   Play,
@@ -40,7 +43,11 @@ import { useUI, type LeftTab } from '@/editor/ui-store'
 import { STARTERS } from '@/features/copilot/suggestions'
 import { sendPrompt } from '@/features/copilot/store'
 import { actions } from '@/features/shell/actions'
-import { shortcutFor } from '@/features/shell/shortcuts'
+import { SHORTCUTS, shortcutFor } from '@/features/shell/shortcuts'
+import { collectProject } from '@/project/session'
+
+/** Shortcuts already offered above under a friendlier name. */
+const LISTED = new Set(['split', 'duplicate', 'delete', 'ripple', 'marker', 'undo', 'redo', 'import', 'play', 'start', 'end', 'zoom-fit', 'guides', 'snapping', 'export', 'save', 'save-as', 'open', 'new', 'help', 'palette'])
 
 const ui = () => useUI.getState()
 
@@ -225,6 +232,24 @@ export function CommandPalette() {
           <Item icon={<Plus />} onSelect={run(() => ui().setLeftTab('generate'))} keywords={['ai', 'b-roll', 'image', 'voice']}>
             Generate B-roll, voice or music
           </Item>
+          <Item icon={<History />} keywords={['backup', 'restore', 'undo', 'autosave']} onSelect={run(() => ui().setVersionsOpen(true))}>
+            Version history…
+          </Item>
+          <Item icon={<FolderArchive />} keywords={['consolidate', 'package', 'archive', 'move', 'backup']} onSelect={run(() => void collectProject())}>
+            Collect project and media…
+          </Item>
+          <Item icon={<SlidersVertical />} keywords={['audio', 'volume', 'eq', 'compressor', 'meters']} onSelect={run(() => ui().setRightTab('mixer'))}>
+            Open the mixer
+          </Item>
+        </Command.Group>
+
+        {/* Everything with a shortcut, so every command can be found by name. */}
+        <Command.Group heading="More commands">
+          {SHORTCUTS.filter((s) => !LISTED.has(s.id)).map((s) => (
+            <Item key={s.id} icon={<Keyboard />} shortcut={s.keys[0]} keywords={[s.group]} onSelect={run(s.run)}>
+              {s.label}
+            </Item>
+          ))}
         </Command.Group>
 
       </Command.List>

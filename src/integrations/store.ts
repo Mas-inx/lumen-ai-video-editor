@@ -20,7 +20,7 @@ import type {
 } from '@shared/integrations'
 import { dispatch, getProject } from '@/editor/store'
 import type { Asset } from '@/editor/types'
-import { loadAudio } from '@/engine/audio-engine'
+import { speechAudio } from '@/engine/audio-engine'
 import { speechWav } from '@/engine/wav'
 import { probeMedia } from '@/engine/decode'
 import { analyzeAssets } from '@/project/media-import'
@@ -346,7 +346,7 @@ export async function transcribeAsset(assetId: string, languageCode?: string) {
   if (!api) throw new Error('Needs the desktop app.')
   const asset = getProject().assets[assetId]
   if (!asset || asset.source.type !== 'file') throw new Error('Only imported audio and video can be transcribed.')
-  const buffer = await loadAudio(asset)
+  const buffer = await speechAudio(asset)
   if (!buffer) throw new Error('This media has no sound to transcribe.')
   const wav = await speechWav(buffer)
   const job = await api.elevenlabs.transcribe(wav.buffer, asset.name, languageCode)

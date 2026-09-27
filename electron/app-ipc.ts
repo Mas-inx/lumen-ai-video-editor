@@ -1,8 +1,12 @@
 import { BrowserWindow, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { APP_IPC, type MediaFolder } from '../shared/app'
-import { abortExport, beginExport, finishExport, writeExport } from './export'
+import path from 'node:path'
+import { collectProject } from './collect'
+import { abortExport, beginExport, beginFile, finishExport, writeExport } from './export'
+import { mediaRoot } from './integrations/paths'
+import { listVersions } from './versions'
 import { openPath, pickMedia, register, relink, reveal, saveMedia, urlForPath } from './files'
-import { closeNow, confirmDiscard, forgetRecent, openProject, readRecovery, recentProjects, saveProject, saveProjectAs, setProjectState, writeRecovery } from './project'
+import { closeNow, confirmDiscard, forgetRecent, openProject, openVersion, readRecovery, recentProjects, saveProject, saveProjectAs, setProjectState, snapshotVersion, writeRecovery } from './project'
 import { checkForUpdates, installUpdate, updateState } from './updater'
 
 const FOLDERS: MediaFolder[] = ['snapshots', 'recordings', 'sfx', 'generated']
@@ -36,6 +40,11 @@ export function registerAppIpc(isTrustedUrl: (url: string) => boolean, getStartu
     return saveMedia(folder as MediaFolder, str(name) || 'media', data)
   })
   handle(APP_IPC.mediaUrlForPath, (_win, p: unknown) => (str(p) ? urlForPath(str(p)) : null))
+  handle(APP_IPC.proxyBegin, (_win, key: unknown) => {
+    const name = str(key).replace(/[^\w-]/g, '').slice(0, 120)
+    if (!name) throw new Error('Bad proxy name')
+    return beginFile(path.join(mediaRoot(), 'proxies', `${name}.mp4`))
+  })
 
   handle(APP_IPC.projectOpen, (win, file?: unknown) => openProject(win, typeof file === 'string' && file ? file : undefined))
   handle(APP_IPC.projectSave, (_win, file: unknown, text: unknown) => saveProject(str(file), str(text)))
@@ -49,6 +58,15 @@ export function registerAppIpc(isTrustedUrl: (url: string) => boolean, getStartu
   handle(APP_IPC.projectRecovery, () => readRecovery())
   handle(APP_IPC.projectDiscardRecovery, () => writeRecovery(null))
   handle(APP_IPC.projectStartup, () => getStartupFile())
+  handle(APP_IPC.projectVersions, (_win, projectId: unknown) => listVersions(str(projectId)))
+  handle(APP_IPC.projectReadVersion, (_win, projectId: unknown, versionId: unknown, projectPath: unknown) => openVersion(str(projectId), str(versionId), str(projectPath) || null))
+  handle(APP_IPC.projectSnapshot, (_win, snap: unknown) => {
+    const s = (snap ?? {}) as { text?: unknown; path?: unknown; kind?: unknown }
+    if (typeof s.text !== 'string') return
+    const kind = s.kind === 'restore' ? 'restore' : 'auto'
+    snapshotVersion({ text: s.text, path: typeof s.path === 'string' ? s.path : null, kind })
+  })
+  handle(APP_IPC.projectCollect, (win, name: unknown, text: unknown) => collectProject(win, str(text), str(name) || 'Untitled', (file, t) => saveProject(file, t)))
   handle(APP_IPC.confirmDiscard, (win, name: unknown) => confirmDiscard(win, str(name) || 'Untitled'))
   on(APP_IPC.projectState, (win, state: unknown) => setProjectState(win, (state ?? {}) as Record<string, unknown>))
   on(APP_IPC.closeWindow, (win) => closeNow(win))

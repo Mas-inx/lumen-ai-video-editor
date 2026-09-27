@@ -50,6 +50,16 @@ export async function beginExport(win: BrowserWindow | null, opts: { defaultName
   return { id, path: target }
 }
 
+/** Opens a file Lumen names itself (a proxy, say) for the same streamed writes — no dialog. */
+export function beginFile(target: string): ExportHandle {
+  ensureDir(path.dirname(target))
+  const partial = `${target}.partial`
+  const fd = fs.openSync(partial, 'w')
+  const id = randomUUID()
+  open.set(id, { path: target, partial, fd, size: 0 })
+  return { id, path: target }
+}
+
 function get(id: string) {
   const e = open.get(String(id))
   if (!e) throw new Error('That export is no longer open.')

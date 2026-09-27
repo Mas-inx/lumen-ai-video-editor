@@ -367,3 +367,64 @@ export async function decodeAudio(url: string): Promise<AudioBuffer | null> {
     input.dispose()
   }
 }
+
+// ─── Streaming audio ─────────────────────────────────────────────────────
+
+/**
+ * A long recording read a window at a time instead of decoded whole — an hour
+ * of stereo audio is well over a gigabyte once decoded. Playback, export,
+ * waveforms and analysis read just the stretch they need.
+ */
+export interface AudioStream {
+  sampleRate: number
+  channels: number
+  /** Seconds */
+  duration: number
+  /** Decoded audio for source seconds [from, to), clamped to the file; sample 0 is `from`. */
+  read(from: number, to: number): Promise<AudioBuffer | null>
+  close(): void
+}
+
+export async function openAudioStream(url: string): Promise<AudioStream | null> {
+  const input = open(url)
+  try {
+    const track = await input.getPrimaryAudioTrack()
+    if (!track || !(await track.canDecode())) {
+      input.dispose()
+      return null
+    }
+    const sink = new AudioBufferSink(track)
+    const duration = await track.computeDuration()
+    const sampleRate = track.sampleRate
+    const channels = Math.max(1, Math.min(2, track.numberOfChannels))
+    // Reads share one decoder, so they queue rather than interleave.
+    let queue: Promise<unknown> = Promise.resolve()
+    const read = (from: number, to: number) => {
+      const job = queue.then(async () => {
+        const a = Math.max(0, from)
+        const b = Math.min(duration, to)
+        if (b - a <= 0) return null
+        const length = Math.max(1, Math.round((b - a) * sampleRate))
+        const out = new AudioBuffer({ length, numberOfChannels: channels, sampleRate })
+        for await (const chunk of sink.buffers(a, b)) {
+          const offset = Math.round((chunk.timestamp - a) * sampleRate)
+          for (let c = 0; c < channels; c++) {
+            const src = chunk.buffer.getChannelData(Math.min(c, chunk.buffer.numberOfChannels - 1))
+            const skip = Math.max(0, -offset)
+            const at = Math.max(0, offset)
+            const n = Math.min(src.length - skip, length - at)
+            if (n > 0) out.copyToChannel(src.subarray(skip, skip + n), c, at)
+          }
+        }
+        return out
+      })
+      queue = job.catch(() => {})
+      return job
+    }
+    return { sampleRate, channels, duration, read, close: () => input.dispose() }
+  } catch (err) {
+    console.warn('Couldn’t open the audio for streaming', err)
+    input.dispose()
+    return null
+  }
+}

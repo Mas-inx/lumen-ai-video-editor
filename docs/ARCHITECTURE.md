@@ -36,14 +36,14 @@ src/
     scopes.ts         waveform, RGB parade, vectorscope and histogram of the rendered frame
     fonts.ts          built-in and embedded fonts (from files or the system), registered with the page
     three/            3D stage: 3D transitions, 3D layer effects, extruded titles
-    decode.ts         probing, filmstrips, frame-exact decoding (Mediabunny / WebCodecs)
+    decode.ts         probing, filmstrips, frame-exact decoding, audio streaming (Mediabunny / WebCodecs)
     stills.ts         frame-exact stills and contact sheets (the AI's eyes)
     audio-engine.ts   Web Audio playback, offline mixdown, crossfades, waveforms, speech detection
     mixer.ts          channel and master buses: EQ → compressor → limiter → fader → balance, meters
     eq-response.ts    the EQ's response curve, from the same biquads Web Audio runs
     loudness.ts       ITU-R BS.1770 loudness (LUFS), streamed block by block; peaks, clipping
     export.ts         render → encode → mux, streamed to disk
-  project/          session (new/open/save/recover), import, transcription, Whisper worker
+  project/          session (new/open/save/recover, versions, collect), import, proxies, transcription, Whisper worker
   integrations/     AI brains, Blender / HyperFrames / MCP clients
     agent-tools.ts    the tool registry every AI uses
     tools/            vision.ts (see) · inspect.ts (hear and read) · control.ts (act) · kit.ts
@@ -53,7 +53,9 @@ electron/
   main.ts           window, single instance, file association
   files.ts          lumen-media:// protocol (byte ranges, allow-listed files, model cache), dialogs
   project.ts        .lumen files, recent projects, crash recovery, close guard
-  export.ts         streamed export writes
+  versions.ts       version history: a copy per save and periodic snapshots, thinned with age
+  collect.ts        Collect project: copies a project and its media into one folder
+  export.ts         streamed export (and proxy) writes
   updater.ts        updates from GitHub Releases (electron-updater)
   app-ipc.ts        file / project / export / window-capture / update IPC for the editor page only
   integrations/     Blender, HyperFrames, MCP host, Lumen's MCP server, media generation
@@ -95,6 +97,10 @@ electron/
 ## Projects
 
 `.lumen` files are JSON: the project plus, for every media file, its absolute path and its path relative to the project file — so a project folder moved to another drive or computer still finds its media. The editor autosaves a recovery copy; closing with unsaved changes asks first. One Lumen runs at a time: opening a `.lumen` file hands it to the running window.
+
+- **Versions** live in `userData/versions/<project id>/` (so they follow a project when its file moves): one per save, one every ten minutes of unsaved editing, and one before a restore. Identical back-to-back snapshots are skipped; the newest 30 stay, older ones thin to one a day for 60 days.
+- **Proxies** are made in the editor with Mediabunny (540p H.264, a key frame every second, no sound) and streamed into `userData/media/proxies/`. Projects reference them by path; a missing proxy is dropped on open and made again. Only the preview's `<video>` players use them.
+- **Long audio** (over ten minutes) is never decoded whole: an `AudioStream` reads any window of the file, playback schedules eight-second chunks about twelve seconds ahead, and each export block reads just the source it needs.
 
 ## Updates
 

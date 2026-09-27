@@ -1,4 +1,4 @@
-import { AudioLines, Captions, FolderSearch, Heart, Image as ImageIcon, Link2, Pause, Play, Plus, Trash, TriangleAlert, Upload } from 'lucide-react'
+import { AudioLines, Captions, FolderSearch, Gauge, Heart, Image as ImageIcon, Link2, Pause, Play, Plus, Trash, TriangleAlert, Upload } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useMemo, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { useShallow } from 'zustand/react/shallow'
@@ -16,6 +16,7 @@ import { cn } from '@/lib/cn'
 import { desktop } from '@/lib/platform'
 import { formatSeconds } from '@/lib/time'
 import { relinkAsset } from '@/project/media-import'
+import { cancelProxy, canProxy, makeProxy, removeProxy, useProxyJobs } from '@/project/proxies'
 import { canTranscribe, ensureTranscripts, TRANSCRIBER_NAMES, transcribers } from '@/project/transcribe'
 import { FrameCanvas, stripFrame, useFilmstrip } from './frames'
 import { assetThumb, Chip, MiniWave, PanelHeader, scrollArea, SectionLabel } from './shared'
@@ -159,6 +160,7 @@ const filePath = (asset: Asset) => (asset.source.type === 'file' ? asset.source.
 
 function AssetMenu({ asset, children }: { asset: Asset; children: ReactNode }) {
   const { add } = useAssetActions(asset)
+  const making = useProxyJobs((s) => s.jobs[asset.id])
   const transcribe = () => {
     if (asset.transcript?.length) dispatch('asset.update', { id: asset.id, patch: { transcript: [] } }, { history: false })
     void ensureTranscripts([asset.id])
@@ -188,6 +190,20 @@ function AssetMenu({ asset, children }: { asset: Asset; children: ReactNode }) {
             Show in folder
           </ContextItem>
         )}
+        {canProxy(asset) &&
+          (making !== undefined ? (
+            <ContextItem icon={<Gauge />} onSelect={() => cancelProxy(asset.id)}>
+              Stop making the proxy ({Math.round(making * 100)}%)
+            </ContextItem>
+          ) : asset.proxy ? (
+            <ContextItem icon={<Gauge />} onSelect={() => removeProxy(asset.id)}>
+              Remove proxy ({asset.proxy.height}p)
+            </ContextItem>
+          ) : (
+            <ContextItem icon={<Gauge />} onSelect={() => makeProxy(asset.id)}>
+              Make a proxy for smooth playback
+            </ContextItem>
+          ))}
         <ContextItem icon={<Heart />} onSelect={() => dispatch('asset.update', { id: asset.id, patch: { favorite: !asset.favorite } })}>
           {asset.favorite ? 'Remove from favorites' : 'Add to favorites'}
         </ContextItem>
@@ -197,6 +213,27 @@ function AssetMenu({ asset, children }: { asset: Asset; children: ReactNode }) {
         </ContextItem>
       </ContextContent>
     </ContextRoot>
+  )
+}
+
+/** Proxy state on a card: a progress ring while it's being made, then a small PROXY tag. */
+function ProxyBadge({ asset }: { asset: Asset }) {
+  const making = useProxyJobs((s) => s.jobs[asset.id])
+  if (making !== undefined)
+    return (
+      <span className="absolute bottom-1.5 left-1.5 flex items-center gap-1 rounded-md bg-black/65 px-1.5 py-0.5 text-[9px] font-semibold text-white/85 backdrop-blur-sm" title="Making a proxy">
+        <svg viewBox="0 0 16 16" className="size-2.5 -rotate-90">
+          <circle cx="8" cy="8" r="6" fill="none" stroke="rgb(255 255 255 / 0.25)" strokeWidth="3" />
+          <circle cx="8" cy="8" r="6" fill="none" stroke="var(--color-accent)" strokeWidth="3" strokeDasharray={`${making * 37.7} 37.7`} />
+        </svg>
+        PROXY
+      </span>
+    )
+  if (!asset.proxy) return null
+  return (
+    <span className="absolute bottom-1.5 left-1.5 rounded-md bg-black/60 px-1.5 py-0.5 text-[9px] font-semibold text-accent-2 backdrop-blur-sm" title={`Plays a ${asset.proxy.height}p proxy in the preview; exports use the original`}>
+      PROXY
+    </span>
   )
 }
 
@@ -258,6 +295,7 @@ function MediaCard({ asset, used }: { asset: Asset; used: boolean }) {
             </div>
           )}
           {asset.alpha && <span className="absolute bottom-1.5 left-1.5 rounded-md bg-black/60 px-1.5 py-0.5 text-[9px] font-semibold text-white/80 backdrop-blur-sm">ALPHA</span>}
+          <ProxyBadge asset={asset} />
           {asset.kind === 'image' && (
             <span className="absolute top-1.5 left-1.5 grid size-5 place-items-center rounded-md bg-black/50 text-white backdrop-blur-sm">
               <ImageIcon className="size-3" />

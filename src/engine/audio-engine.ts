@@ -12,8 +12,9 @@ import { propAt } from '@/editor/keyframes'
 import { adjacentAfter, adjacentBefore, clipEnd } from '@/editor/ops'
 import { isRamped, sourceFrameAt, speedAt } from '@/editor/timing'
 import type { Asset, Clip, Project } from '@/editor/types'
-import { decodeAudio } from './decode'
+import { decodeAudio, openAudioStream, type AudioStream } from './decode'
 import { createBus, createGraph, dbToGain, disposeGraph, hasDynamics, readMeter, updateGraph, type MixGraph } from './mixer'
+import { resample } from './wav'
 
 // ─── Decoded sources ─────────────────────────────────────────────────────
 
@@ -65,6 +66,11 @@ export function audioBuffer(asset: Asset): AudioBuffer | null {
 
 /** Frees decoded audio for assets that left the project. */
 export function pruneAudio(keep: Set<string>) {
+  for (const [id, s] of streams) {
+    if (keep.has(id)) continue
+    void s.stream.then((st) => st?.close())
+    streams.delete(id)
+  }
   for (const id of decoded.keys()) if (!keep.has(id)) decoded.delete(id)
   for (const key of derived.keys()) if (!keep.has(key.split('|')[0])) derived.delete(key)
   for (const key of settled.keys()) if (!keep.has(key.split('|')[0])) settled.delete(key)
@@ -161,6 +167,81 @@ async function clipBuffer(asset: Asset, clip: Clip): Promise<AudioBuffer | null>
   return await variant(asset, clip, base)
 }
 
+// ─── Long recordings ─────────────────────────────────────────────────────
+
+/** Past this length a file isn't decoded whole: playback, export and analysis read it a window at a time. */
+export const STREAM_OVER_SECONDS = 10 * 60
+
+export const isLongAudio = (asset: Asset | undefined) => Boolean(asset && (asset.duration ?? 0) > STREAM_OVER_SECONDS)
+
+const streams = new Map<string, { url: string; stream: Promise<AudioStream | null> }>()
+
+/** A long file's reader (opened once per file). */
+export function audioStream(asset: Asset): Promise<AudioStream | null> {
+  const url = audioSourceUrl(asset)
+  if (!url) return Promise.resolve(null)
+  const hit = streams.get(asset.id)
+  if (hit && hit.url === url) return hit.stream
+  void hit?.stream.then((old) => old?.close())
+  const stream = openAudioStream(url)
+  streams.set(asset.id, { url, stream })
+  return stream
+}
+
+/** Source seconds [s0, s1) of a long file, reversed or denoised as the clip needs, with the second it starts at. */
+async function streamChunk(asset: Asset, clip: Clip, s0: number, s1: number): Promise<{ buffer: AudioBuffer; start: number } | null> {
+  const stream = await audioStream(asset)
+  if (!stream) return null
+  const a = Math.max(0, s0)
+  const b = Math.min(stream.duration, s1)
+  let buffer = await stream.read(a, b)
+  if (!buffer) return null
+  if (clip.audio.denoise) buffer = await denoised(buffer)
+  if (clip.reverse) buffer = reversed(buffer)
+  return { buffer, start: a }
+}
+
+/** The source seconds a clip plays during timeline window [a, b), with a little room either side. */
+function sourceSpan(project: Project, clip: Clip, a: number, b: number): [number, number] {
+  const fps = project.settings.fps
+  const cs = clip.start / fps
+  const at = (T: number) => sourceFrameAt(clip, (T - cs) * fps) / fps
+  const x = at(a)
+  const y = at(b)
+  return [Math.min(x, y) - 0.05, Math.max(x, y) + 0.05]
+}
+
+/** Reads a long file a minute at a time. */
+async function* minutes(stream: AudioStream, step = 60) {
+  for (let t = 0; t < stream.duration; t += step) {
+    const buffer = await stream.read(t, Math.min(stream.duration, t + step))
+    if (buffer) yield { t, buffer }
+    // Let the editor breathe between windows.
+    await new Promise((r) => setTimeout(r, 0))
+  }
+}
+
+/**
+ * Speech-ready audio (16 kHz mono) for transcription and the like. Short files
+ * come back as decoded; long ones are streamed and mixed down a minute at a time,
+ * so an hour takes about 230 MB instead of well over a gigabyte.
+ */
+export async function speechAudio(asset: Asset): Promise<AudioBuffer | null> {
+  if (!isLongAudio(asset)) return loadAudio(asset)
+  const stream = await audioStream(asset)
+  if (!stream) return null
+  const rate = 16000
+  const total = Math.max(1, Math.ceil(stream.duration * rate))
+  const out = new AudioBuffer({ length: total, numberOfChannels: 1, sampleRate: rate })
+  for await (const { t, buffer } of minutes(stream)) {
+    const mono = await resample(buffer, rate, 1)
+    const at = Math.round(t * rate)
+    const n = Math.max(0, Math.min(mono.length, total - at))
+    if (n) out.copyToChannel(mono.getChannelData(0).subarray(0, n), 0, at)
+  }
+  return out
+}
+
 // ─── Scheduling ──────────────────────────────────────────────────────────
 
 /** Whether a clip makes sound at all: freeze frames and video whose sound was detached are silent, and while any track is soloed only soloed tracks play. */
@@ -246,8 +327,9 @@ interface Scheduled {
 /**
  * Schedules the part of `clip` that falls inside timeline window [from, to) seconds,
  * starting at context time `at` (which corresponds to timeline time `from`).
+ * `bufferStart` is the source second the buffer begins at (a streamed chunk of a long file).
  */
-function scheduleClip(ctx: BaseAudioContext, dest: AudioNode, project: Project, clip: Clip, buffer: AudioBuffer, from: number, to: number, at: number): Scheduled | null {
+function scheduleClip(ctx: BaseAudioContext, dest: AudioNode, project: Project, clip: Clip, buffer: AudioBuffer, from: number, to: number, at: number, bufferStart = 0): Scheduled | null {
   const fps = project.settings.fps
   const xf = crossfades(project, clip)
   const cs = clip.start / fps
@@ -256,7 +338,7 @@ function scheduleClip(ctx: BaseAudioContext, dest: AudioNode, project: Project, 
   const b = Math.min(ce, to)
   if (b - a <= 1e-4) return null
   const localAt = (T: number) => (T - cs) * fps
-  const srcAt = (T: number) => sourceFrameAt(clip, localAt(T)) / fps
+  const srcAt = (T: number) => sourceFrameAt(clip, localAt(T)) / fps - bufferStart
   // Reversed clips play a reversed copy forwards.
   const offset = clip.reverse ? buffer.duration - srcAt(a) : srcAt(a)
   const span = Math.abs(srcAt(b) - srcAt(a))
@@ -320,6 +402,52 @@ let active: Scheduled[] = []
 let running: { from: number; at: number; project: Project } | null = null
 let masterLevel = 0.8
 
+/** Long recordings play in chunks decoded just ahead of the playhead. */
+interface Streamer {
+  clip: Clip
+  asset: Asset
+  /** Timeline second scheduled up to. */
+  until: number
+  busy: boolean
+}
+let streamers: Streamer[] = []
+let streamTimer: ReturnType<typeof setInterval> | undefined
+let generation = 0
+const LOOKAHEAD = 12
+const CHUNK = 8
+
+function topUpStreams() {
+  if (!running || !ctx || !graph) return
+  const gen = generation
+  const project = running.project
+  const nowT = running.from + (ctx.currentTime - running.at)
+  for (const s of streamers) {
+    if (s.busy) continue
+    const [, end] = audibleSpan(project, s.clip)
+    if (s.until >= end - 1e-3 || s.until > nowT + LOOKAHEAD) continue
+    s.busy = true
+    const a = Math.max(s.until, nowT)
+    const b = Math.min(end, a + CHUNK)
+    const [s0, s1] = sourceSpan(project, s.clip, a, b)
+    void streamChunk(s.asset, s.clip, s0, s1)
+      .then((chunk) => {
+        if (gen !== generation || !running || !ctx || !graph) return
+        s.until = b
+        if (!chunk) return
+        // A decode that ran late joins in where playback is now, still in sync.
+        const now = running.from + (ctx.currentTime - running.at) + 0.03
+        const from = Math.max(a, now)
+        const scheduled = scheduleClip(ctx, channelFor(graph, s.clip), project, s.clip, chunk.buffer, from, b, running.at + (from - running.from), chunk.start)
+        if (scheduled) active.push(scheduled)
+      })
+      .catch((err) => console.warn('Streaming audio failed', err))
+      .finally(() => {
+        s.busy = false
+        if (gen === generation) topUpStreams()
+      })
+  }
+}
+
 function context() {
   if (!ctx) {
     ctx = new AudioContext({ latencyHint: 'interactive', sampleRate: 48000 })
@@ -363,6 +491,10 @@ export const audioEngine = {
   },
 
   stopAll() {
+    generation++
+    streamers = []
+    clearInterval(streamTimer)
+    streamTimer = undefined
     for (const s of active) {
       try {
         s.source.stop()
@@ -417,13 +549,22 @@ function scheduleAll(project: Project, from: number, at: number) {
   if (!ctx || !graph) return
   for (const clip of Object.values(project.clips)) {
     if (!isAudible(project, clip)) continue
-    if (audibleSpan(project, clip)[1] <= from) continue
+    const [start, end] = audibleSpan(project, clip)
+    if (end <= from) continue
     const asset = project.assets[clip.assetId!]
+    if (isLongAudio(asset)) {
+      streamers.push({ clip, asset, until: Math.max(from, start), busy: false })
+      continue
+    }
     const buffer = clipBufferNow(asset, clip)
     if (buffer) {
       const s = scheduleClip(ctx, channelFor(graph, clip), project, clip, buffer, from, Infinity, at)
       if (s) active.push(s)
     } else void clipBuffer(asset, clip) // ready later → onAudioReady → refresh
+  }
+  if (streamers.length) {
+    topUpStreams()
+    streamTimer = setInterval(topUpStreams, 500)
   }
 }
 
@@ -436,7 +577,8 @@ onAudioReady(() => {
 
 /** Makes sure every audible clip's audio is decoded (and processed) before an export. */
 export async function prepareAudio(project: Project, onProgress?: (done: number, total: number) => void) {
-  const clips = Object.values(project.clips).filter((c) => isAudible(project, c))
+  // Long recordings are read block by block while exporting, not decoded up front.
+  const clips = Object.values(project.clips).filter((c) => isAudible(project, c) && !isLongAudio(project.assets[c.assetId!]))
   let done = 0
   for (const clip of clips) {
     await clipBuffer(project.assets[clip.assetId!], clip)
@@ -477,7 +619,14 @@ export async function renderMix(project: Project, from: number, to: number, opts
     if (!isAudible(project, clip)) continue
     const [a, b] = audibleSpan(project, clip)
     if (b <= start || a >= to) continue
-    const buffer = await clipBuffer(project.assets[clip.assetId!], clip)
+    const asset = project.assets[clip.assetId!]
+    if (isLongAudio(asset)) {
+      const [s0, s1] = sourceSpan(project, clip, Math.max(a, start), Math.min(b, to))
+      const chunk = await streamChunk(asset, clip, s0, s1)
+      if (chunk) scheduleClip(off, channelFor(mix, clip), project, clip, chunk.buffer, start, to, 0, chunk.start)
+      continue
+    }
+    const buffer = await clipBuffer(asset, clip)
     if (buffer) scheduleClip(off, channelFor(mix, clip), project, clip, buffer, start, to, 0)
   }
   const rendered = await off.startRendering()
@@ -523,17 +672,44 @@ export function computePeaks(buffer: AudioBuffer): number[] {
   return peaks.map((p) => Math.round(p * k * 100) / 100)
 }
 
+/** Waveform peaks of a long file, streamed a minute at a time. */
+export async function computePeaksStreamed(asset: Asset): Promise<number[] | null> {
+  const stream = await audioStream(asset)
+  if (!stream) return null
+  const n = Math.max(1, Math.ceil(stream.duration * PEAKS_PER_SECOND))
+  const peaks = new Float32Array(n)
+  let max = 0
+  for await (const { t, buffer } of minutes(stream)) {
+    const per = buffer.sampleRate / PEAKS_PER_SECOND
+    const first = Math.round(t * PEAKS_PER_SECOND)
+    const channels = Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c))
+    for (let i = 0; first + i < n && i * per < buffer.length; i++) {
+      const s = Math.floor(i * per)
+      const e = Math.min(buffer.length, Math.floor((i + 1) * per))
+      let p = 0
+      for (const ch of channels) for (let j = s; j < e; j += 2) p = Math.max(p, Math.abs(ch[j]))
+      peaks[first + i] = Math.max(peaks[first + i], p)
+      max = Math.max(max, p)
+    }
+  }
+  const k = max > 0 ? 1 / max : 1
+  return Array.from(peaks, (p) => Math.round(p * k * 100) / 100)
+}
+
 /**
  * Where someone is speaking (or anything above the noise floor is happening),
  * as [start, end] source seconds, from short-term loudness with an adaptive threshold.
  */
 export function activeRegions(buffer: AudioBuffer, opts: { minSilence?: number; minSound?: number } = {}): [number, number][] {
-  const minSilence = opts.minSilence ?? 0.35
-  const minSound = opts.minSound ?? 0.12
-  const hop = 0.02
-  const win = Math.max(1, Math.round(hop * buffer.sampleRate))
+  return regionsFromLevels(levelFrames(buffer), opts)
+}
+
+const HOP = 0.02
+
+/** Short-term level (dBFS) every 20 ms. */
+export function levelFrames(buffer: Pick<AudioBuffer, 'sampleRate' | 'length' | 'numberOfChannels' | 'getChannelData'>): Float32Array {
+  const win = Math.max(1, Math.round(HOP * buffer.sampleRate))
   const frames = Math.floor(buffer.length / win)
-  if (!frames) return []
   const channels = Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c))
   const db = new Float32Array(frames)
   for (let f = 0; f < frames; f++) {
@@ -542,6 +718,31 @@ export function activeRegions(buffer: AudioBuffer, opts: { minSilence?: number; 
     const rms = Math.sqrt(sum / (win * channels.length))
     db[f] = rms > 1e-9 ? 20 * Math.log10(rms) : -120
   }
+  return db
+}
+
+/** activeRegions for a long file, streamed a minute at a time. */
+export async function activeRegionsStreamed(asset: Asset, opts: { minSilence?: number; minSound?: number } = {}): Promise<[number, number][] | null> {
+  const stream = await audioStream(asset)
+  if (!stream) return null
+  const parts: Float32Array[] = []
+  for await (const { buffer } of minutes(stream)) parts.push(levelFrames(buffer))
+  const db = new Float32Array(parts.reduce((n, p) => n + p.length, 0))
+  let o = 0
+  for (const p of parts) {
+    db.set(p, o)
+    o += p.length
+  }
+  return regionsFromLevels(db, opts)
+}
+
+/** Where there's sound, from 20 ms levels: a threshold between the noise floor and the typical level. */
+export function regionsFromLevels(db: Float32Array, opts: { minSilence?: number; minSound?: number } = {}): [number, number][] {
+  const minSilence = opts.minSilence ?? 0.35
+  const minSound = opts.minSound ?? 0.12
+  const hop = HOP
+  const frames = db.length
+  if (!frames) return []
   // Threshold between the noise floor (10th percentile) and typical level (90th).
   const sorted = Float32Array.from(db).sort()
   const floor = sorted[Math.floor(frames * 0.1)]

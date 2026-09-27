@@ -25,9 +25,11 @@ if (import.meta.env.DEV || window.lumen?.testMode) {
     import('@/project/transcribe'),
     import('@/engine/audio-engine'),
     import('@/integrations/agent-tools'),
-  ]).then(([store, ui, pb, copilot, ai, integrations, session, media, exporter, smart, transcribe, audio, tools]) => {
+    import('@/engine/media'),
+    import('@/project/proxies'),
+  ]).then(([store, ui, pb, copilot, ai, integrations, session, media, exporter, smart, transcribe, audio, tools, engineMedia, proxies]) => {
     Object.assign(window, {
-      __lumen: { editor: store.useEditor, dispatch: store.dispatch, ui: ui.useUI, playback: pb.playback, usePlayback: pb.usePlayback, copilot, ai, integrations, session, media, exporter, smart, transcribe, audio, tools },
+      __lumen: { editor: store.useEditor, dispatch: store.dispatch, ui: ui.useUI, playback: pb.playback, usePlayback: pb.usePlayback, copilot, ai, integrations, session, media, exporter, smart, transcribe, audio, tools, engineMedia, proxies },
     })
   })
 }

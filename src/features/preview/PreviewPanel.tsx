@@ -1,4 +1,4 @@
-import { Activity, Camera, Grid3x3, Maximize2, Pause, Play, Repeat, SkipBack, SkipForward, StepBack, StepForward } from 'lucide-react'
+import { Activity, Camera, Gauge, Grid3x3, Maximize2, Pause, Play, Repeat, SkipBack, SkipForward, StepBack, StepForward } from 'lucide-react'
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { toast } from 'sonner'
 import { desktop } from '@/lib/platform'
@@ -25,6 +25,8 @@ export function PreviewPanel() {
   const panelRef = useRef<HTMLDivElement>(null)
   const [quality, setQuality] = useState<'full' | 'half'>('full')
   const [scopes, setScopes] = useState(false)
+  const hasProxies = useEditor((s) => Object.values(s.project.assets).some((a) => a.proxy))
+  const useProxies = useUI((s) => s.useProxies)
   const settings = useEditor((s) => s.project.settings)
   const showGuides = useUI((s) => s.showGuides)
   const setShowGuides = useUI((s) => s.setShowGuides)
@@ -78,6 +80,11 @@ export function PreviewPanel() {
               { value: 'half', label: 'Half' },
             ]}
           />
+          {hasProxies && (
+            <IconButton label={useProxies ? 'Playing proxies — click for the originals' : 'Playing originals — click for the proxies'} active={useProxies} onClick={() => useUI.getState().setUseProxies(!useProxies)}>
+              <Gauge />
+            </IconButton>
+          )}
           <IconButton label="Scopes" active={scopes} onClick={() => setScopes(!scopes)}>
             <Activity />
           </IconButton>

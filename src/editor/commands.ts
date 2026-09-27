@@ -294,6 +294,7 @@ const asset = z.object({
   transcript: z.array(z.object({ start: z.number(), end: z.number(), text: z.string() })).optional(),
   favorite: z.boolean().optional(),
   tags: z.array(z.string()).optional(),
+  proxy: z.object({ path: z.string(), url: z.string(), width: z.number(), height: z.number() }).optional(),
   addedAt: z.number(),
 })
 
@@ -1234,14 +1235,18 @@ export const commands = {
           height: z.number(),
           fps: z.number(),
           source: assetSource,
+          proxy: z.object({ path: z.string(), url: z.string(), width: z.number(), height: z.number() }).nullable(),
         })
         .partial(),
     }),
-    title: (i) => (i.patch.source ? 'Relink media' : 'Edit media'),
+    title: (i) => (i.patch.source ? 'Relink media' : i.patch.proxy === null ? 'Remove proxy' : 'Edit media'),
     run(p, i) {
       const a = p.assets[i.id]
       if (!a) throw new CommandError('Asset not found')
-      Object.assign(a, i.patch)
+      const { proxy, ...rest } = i.patch
+      Object.assign(a, rest)
+      if (proxy === null) delete a.proxy
+      else if (proxy) a.proxy = proxy
     },
   }),
 

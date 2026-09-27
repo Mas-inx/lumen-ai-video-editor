@@ -79,7 +79,7 @@ export function PreviewStage({ q = 'full' }: { q?: keyof typeof quality }) {
     const unsubs = [
       usePlayback.subscribe((s, p) => s.frame !== p.frame && req()),
       useEditor.subscribe((s, p) => s.project !== p.project && req()),
-      useUI.subscribe((s, p) => s.selection !== p.selection && req()),
+      useUI.subscribe((s, p) => (s.selection !== p.selection || s.useProxies !== p.useProxies) && req()),
       onMediaReady(req),
     ]
     // Canvas text needs the web fonts actually loaded before the first draw;

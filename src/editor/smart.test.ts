@@ -9,6 +9,9 @@ vi.mock('@/engine/audio-engine', () => ({
     (clip.kind === 'audio' || clip.kind === 'video') && Boolean(clip.assetId) && !project.tracks.find((t) => t.id === clip.trackId)?.muted,
   loadAudio: async (asset: Asset) => ({ assetId: asset.id }),
   activeRegions: (buffer: { assetId: string }) => activity.get(buffer.assetId) ?? [],
+  // Long recordings stream; these tests use short ones.
+  isLongAudio: () => false,
+  activeRegionsStreamed: async (asset: Asset) => activity.get(asset.id) ?? [],
 }))
 
 const { addCaptions, duckMusic, findPauses, removePauses, silentCuts, timelineTranscript } = await import('./smart')

@@ -8,7 +8,7 @@ import type { MediaFileInfo } from '@shared/app'
 import { dispatch, getProject, useEditor } from '@/editor/store'
 import type { Asset } from '@/editor/types'
 import { useUI } from '@/editor/ui-store'
-import { audioSourceUrl, computePeaks, loadAudio, pruneAudio } from '@/engine/audio-engine'
+import { audioSourceUrl, computePeaks, computePeaksStreamed, isLongAudio, loadAudio, pruneAudio } from '@/engine/audio-engine'
 import { kindFromMime, MediaError, probeMedia } from '@/engine/decode'
 import { uid } from '@/lib/id'
 import { desktop } from '@/lib/platform'
@@ -153,9 +153,15 @@ export async function analyzeAssets(ids?: string[], force = false) {
   for (const asset of targets) {
     analyzing.add(asset.id)
     try {
-      const buffer = await loadAudio(asset)
+      // Long recordings are measured a minute at a time instead of decoded whole.
+      const peaks = isLongAudio(asset) ? await computePeaksStreamed(asset) : null
+      const buffer = peaks ? null : await loadAudio(asset)
       const current = getProject().assets[asset.id]
       if (!current) continue
+      if (peaks) {
+        dispatch('asset.update', { id: asset.id, patch: { peaks, hasAudio: true } }, { history: false })
+        continue
+      }
       if (!buffer) {
         if (current.kind === 'video' && current.hasAudio !== false) dispatch('asset.update', { id: asset.id, patch: { hasAudio: false } }, { history: false })
         continue

@@ -41,6 +41,38 @@ export interface RecoveryInfo {
 
 export type CloseChoice = 'save' | 'discard' | 'cancel'
 
+/** save — the project was saved; auto — a snapshot taken while editing; restore — taken just before restoring an older version. */
+export type VersionKind = 'save' | 'auto' | 'restore'
+
+export interface ProjectVersion {
+  id: string
+  savedAt: number
+  kind: VersionKind
+  name: string
+  clips: number
+  /** Timeline length */
+  seconds: number
+  /** Bytes */
+  size: number
+}
+
+export interface CollectResult {
+  /** The collected project file. */
+  path: string
+  folder: string
+  files: number
+  bytes: number
+  /** Media that couldn't be found, so wasn't copied. */
+  missing: string[]
+}
+
+export interface CollectProgress {
+  done: number
+  total: number
+  /** The file being copied ('' when finished). */
+  file: string
+}
+
 export type MediaFolder = 'snapshots' | 'recordings' | 'sfx' | 'generated'
 
 export interface ExportHandle {
@@ -88,6 +120,11 @@ export const APP_IPC = {
   projectDiscardRecovery: 'lumen:project:discard-recovery',
   projectState: 'lumen:project:state',
   projectStartup: 'lumen:project:startup',
+  projectVersions: 'lumen:project:versions',
+  projectReadVersion: 'lumen:project:read-version',
+  projectSnapshot: 'lumen:project:snapshot',
+  projectCollect: 'lumen:project:collect',
+  proxyBegin: 'lumen:files:proxy-begin',
   confirmDiscard: 'lumen:project:confirm-discard',
   closeWindow: 'lumen:app:close-window',
 
@@ -107,6 +144,7 @@ export const APP_IPC = {
   openRequest: 'lumen:project:open-request',
   saveBeforeClose: 'lumen:project:save-before-close',
   updateEvent: 'lumen:update:event',
+  collectProgress: 'lumen:project:collect-progress',
 } as const
 
 /** What the preload exposes as `window.lumen.app`. */
@@ -126,6 +164,8 @@ export interface AppAPI {
     /** Saves bytes the editor produced (snapshot, recording…) into Lumen's media library. */
     saveMedia(folder: MediaFolder, fileName: string, data: Uint8Array): Promise<MediaFileInfo>
     urlForPath(path: string): Promise<MediaFileInfo | null>
+    /** Opens a proxy file in Lumen's media folder for streamed writes (then export.write / finish / abort). */
+    beginProxy(key: string): Promise<ExportHandle>
   }
   project: {
     /** Opens a project file — with a dialog when no path is given. Null if cancelled. */
@@ -150,6 +190,15 @@ export interface AppAPI {
     onSaveBeforeClose(cb: () => void): () => void
     /** Closes the window without asking again (after saving). */
     closeWindow(): void
+    /** Every stored version of a project, newest first. */
+    versions(projectId: string): Promise<ProjectVersion[]>
+    /** A stored version, with its media resolved like an opened project. */
+    readVersion(projectId: string, versionId: string, projectPath: string | null): Promise<OpenedProject>
+    /** Stores a version of the current state (auto snapshots, and before restoring). */
+    snapshot(snap: { text: string; path: string | null; kind: VersionKind }): Promise<void>
+    /** Copies the project and all its media into one folder the user picks. Null if cancelled. */
+    collect(name: string, text: string): Promise<CollectResult | null>
+    onCollectProgress(cb: (p: CollectProgress) => void): () => void
   }
   export: {
     /** Save dialog for an export. Null if cancelled. */

@@ -1,9 +1,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { app, BrowserWindow, dialog } from 'electron'
-import { APP_IPC, type CloseChoice, type OpenedProject, type RecentProject, type RecoveryInfo } from '../shared/app'
+import { APP_IPC, type CloseChoice, type OpenedProject, type RecentProject, type RecoveryInfo, type VersionKind } from '../shared/app'
 import { fileInfo, urlFor } from './files'
 import { allowPath, ensureDir, mediaPath, readJson, userDir, writeJson } from './integrations/paths'
+import { readVersionText, writeVersion } from './versions'
 
 /**
  * Project files (.lumen): JSON documents that reference media by absolute path
@@ -36,9 +37,16 @@ interface StoredSource {
   [key: string]: unknown
 }
 
+interface StoredProxy {
+  path?: string
+  url?: string
+  [key: string]: unknown
+}
+
 interface StoredProject {
+  id?: string
   name?: string
-  assets?: Record<string, { source?: StoredSource; [key: string]: unknown }>
+  assets?: Record<string, { source?: StoredSource; proxy?: StoredProxy; [key: string]: unknown }>
   [key: string]: unknown
 }
 
@@ -57,6 +65,8 @@ function atomicWrite(file: string, text: string) {
 function toStored(project: StoredProject, projectPath: string): StoredProject {
   const dir = path.dirname(projectPath)
   for (const asset of Object.values(project.assets ?? {})) {
+    // A proxy is referenced by path only; its URL is made again on open.
+    if (asset.proxy) delete asset.proxy.url
     const src = asset.source
     if (!src) continue
     if (src.type === 'file') {
@@ -88,6 +98,12 @@ function fromStored(project: StoredProject, projectPath: string | null): { proje
   const dir = projectPath ? path.dirname(projectPath) : null
   const missing: string[] = []
   for (const [id, asset] of Object.entries(project.assets ?? {})) {
+    // Proxies live in Lumen's own folder; one that's gone is simply made again when needed.
+    const proxy = asset.proxy
+    if (proxy?.path && fs.existsSync(proxy.path)) {
+      allowPath(proxy.path)
+      proxy.url = urlFor(proxy.path)
+    } else if (proxy) delete asset.proxy
     const src = asset.source
     if (!src) continue
     if (src.type === 'file') {
@@ -199,8 +215,17 @@ export async function openProject(win: BrowserWindow | null, file?: string): Pro
 
 export function saveProject(file: string, projectText: string) {
   const abs = path.resolve(file)
-  atomicWrite(abs, envelope(projectText, abs))
-  const name = (JSON.parse(projectText) as StoredProject).name
+  const text = envelope(projectText, abs)
+  atomicWrite(abs, text)
+  const { name, id } = JSON.parse(projectText) as StoredProject
+  // Every save is also a version the user can go back to.
+  if (typeof id === 'string') {
+    try {
+      writeVersion(id, text, 'save')
+    } catch (err) {
+      console.warn('Couldn’t store a version', err)
+    }
+  }
   touchRecent(abs, typeof name === 'string' ? name : path.basename(abs, `.${PROJECT_EXT}`))
   return { path: abs }
 }
@@ -224,6 +249,24 @@ function lastProjectDir() {
   if (recent) return path.dirname(recent.path)
   const docs = path.join(app.getPath('documents'), 'Lumen')
   return ensureDir(docs)
+}
+
+// ─── Versions ────────────────────────────────────────────────────────────
+
+/** Stores a version of the project as it is in the editor (auto snapshots, and before a restore). */
+export function snapshotVersion(snap: { text: string; path: string | null; kind: VersionKind }) {
+  const { id } = JSON.parse(snap.text) as StoredProject
+  if (typeof id !== 'string') return
+  // A project that was never saved gets its relative paths from where it would be saved.
+  const at = snap.path ?? path.join(lastProjectDir(), 'Untitled.lumen')
+  writeVersion(id, envelope(snap.text, at), snap.kind)
+}
+
+/** A stored version, resolved against the disk like an opened project. */
+export function openVersion(projectId: string, versionId: string, projectPath: string | null): OpenedProject {
+  const env = parseEnvelope(readVersionText(projectId, versionId))
+  const { project, missing } = fromStored(env.project, projectPath)
+  return { path: projectPath ?? '', text: JSON.stringify(project), missing }
 }
 
 // ─── Recovery ────────────────────────────────────────────────────────────

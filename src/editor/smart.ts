@@ -3,7 +3,7 @@
  * from transcripts or measured from the audio itself. Used by one-click
  * suggestions in the UI and exposed as tools to every Copilot brain.
  */
-import { activeRegions, isAudible, loadAudio } from '@/engine/audio-engine'
+import { activeRegions, activeRegionsStreamed, isAudible, isLongAudio, loadAudio } from '@/engine/audio-engine'
 import { speechScript } from '@/engine/audio'
 import { clipEnd, clipsOnTrack } from './ops'
 import { TITLE_PRESETS } from './presets'
@@ -28,11 +28,12 @@ export async function speechRegions(project: Project, clip: Clip): Promise<{ reg
     const key = `${asset.id}|${asset.source.type === 'file' ? asset.source.url : ''}`
     let regions = activityCache.get(key)
     if (!regions) {
-      const buffer = await loadAudio(asset)
-      if (buffer) {
-        regions = activeRegions(buffer)
-        activityCache.set(key, regions)
+      if (isLongAudio(asset)) regions = (await activeRegionsStreamed(asset)) ?? undefined
+      else {
+        const buffer = await loadAudio(asset)
+        if (buffer) regions = activeRegions(buffer)
       }
+      if (regions) activityCache.set(key, regions)
     }
     if (regions) return { regions, from: 'audio' }
   }

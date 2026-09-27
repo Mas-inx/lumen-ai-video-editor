@@ -74,6 +74,8 @@ export interface Asset {
   transcript?: SpeechSegment[]
   favorite?: boolean
   tags?: string[]
+  /** A small copy of a heavy video that the preview plays instead (exports always use the original). */
+  proxy?: { path: string; url: string; width: number; height: number }
   addedAt: number
 }
 

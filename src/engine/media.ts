@@ -236,3 +236,6 @@ export function sourceSize(src: CanvasImageSource): { w: number; h: number } {
   const s = src as { width: number | SVGAnimatedLength; height: number | SVGAnimatedLength }
   return { w: typeof s.width === 'number' ? s.width : s.width.baseVal.value, h: typeof s.height === 'number' ? s.height : s.height.baseVal.value }
 }
+
+/** What each live video player is showing (diagnostics: are proxies in use?). */
+export const playingSources = () => [...videos.values()].map((v) => v.el.currentSrc || v.el.src)

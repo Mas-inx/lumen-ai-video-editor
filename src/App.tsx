@@ -14,6 +14,7 @@ import { IntegrationsHub } from '@/features/integrations/IntegrationsHub'
 import { PreviewPanel } from '@/features/preview/PreviewPanel'
 import { ResizeHandle } from '@/features/shell/ResizeHandle'
 import { ShortcutsDialog } from '@/features/shell/ShortcutsDialog'
+import { VersionHistoryDialog } from '@/features/shell/VersionHistoryDialog'
 import { SidePanel } from '@/features/shell/SidePanel'
 import { TitleBar } from '@/features/shell/TitleBar'
 import { useGlobalShortcuts } from '@/features/shell/useGlobalShortcuts'
@@ -52,6 +53,7 @@ export function App() {
         <ShortcutsDialog />
         <AboutDialog />
         <PasteAttributesDialog />
+        <VersionHistoryDialog />
         <IntegrationsHub />
         <AgentApprovals />
         <Toaster

@@ -67,6 +67,7 @@ It's an open-source alternative to editors like CapCut, Filmora and Descript —
 - **A real mixer:** a channel per track and a master bus, each with a fader, pan, a draggable EQ curve, a compressor and a limiter, with live meters. Transitions crossfade the sound too, and exports can be **loudness-normalized** to −14 LUFS for YouTube and Spotify, −16 for Apple, or broadcast's −23 and −24.
 - Import **MP4, MOV, WebM, MKV, MP3, WAV, FLAC, PNG, JPEG, WebP, GIF** and more — by dialog, folder or drag and drop. Files stay where they are; missing ones can be relinked.
 - `.lumen` **project files** that survive moving folders between drives, crash recovery, and undo for everything. `Ctrl+K` reaches every command.
+- **Built for long, heavy projects:** **proxies** for 4K footage (made automatically in the background; exports always use the originals), hour-long recordings that **stream** instead of filling memory, **version history** (every save, plus a snapshot every ten minutes while you edit, restorable any time) and **Collect project** to gather a project and all its media into one folder.
 
 ### The Copilot sees, hears and edits
 
@@ -218,7 +219,6 @@ Ideas the project is heading towards — contributions welcome:
 - [ ] macOS and Linux builds
 - [ ] Code-signed installer
 - [ ] Render queues
-- [ ] Streaming audio for hour-long recordings
 - [ ] More languages for the interface
 
 ## Contributing

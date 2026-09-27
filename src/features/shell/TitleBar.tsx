@@ -6,7 +6,10 @@ import {
   Download,
   FilePlus,
   FolderOpen,
+  FolderArchive,
   FolderSearch,
+  Gauge,
+  History,
   House,
   Info,
   Keyboard,
@@ -31,7 +34,7 @@ import { useUI } from '@/editor/ui-store'
 import { cn } from '@/lib/cn'
 import { desktop, platform } from '@/lib/platform'
 import { checkForUpdates, installUpdate, useUpdates } from '@/lib/updates'
-import { openProject, refreshRecent, useDirty, useSession } from '@/project/session'
+import { collectProject, openProject, refreshRecent, useDirty, useSession } from '@/project/session'
 import { actions } from './actions'
 
 export function TitleBar() {
@@ -115,6 +118,7 @@ function AppMenu() {
   const updateReady = useUpdates((s) => s.status === 'ready')
   const home = useSession((s) => s.home)
   const recent = useSession((s) => s.recent)
+  const autoProxies = useUI((s) => s.autoProxies)
   return (
     <Menu onOpenChange={(open) => open && void refreshRecent()}>
       <MenuTrigger asChild>
@@ -161,8 +165,18 @@ function AppMenu() {
             <MenuItem icon={<Upload />} shortcut="mod+e" onSelect={() => setExportOpen(true)}>
               Export…
             </MenuItem>
+            <MenuItem icon={<History />} disabled={!desktop} onSelect={() => useUI.getState().setVersionsOpen(true)}>
+              Version history…
+            </MenuItem>
+            <MenuItem icon={<FolderArchive />} disabled={!desktop} onSelect={() => void collectProject()}>
+              Collect project…
+            </MenuItem>
             <MenuItem icon={<House />} onSelect={actions.home}>
               Start screen
+            </MenuItem>
+            <MenuSeparator />
+            <MenuItem icon={autoProxies ? <Check /> : <Gauge />} onSelect={() => useUI.getState().setAutoProxies(!autoProxies)}>
+              Make proxies for 4K footage
             </MenuItem>
           </>
         )}

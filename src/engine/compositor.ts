@@ -15,6 +15,7 @@ import { gradeFilter, gradeOverlays } from './color'
 import { fontCss, fontFileUrl } from './fonts'
 import { gpuGrade, needsGpuGrade } from './gl-grade'
 import { usePlayback } from '@/editor/playback'
+import { useUI } from '@/editor/ui-store'
 import { grainCanvas } from './grain'
 import { beginVideoFrame, endVideoFrame, getImage, sequenceFrame, sourceSize, videoFrame } from './media'
 import { renderLayer3D } from './three/layer'
@@ -504,7 +505,9 @@ function renderMediaLayer(project: Project, clip: Clip, local: number, W: number
   if (!asset) drawSlate(lctx, W, H, 'Media missing')
   else if (asset.source.missing) drawSlate(lctx, W, H, `Media offline — ${asset.source.type === 'file' ? asset.source.fileName : asset.name}`)
   else if (asset.source.type === 'file' && asset.kind === 'video') {
-    const video = videoFrame(clip.id, asset.source.url, t, usePlayback.getState().playing, playRate(clip, local))
+    // The preview plays a proxy when there is one; exports read the original (see media.ts).
+    const url = asset.proxy && useUI.getState().useProxies ? asset.proxy.url : asset.source.url
+    const video = videoFrame(clip.id, url, t, usePlayback.getState().playing, playRate(clip, local))
     if (video) rect = drawContain(lctx, video, W, H)
     else if (asset.source.poster) {
       const img = getImage(asset.source.poster)
