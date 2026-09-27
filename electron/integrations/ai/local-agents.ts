@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline'
-import { COPILOT_INSTRUCTIONS, type AgentEvent, type AgentRunRequest, type LocalAgentId, type LocalAgentState } from '../../../shared/ai'
+import { COPILOT_INSTRUCTIONS, isEffort, type AgentEvent, type AgentRunRequest, type Effort, type LocalAgentId, type LocalAgentState, type ModelInfo } from '../../../shared/ai'
 import { ensureDir, userDir } from '../paths'
 import { bridgeEndpoint } from '../server'
 
@@ -86,7 +86,7 @@ function launcher(bin: string, args: string[]): { command: string; args: string[
 function run(bin: string, args: string[], timeoutMs = 20_000): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const l = launcher(bin, args)
   return new Promise((resolve) => {
-    execFile(l.command, l.args, { timeout: timeoutMs, windowsHide: true, env: { ...process.env, ...l.env } }, (err, stdout, stderr) => {
+    execFile(l.command, l.args, { timeout: timeoutMs, windowsHide: true, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, ...l.env } }, (err, stdout, stderr) => {
       const code = err ? (typeof (err as { code?: unknown }).code === 'number' ? ((err as { code: number }).code) : 1) : 0
       resolve({ code, stdout: String(stdout), stderr: String(stderr) })
     })
@@ -109,6 +109,71 @@ async function locate(id: LocalAgentId, refresh: boolean) {
   return null
 }
 
+// ─── Models and effort ───────────────────────────────────────────────────
+
+const CLAUDE_EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
+
+/** Claude Code's model aliases — each follows the newest model of its family. */
+export const CLAUDE_CODE_MODELS: ModelInfo[] = [
+  { id: 'fable', name: 'Fable', description: 'Anthropic’s most capable model', efforts: CLAUDE_EFFORTS },
+  { id: 'opus', name: 'Opus', description: 'Frontier model for complex, multi-step edits', efforts: CLAUDE_EFFORTS },
+  { id: 'sonnet', name: 'Sonnet', description: 'Fast and capable for everyday edits', efforts: CLAUDE_EFFORTS },
+  { id: 'haiku', name: 'Haiku', description: 'The fastest, for quick simple edits' },
+]
+
+/** The models Codex offers (`codex debug models`), in its own order, with each one's effort levels. */
+export function parseCodexCatalog(json: unknown): ModelInfo[] {
+  const list = (json as { models?: unknown } | null)?.models
+  if (!Array.isArray(list)) return []
+  return list
+    .filter((m): m is Record<string, any> => Boolean(m) && typeof m === 'object' && typeof (m as { slug?: unknown }).slug === 'string')
+    .filter((m) => m.visibility === undefined || m.visibility === 'list')
+    .sort((a, b) => (Number(a.priority) || 999) - (Number(b.priority) || 999))
+    .map((m) => {
+      const levels = Array.isArray(m.supported_reasoning_levels) ? m.supported_reasoning_levels : []
+      const efforts = levels.map((l: { effort?: unknown } | null) => l?.effort).filter(isEffort)
+      return {
+        id: m.slug as string,
+        name: typeof m.display_name === 'string' ? m.display_name : (m.slug as string),
+        description: typeof m.description === 'string' ? m.description : undefined,
+        context: typeof m.context_window === 'number' ? m.context_window : undefined,
+        efforts: efforts.length ? efforts : undefined,
+        defaultEffort: isEffort(m.default_reasoning_level) ? m.default_reasoning_level : undefined,
+      }
+    })
+}
+
+/** The default model and effort from Codex's config.toml (top-level keys only; profiles aside). */
+export function parseCodexConfig(toml: string): { model?: string; effort?: Effort } {
+  const top = toml.split(/^\s*\[/m)[0]
+  const value = (key: string) => top.match(new RegExp(`^\\s*${key}\\s*=\\s*["']([^"'\\r\\n]*)["']`, 'm'))?.[1]
+  const effort = value('model_reasoning_effort')
+  return { model: value('model') || undefined, effort: isEffort(effort) ? effort : undefined }
+}
+
+function codexConfig() {
+  try {
+    return parseCodexConfig(fs.readFileSync(path.join(process.env.CODEX_HOME || path.join(home, '.codex'), 'config.toml'), 'utf8'))
+  } catch {
+    return {}
+  }
+}
+
+const codexCatalogs = new Map<string, ModelInfo[]>()
+
+async function codexModels(bin: string, refresh: boolean): Promise<ModelInfo[]> {
+  if (!refresh && codexCatalogs.has(bin)) return codexCatalogs.get(bin)!
+  const { code, stdout } = await run(bin, ['debug', 'models'], 30_000)
+  let models: ModelInfo[] = []
+  try {
+    if (code === 0) models = parseCodexCatalog(JSON.parse(stdout))
+  } catch {
+    /* an older Codex without the catalog command: its default model only */
+  }
+  codexCatalogs.set(bin, models)
+  return models
+}
+
 // ─── State ───────────────────────────────────────────────────────────────
 
 async function stateOf(id: LocalAgentId, refresh = false): Promise<LocalAgentState> {
@@ -116,21 +181,36 @@ async function stateOf(id: LocalAgentId, refresh = false): Promise<LocalAgentSta
   if (!bin) return { id, found: false, signedIn: false }
   const version = (await run(bin, ['--version'])).stdout.match(/\d+\.\d+\.\d+[\w.-]*/)?.[0]
   if (id === 'claude-code') {
+    const models = { models: CLAUDE_CODE_MODELS, efforts: CLAUDE_EFFORTS }
     const { stdout } = await run(bin, ['auth', 'status', '--json'])
     try {
       const s = JSON.parse(stdout) as { loggedIn?: boolean; authMethod?: string; subscriptionType?: string }
       const account = s.authMethod === 'claude.ai' || s.subscriptionType ? 'Claude subscription' : s.authMethod && s.authMethod !== 'none' ? 'Anthropic API' : undefined
-      return { id, found: true, path: bin, version, signedIn: Boolean(s.loggedIn), account }
+      return { id, found: true, path: bin, version, signedIn: Boolean(s.loggedIn), account, ...models }
     } catch {
-      return { id, found: true, path: bin, version, signedIn: false, error: 'Couldn’t read Claude Code’s sign-in status.' }
+      return { id, found: true, path: bin, version, signedIn: false, error: 'Couldn’t read Claude Code’s sign-in status.', ...models }
     }
   }
   // Only the method is kept — the rest of the line can include a masked key.
-  const { stdout, stderr } = await run(bin, ['login', 'status'])
+  const [{ stdout, stderr }, models] = await Promise.all([run(bin, ['login', 'status']), codexModels(bin, refresh)])
   const text = `${stdout}\n${stderr}`
   const signedIn = /logged in/i.test(text) && !/not logged in/i.test(text)
   const account = /chatgpt/i.test(text) ? 'ChatGPT' : /api key/i.test(text) ? 'OpenAI API key' : undefined
-  return { id, found: true, path: bin, version, signedIn, account }
+  const config = codexConfig()
+  const current = models.find((m) => m.id === config.model) ?? models[0]
+  return {
+    id,
+    found: true,
+    path: bin,
+    version,
+    signedIn,
+    account,
+    models,
+    defaultModel: config.model,
+    defaultEffort: config.effort ?? current?.defaultEffort,
+    settingsEffort: config.effort,
+    efforts: current?.efforts,
+  }
 }
 
 export async function localAgentStates(refresh = false): Promise<LocalAgentState[]> {
@@ -213,6 +293,18 @@ export async function runLocal(req: AgentRunRequest, emit: Emit): Promise<void> 
   else await runCodex(req, state.path, url, token, prompt, emit)
 }
 
+/** Claude Code's model and effort flags for a turn (none: its own defaults). */
+export function claudeTurnFlags(target: AgentRunRequest['target']): string[] {
+  if (target.kind !== 'local') return []
+  return [...(target.model ? ['--model', target.model] : []), ...(target.effort && target.effort !== 'ultra' ? ['--effort', target.effort] : [])]
+}
+
+/** Codex's model and effort flags for a turn (none: the defaults in its config.toml). */
+export function codexTurnFlags(target: AgentRunRequest['target']): string[] {
+  if (target.kind !== 'local') return []
+  return [...(target.model ? ['-m', target.model] : []), ...(target.effort ? ['-c', `model_reasoning_effort="${target.effort}"`] : [])]
+}
+
 function start(req: AgentRunRequest, bin: string, args: string[], env: Record<string, string>, cwd: string) {
   const l = launcher(bin, args)
   const child = spawn(l.command, l.args, { cwd, windowsHide: true, env: { ...process.env, ...env, ...l.env }, stdio: ['pipe', 'pipe', 'pipe'] })
@@ -256,7 +348,7 @@ async function runClaude(req: AgentRunRequest, bin: string, url: string, token: 
     'dontAsk',
     '--append-system-prompt-file',
     instructions,
-    ...(req.target.kind === 'local' && req.target.model ? ['--model', req.target.model] : []),
+    ...claudeTurnFlags(req.target),
     ...(session ? ['--resume', session] : []),
   ]
   const { child, stderr, exited } = start(req, bin, args, {}, ensureDir(path.join(dir, 'workspace')))
@@ -333,10 +425,10 @@ async function runCodex(req: AgentRunRequest, bin: string, url: string, token: s
     '-c',
     'mcp_servers.lumen.default_tools_approval_mode="approve"',
   ]
-  const model = req.target.kind === 'local' && req.target.model ? ['-m', req.target.model] : []
+  const turn = codexTurnFlags(req.target)
   const args = thread
-    ? ['exec', 'resume', thread, '--json', '--skip-git-repo-check', ...mcp, ...model, '-']
-    : ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'read-only', '-C', workspace, ...mcp, ...model, '-']
+    ? ['exec', 'resume', thread, '--json', '--skip-git-repo-check', ...mcp, ...turn, '-']
+    : ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'read-only', '-C', workspace, ...mcp, ...turn, '-']
   const { child, stderr, exited } = start(req, bin, args, { LUMEN_MCP_TOKEN: token }, workspace)
   // Codex has no system-prompt flag in exec mode: brief it at the start of a thread.
   child.stdin!.end(thread ? prompt : `${COPILOT_INSTRUCTIONS}\n- The Lumen tools are the MCP server named "lumen".\n\n${prompt}`)

@@ -14,6 +14,7 @@ import { cn } from '@/lib/cn'
 import { pickAndImport } from '@/project/media-import'
 import { assetThumb } from '@/features/assets/shared'
 import { BrainPicker } from './BrainPicker'
+import { EffortPicker } from './EffortPicker'
 import { attach, canUndoAll, detach, sendPrompt, stopCopilot, undoMessage, useAttachments, useCopilot, type Message, type ToolCall } from './store'
 import { STARTERS } from './suggestions'
 import { useVoiceInput } from './voice'
@@ -55,6 +56,7 @@ function StatusBar() {
   return (
     <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line px-4 text-2xs">
       <BrainPicker />
+      <EffortPicker />
       <Popover>
         <PopoverTrigger asChild>
           <button type="button" className="ml-auto flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 font-medium text-fg-3 transition-colors hover:bg-white/[0.06] hover:text-fg">

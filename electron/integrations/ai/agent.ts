@@ -1,7 +1,8 @@
 import { dynamicTool, isStepCount, jsonSchema, streamText, type ModelMessage, type ToolSet } from 'ai'
-import { COPILOT_INSTRUCTIONS, type AgentErrorCode, type AgentEvent, type AgentEventBody, type AgentRunRequest, type ProviderId } from '../../../shared/ai'
+import { COPILOT_INSTRUCTIONS, type AgentErrorCode, type AgentEvent, type AgentEventBody, type AgentRunRequest } from '../../../shared/ai'
 import { IPC, type BridgeTool } from '../../../shared/integrations'
 import { callEditorTool, editorTools, editorWindow } from '../editor-rpc'
+import { effortSettings } from './effort'
 import { forgetLocalSession, runLocal, stopLocal } from './local-agents'
 import { languageModel, MissingKeyError } from './providers'
 
@@ -62,13 +63,13 @@ interface ToolOutput {
   pictures: number
 }
 
-/** Providers whose tool results can carry images directly. */
-const NATIVE_PICTURES = new Set<ProviderId>(['anthropic'])
 const PICTURES_NOTE = 'The pictures from the tools you just called:'
 const FOLLOWS_NOTE = '[The picture follows in the next message.]'
 const DROPPED_NOTE = '[picture — not kept]'
 /** "provider:model" pairs that rejected images. */
 const textOnly = new Set<string>()
+/** "provider:model" pairs that rejected an effort setting. */
+const noEffort = new Set<string>()
 
 function isPictureMessage(m: ModelMessage) {
   return m.role === 'user' && Array.isArray(m.content) && m.content[0]?.type === 'text' && m.content[0].text === PICTURES_NOTE
@@ -117,11 +118,32 @@ function forHistory(messages: ModelMessage[]): ModelMessage[] {
   })
 }
 
+/**
+ * Claude binds each thinking block to the exact conversation before it, and the
+ * stored history is edited (pictures dropped, long results cut), so earlier
+ * turns' thinking can't be replayed — it would be rejected. It only matters
+ * within the turn that produced it, so it's left out of later turns.
+ */
+function stripReasoning(messages: ModelMessage[]): ModelMessage[] {
+  return messages.flatMap((m) => {
+    if (m.role !== 'assistant' || !Array.isArray(m.content)) return [m]
+    const content = m.content.filter((part) => part.type !== 'reasoning')
+    return content.length ? [{ ...m, content }] : []
+  })
+}
+
 /** A 400-ish error that says the model doesn't take image input. */
 function isPictureRejection(err: unknown) {
   const code = status(err)
   if (code !== undefined && code !== 400 && code !== 415 && code !== 422) return false
   return /image|vision|multi-?modal|modalit/i.test(message(err))
+}
+
+/** A 400-ish error about the effort / reasoning / thinking setting. */
+function isEffortRejection(err: unknown) {
+  const code = status(err)
+  if (code !== undefined && code !== 400 && code !== 422) return false
+  return /effort|reasoning|thinking|budget/i.test(message(err))
 }
 
 function buildTools(defs: BridgeTool[], pictures: Map<string, Picture[]>, modes: () => { native: boolean; vision: boolean }): ToolSet {
@@ -181,14 +203,17 @@ async function runModel(req: AgentRunRequest) {
   const emit = (e: AgentEventBody) => emitAgent({ runId, ...e })
   try {
     const { provider, model: modelId } = req.target
-    const model = languageModel(provider, modelId)
+    const { model, api, vision: canSee, headers } = await languageModel(provider, modelId, req.conversationId)
     const key = `${provider}:${modelId}`
-    const native = NATIVE_PICTURES.has(provider)
-    let vision = !textOnly.has(key)
+    // Claude-style APIs take pictures inside tool results; the rest get them in a message after.
+    const native = api === 'anthropic'
+    let vision = canSee !== false && !textOnly.has(key)
+    let effort = req.target.effort && !noEffort.has(key) ? req.target.effort : undefined
     const pictures = new Map<string, Picture[]>()
     const tools = buildTools(await editorTools(), pictures, () => ({ native, vision }))
 
-    const history = histories.get(req.conversationId) ?? []
+    const stored = histories.get(req.conversationId) ?? []
+    const history = native ? stripReasoning(stored) : stored
     const user: ModelMessage = { role: 'user', content: req.context ? `${req.context}\n\n${req.prompt}` : req.prompt }
     // Steps already completed, carried into a retry so no tool runs twice.
     let carried: ModelMessage[] = []
@@ -196,14 +221,21 @@ async function runModel(req: AgentRunRequest) {
     let wroteText = false
     let afterTool = false
     let usage: { inputTokens?: number; outputTokens?: number } | undefined
+    const retried = { pictures: false, effort: false }
+    const carry = (steps: ModelMessage[]) => {
+      const kept = stripPictures(steps)
+      return native ? stripReasoning(kept) : kept
+    }
 
-    for (let attempt = 0; ; attempt++) {
+    for (;;) {
       try {
         const result = streamText({
           model,
           system: COPILOT_INSTRUCTIONS,
           messages: [...history, user, ...carried],
           tools,
+          headers,
+          ...effortSettings(api, effort),
           stopWhen: isStepCount(MAX_STEPS),
           abortSignal: controller.signal,
           prepareStep: ({ messages, responseMessages }) => {
@@ -240,16 +272,27 @@ async function runModel(req: AgentRunRequest) {
         }
         // Every step's messages — tool calls and results included — so later turns remember what was looked up.
         const steps = (await result.responseMessages) as ModelMessage[]
-        histories.set(req.conversationId, trim(forHistory([...history, user, ...carried, ...steps])))
+        histories.set(req.conversationId, trim(forHistory([...stored, user, ...carried, ...steps])))
         emit({ type: 'done', usage })
         return
       } catch (err) {
-        if (attempt === 0 && vision && !controller.signal.aborted && isPictureRejection(err)) {
+        if (controller.signal.aborted) throw err
+        if (vision && !retried.pictures && isPictureRejection(err)) {
           // The model can't take images: remember that and carry on from the steps already done.
+          retried.pictures = true
           textOnly.add(key)
           vision = false
-          carried = stripPictures([...carried, ...completed])
+          carried = carry([...carried, ...completed])
           emit({ type: 'status', message: 'This model can’t look at images — carrying on without them.' })
+          continue
+        }
+        if (effort && !retried.effort && isEffortRejection(err)) {
+          // The model turned the effort setting down: remember that and carry on at its default.
+          retried.effort = true
+          noEffort.add(key)
+          effort = undefined
+          carried = carry([...carried, ...completed])
+          emit({ type: 'status', message: 'This model doesn’t take that effort setting — carrying on with its default.' })
           continue
         }
         throw err

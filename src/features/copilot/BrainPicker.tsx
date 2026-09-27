@@ -2,13 +2,19 @@ import { Command } from 'cmdk'
 import { Check, ChevronDown, LoaderCircle, Settings2, Sparkles, Terminal } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
-import { PROVIDERS, type CopilotTarget, type LocalAgentId } from '@shared/ai'
+import { PROVIDERS, type CopilotTarget, type LocalAgentId, type LocalAgentState } from '@shared/ai'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { LOCAL_AGENT_NAMES, loadModels, setTarget, signInLocal, targetLabel, targetReady, useAi } from '@/integrations/ai'
+import { chooseTarget, LOCAL_AGENT_NAMES, loadModels, signInLocal, targetLabel, targetReady, useAi } from '@/integrations/ai'
 import { openIntegrations, useIntegrations } from '@/integrations/store'
 import { cn } from '@/lib/cn'
 
-const same = (a: CopilotTarget | null, b: CopilotTarget | null) => JSON.stringify(a) === JSON.stringify(b)
+/** Same brain and model — effort aside. */
+function same(a: CopilotTarget | null, b: CopilotTarget | null) {
+  if (!a || !b) return a === b
+  if (a.kind === 'local' && b.kind === 'local') return a.agent === b.agent && a.model === b.model
+  if (a.kind === 'model' && b.kind === 'model') return a.provider === b.provider && a.model === b.model
+  return false
+}
 
 /** Chooses what powers the Copilot: your own Claude Code / Codex, or any model you've added (or automatic). */
 export function BrainPicker() {
@@ -23,7 +29,7 @@ export function BrainPicker() {
   const ready = targetReady(target)
 
   const choose = (t: CopilotTarget | null) => {
-    setTarget(t)
+    chooseTarget(t)
     setOpen(false)
   }
 
@@ -78,34 +84,19 @@ export function BrainPicker() {
               />
             </Command.Group>
 
-            {available && (
-              <Command.Group heading="Your agents (your account)">
-                {(['claude-code', 'codex'] as const).map((id) => {
-                  const a = localAgents[id]
-                  const t: CopilotTarget = { kind: 'local', agent: id }
-                  return (
-                    <Row
-                      key={id}
-                      value={`${LOCAL_AGENT_NAMES[id]} local agent`}
-                      icon={<Terminal className="size-3.5" />}
-                      title={LOCAL_AGENT_NAMES[id]}
-                      hint={!a ? 'Checking…' : !a.found ? 'Not installed' : a.signedIn ? `${a.account ?? 'Signed in'}${a.version ? ` · v${a.version}` : ''}` : 'Not signed in'}
-                      selected={same(target, t)}
-                      disabled={!a?.found}
-                      onSelect={() => (a?.signedIn ? choose(t) : a?.found ? void signIn(id) : openIntegrations('local-agents'))}
-                      action={
-                        a?.found && !a.signedIn ? (
-                          <span className="flex items-center gap-1 rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10px] font-medium text-fg-2">
-                            {signingIn[id] ? <LoaderCircle className="size-3 animate-spin" /> : null}
-                            Sign in
-                          </span>
-                        ) : undefined
-                      }
-                    />
-                  )
-                })}
-              </Command.Group>
-            )}
+            {available &&
+              (['claude-code', 'codex'] as const).map((id) => (
+                <Command.Group key={id} heading={`${LOCAL_AGENT_NAMES[id]} · your account`}>
+                  <AgentRows
+                    id={id}
+                    agent={localAgents[id]}
+                    target={target}
+                    signingIn={Boolean(signingIn[id])}
+                    onChoose={choose}
+                    onSignIn={() => void signIn(id)}
+                  />
+                </Command.Group>
+              ))}
 
             {configured.map((p) => {
               const list = models[p.id]
@@ -120,7 +111,6 @@ export function BrainPicker() {
                 </Command.Group>
               )
             })}
-
           </Command.List>
           <button
             type="button"
@@ -136,6 +126,63 @@ export function BrainPicker() {
         </Command>
       </PopoverContent>
     </Popover>
+  )
+}
+
+/** One local agent: its default and each model it can switch to — or what it needs first. */
+function AgentRows({
+  id,
+  agent,
+  target,
+  signingIn,
+  onChoose,
+  onSignIn,
+}: {
+  id: LocalAgentId
+  agent: LocalAgentState | undefined
+  target: CopilotTarget | null
+  signingIn: boolean
+  onChoose: (t: CopilotTarget) => void
+  onSignIn: () => void
+}) {
+  const name = LOCAL_AGENT_NAMES[id]
+  if (!agent?.found || !agent.signedIn) {
+    return (
+      <Row
+        value={`${name} local agent`}
+        icon={<Terminal className="size-3.5" />}
+        title={name}
+        hint={!agent ? 'Checking…' : !agent.found ? 'Not installed' : 'Not signed in'}
+        selected={false}
+        disabled={!agent?.found}
+        onSelect={() => (agent?.found ? onSignIn() : openIntegrations('local-agents'))}
+        action={
+          agent?.found ? (
+            <span className="flex items-center gap-1 rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10px] font-medium text-fg-2">
+              {signingIn ? <LoaderCircle className="size-3 animate-spin" /> : null}
+              Sign in
+            </span>
+          ) : undefined
+        }
+      />
+    )
+  }
+  const fallback: CopilotTarget = { kind: 'local', agent: id }
+  const defaultModel = agent.defaultModel && (agent.models?.find((m) => m.id === agent.defaultModel)?.name ?? agent.defaultModel)
+  return (
+    <>
+      <Row
+        value={`${name} default model`}
+        title="Default model"
+        hint={defaultModel ? `${defaultModel} · from your ${name} settings` : `Your ${name} setting · ${agent.account ?? 'signed in'}`}
+        selected={same(target, fallback)}
+        onSelect={() => onChoose(fallback)}
+      />
+      {(agent.models ?? []).map((m) => {
+        const t: CopilotTarget = { kind: 'local', agent: id, model: m.id }
+        return <Row key={m.id} value={`${name} ${m.name} ${m.id}`} title={m.name} hint={m.description ?? m.id} selected={same(target, t)} onSelect={() => onChoose(t)} />
+      })}
+    </>
   )
 }
 

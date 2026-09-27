@@ -3,7 +3,18 @@
  * the main process — the editor only sees hints) and the user's local agents.
  */
 import { create } from 'zustand'
-import { PROVIDERS, type AgentEvent, type CopilotTarget, type LocalAgentId, type LocalAgentState, type ModelInfo, type ProviderId, type ProviderState } from '@shared/ai'
+import {
+  cleanTarget,
+  PROVIDERS,
+  type AgentEvent,
+  type CopilotTarget,
+  type Effort,
+  type LocalAgentId,
+  type LocalAgentState,
+  type ModelInfo,
+  type ProviderId,
+  type ProviderState,
+} from '@shared/ai'
 import { api } from './store'
 
 const TARGET_KEY = 'lumen.copilot.target'
@@ -12,12 +23,10 @@ const TARGET_KEY = 'lumen.copilot.target'
 function loadTarget(): CopilotTarget | null {
   try {
     const raw = localStorage.getItem(TARGET_KEY)
-    const t = raw ? (JSON.parse(raw) as CopilotTarget | null) : null
-    if (t && (t.kind === 'local' || t.kind === 'model')) return t
+    return raw ? cleanTarget(JSON.parse(raw)) : null
   } catch {
-    /* storage unavailable */
+    return null
   }
-  return null
 }
 
 interface AiState {
@@ -43,6 +52,19 @@ export function setTarget(target: CopilotTarget | null) {
   } catch {
     /* storage unavailable */
   }
+}
+
+/** Switches brain, keeping the chosen effort when the new model takes it too. */
+export function chooseTarget(next: CopilotTarget | null) {
+  const effort = useAi.getState().target?.effort
+  if (!next || !effort || next.effort) return setTarget(next)
+  setTarget(targetEfforts(next).levels.includes(effort) ? { ...next, effort } : next)
+}
+
+/** Sets the effort for the chosen brain (undefined: the model's default). */
+export function setEffort(effort: Effort | undefined) {
+  const target = useAi.getState().target
+  if (target) setTarget({ ...target, effort })
 }
 
 const eventListeners = new Set<(e: AgentEvent) => void>()
@@ -130,13 +152,39 @@ export const LOCAL_AGENT_NAMES: Record<LocalAgentId, string> = { 'claude-code': 
 
 export function targetLabel(t: CopilotTarget | null): { title: string; subtitle: string } {
   if (!t) {
-    const auto = resolveTarget()
+    const auto = autoTarget()
     return auto ? { title: targetLabel(auto).title, subtitle: 'automatic' } : { title: 'No AI connected', subtitle: 'set one up' }
   }
-  if (t.kind === 'local') return { title: LOCAL_AGENT_NAMES[t.agent], subtitle: 'your account' }
+  if (t.kind === 'local') {
+    if (!t.model) return { title: LOCAL_AGENT_NAMES[t.agent], subtitle: 'your account' }
+    return { title: targetModel(t)?.name ?? t.model, subtitle: LOCAL_AGENT_NAMES[t.agent] }
+  }
   const spec = PROVIDERS.find((p) => p.id === t.provider)
-  const name = useAi.getState().models[t.provider]?.models.find((m) => m.id === t.model)?.name ?? t.model
-  return { title: name, subtitle: spec?.name ?? t.provider }
+  return { title: targetModel(t)?.name ?? t.model, subtitle: spec?.name ?? t.provider }
+}
+
+/** What Lumen knows about the target's model (its name, effort levels…), when listed. */
+export function targetModel(t: CopilotTarget): ModelInfo | undefined {
+  const s = useAi.getState()
+  if (t.kind === 'local') return t.model ? s.localAgents[t.agent]?.models?.find((m) => m.id === t.model) : undefined
+  return s.models[t.provider]?.models.find((m) => m.id === t.model)
+}
+
+/**
+ * The effort levels the target takes, and what Default means for it when known —
+ * `fromSettings` when that comes from the agent's own settings (Codex's config.toml).
+ */
+export function targetEfforts(t: CopilotTarget | null): { levels: Effort[]; defaultEffort?: Effort; fromSettings?: boolean } {
+  if (!t) return { levels: [] }
+  if (t.kind === 'local') {
+    const agent = useAi.getState().localAgents[t.agent]
+    const model = targetModel(t)
+    const levels = (t.model ? model?.efforts : agent?.efforts) ?? []
+    if (agent?.settingsEffort) return { levels, defaultEffort: agent.settingsEffort, fromSettings: true }
+    return { levels, defaultEffort: t.model ? model?.defaultEffort : agent?.defaultEffort }
+  }
+  const model = targetModel(t)
+  return { levels: model?.efforts ?? [], defaultEffort: model?.defaultEffort }
 }
 
 /** Is the selected brain ready to answer? (false → Copilot explains what's missing) */
@@ -147,13 +195,14 @@ export function targetReady(t: CopilotTarget | null): boolean {
   return Boolean(s.providers[t.provider]?.configured)
 }
 
-/**
- * The brain that answers: the user's pick, or — on automatic — the first that's
- * ready: their own Claude Code, then Codex, then a model with a saved key.
- */
+/** The brain that answers: the user's pick, or the automatic one. */
 export function resolveTarget(): CopilotTarget | null {
+  return useAi.getState().target ?? autoTarget()
+}
+
+/** What Automatic picks: the first brain that's ready — their own Claude Code, then Codex, then a model with a saved key. */
+export function autoTarget(): CopilotTarget | null {
   const s = useAi.getState()
-  if (s.target) return s.target
   for (const agent of ['claude-code', 'codex'] as const) {
     const a = s.localAgents[agent]
     if (a?.found && a.signedIn) return { kind: 'local', agent }

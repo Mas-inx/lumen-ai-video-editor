@@ -4,9 +4,12 @@ import { createOpenAI } from '@ai-sdk/openai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import type { LanguageModel } from 'ai'
+import { app } from 'electron'
 import { PROVIDERS, type ModelInfo, type ProviderId, type ProviderSpec, type ProviderState } from '../../../shared/ai'
 import { readJson, writeJson } from '../paths'
 import { getSecret, secretHint, setSecret } from '../secrets'
+import { loadCatalog, openCodeApi } from './catalog'
+import { claudeEfforts, compatibleEfforts, effortsFor, geminiEfforts, openaiEfforts, OPENROUTER_EFFORTS, type ModelApi } from './effort'
 
 /**
  * Model providers for the Copilot. Keys live in the encrypted secret store;
@@ -31,6 +34,9 @@ export const spec = (id: ProviderId): ProviderSpec => {
 function baseURL(id: ProviderId) {
   return (settings()[id]?.baseURL || spec(id).defaultBaseURL || '').replace(/\/+$/, '')
 }
+
+/** OpenCode's gateways ask every client to name itself rather than go by its HTTP library's name. */
+export const userAgent = () => `Lumen/${app.getVersion()}`
 
 /** A provider's stored key (main process only — never sent to the editor). */
 export const providerKey = (id: ProviderId) => getSecret(keyName(id))
@@ -75,40 +81,59 @@ async function getJson(url: string, headers: Record<string, string>, timeoutMs =
 }
 
 const byName = (a: ModelInfo, b: ModelInfo) => a.name.localeCompare(b.name)
+const withEfforts = (m: ModelInfo, efforts: ModelInfo['efforts']): ModelInfo => (efforts?.length ? { ...m, efforts } : m)
 
 async function fetchModels(id: ProviderId): Promise<ModelInfo[]> {
   const key = getSecret(keyName(id))
   switch (id) {
     case 'anthropic': {
       const json = await getJson('https://api.anthropic.com/v1/models?limit=100', { 'x-api-key': key ?? '', 'anthropic-version': '2023-06-01' })
-      return (json.data as { id: string; display_name?: string }[]).map((m) => ({ id: m.id, name: m.display_name ?? m.id }))
+      return (json.data as { id: string; display_name?: string }[]).map((m) => withEfforts({ id: m.id, name: m.display_name ?? m.id }, claudeEfforts(m.id)))
     }
     case 'openai': {
       const json = await getJson('https://api.openai.com/v1/models', { Authorization: `Bearer ${key}` })
       return (json.data as { id: string }[])
         .map((m) => m.id)
         .filter((m) => /^(gpt|o\d|chatgpt)/.test(m) && !/audio|realtime|transcribe|tts|image|embedding|moderation|search|instruct|dall-e/.test(m))
-        .map((m) => ({ id: m, name: m }))
+        .map((m) => withEfforts({ id: m, name: m }, openaiEfforts(m)))
         .sort(byName)
     }
     case 'gemini': {
       const json = await getJson('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', { 'x-goog-api-key': key ?? '' })
       return (json.models as { name: string; displayName?: string; supportedGenerationMethods?: string[]; inputTokenLimit?: number }[])
         .filter((m) => m.supportedGenerationMethods?.includes('generateContent') && /gemini/.test(m.name) && !/embedding|image|tts|audio/.test(m.name))
-        .map((m) => ({ id: m.name.replace(/^models\//, ''), name: m.displayName ?? m.name, context: m.inputTokenLimit }))
+        .map((m) => {
+          const id = m.name.replace(/^models\//, '')
+          return withEfforts({ id, name: m.displayName ?? m.name, context: m.inputTokenLimit }, geminiEfforts(id))
+        })
     }
     case 'openrouter': {
       const json = await getJson('https://openrouter.ai/api/v1/models', key ? { Authorization: `Bearer ${key}` } : {})
       return (json.data as { id: string; name?: string; context_length?: number; supported_parameters?: string[] }[])
         .filter((m) => !m.supported_parameters || m.supported_parameters.includes('tools'))
-        .map((m) => ({ id: m.id, name: m.name ?? m.id, context: m.context_length }))
+        .map((m) => withEfforts({ id: m.id, name: m.name ?? m.id, context: m.context_length }, m.supported_parameters?.includes('reasoning') ? OPENROUTER_EFFORTS : []))
+    }
+    case 'opencode':
+    case 'opencode-go': {
+      // The gateway lists ids; the catalog knows names, routing, tool use and image support.
+      const headers: Record<string, string> = { 'User-Agent': userAgent(), ...(key ? { Authorization: `Bearer ${key}` } : {}) }
+      const [json, catalog] = await Promise.all([getJson(`${baseURL(id)}/models`, headers), loadCatalog(userAgent())])
+      const known = catalog[id] ?? {}
+      return ((json.data ?? []) as { id: string }[])
+        .filter((m) => known[m.id]?.tools !== false)
+        .map((m) => {
+          const info = known[m.id]
+          const model: ModelInfo = { id: m.id, name: info?.name ?? m.id, context: info?.context, vision: info?.vision }
+          return withEfforts(model, effortsFor(openCodeApi(id, m.id, catalog), m.id, info?.reasoning))
+        })
+        .sort(byName)
     }
     default: {
-      // OpenAI-compatible: OpenCode Zen, Ollama, LM Studio, custom.
+      // OpenAI-compatible: Ollama, LM Studio, custom.
       const url = baseURL(id)
       if (!url) throw new Error('Set the server’s base URL first.')
       const json = await getJson(`${url}/models`, key ? { Authorization: `Bearer ${key}` } : {}, spec(id).local ? 3_000 : 12_000)
-      return ((json.data ?? []) as { id: string }[]).map((m) => ({ id: m.id, name: m.id })).sort(byName)
+      return ((json.data ?? []) as { id: string }[]).map((m) => withEfforts({ id: m.id, name: m.id }, compatibleEfforts(m.id, undefined))).sort(byName)
     }
   }
 }
@@ -116,7 +141,7 @@ async function fetchModels(id: ProviderId): Promise<ModelInfo[]> {
 export async function listModels(id: ProviderId, refresh = false): Promise<{ models: ModelInfo[]; error?: string }> {
   const cached = modelCache.get(id)
   if (cached && !refresh && Date.now() - cached.at < 10 * 60_000) return { models: cached.models }
-  const suggested = (spec(id).suggested ?? []).map((m) => ({ id: m, name: m }))
+  const suggested = (spec(id).suggested ?? []).map((m) => withEfforts({ id: m, name: m }, id === 'anthropic' ? claudeEfforts(m) : undefined))
   const state = providerState(id)
   if (!state.configured) return { models: suggested }
   try {
@@ -138,23 +163,54 @@ export async function listModels(id: ProviderId, refresh = false): Promise<{ mod
 
 export class MissingKeyError extends Error {}
 
-export function languageModel(id: ProviderId, modelId: string): LanguageModel {
+export interface ModelHandle {
+  model: LanguageModel
+  /** The API the model is called through (decides effort settings and how pictures travel). */
+  api: ModelApi
+  /** false when the model is known not to take images. */
+  vision?: boolean
+  /** Headers for each call. The User-Agent goes here: the SDK sets its own at call level, over the provider's. */
+  headers?: Record<string, string>
+}
+
+/**
+ * A model to run a Copilot turn with. `session` is the Copilot conversation,
+ * which OpenCode's gateways use to route a conversation's requests together.
+ */
+export async function languageModel(id: ProviderId, modelId: string, session?: string): Promise<ModelHandle> {
   const key = getSecret(keyName(id))
   const s = spec(id)
   if (!s.local && !s.needsBaseURL && !key) throw new MissingKeyError(`Add your ${s.name} API key in Integrations › AI models.`)
   switch (id) {
     case 'anthropic':
-      return createAnthropic({ apiKey: key })(modelId)
+      return { model: createAnthropic({ apiKey: key })(modelId), api: 'anthropic' }
     case 'openai':
-      return createOpenAI({ apiKey: key })(modelId)
+      return { model: createOpenAI({ apiKey: key })(modelId), api: 'openai' }
     case 'gemini':
-      return createGoogle({ apiKey: key })(modelId)
+      return { model: createGoogle({ apiKey: key })(modelId), api: 'google' }
     case 'openrouter':
-      return createOpenRouter({ apiKey: key, headers: { 'X-Title': 'Lumen' } })(modelId)
+      return { model: createOpenRouter({ apiKey: key, headers: { 'X-Title': 'Lumen' } })(modelId), api: 'openrouter' }
+    case 'opencode':
+    case 'opencode-go': {
+      const catalog = await loadCatalog(userAgent())
+      const url = baseURL(id)
+      const headers = session ? { 'x-opencode-session': session } : undefined
+      const call = { api: openCodeApi(id, modelId, catalog), vision: catalog[id]?.[modelId]?.vision, headers: { 'User-Agent': userAgent() } }
+      switch (call.api) {
+        case 'anthropic':
+          return { ...call, model: createAnthropic({ baseURL: url, apiKey: key, headers })(modelId) }
+        case 'openai':
+          return { ...call, model: createOpenAI({ baseURL: url, apiKey: key, headers, name: id })(modelId) }
+        case 'google':
+          return { ...call, model: createGoogle({ baseURL: url, apiKey: key, headers })(modelId) }
+        default:
+          return { ...call, model: createOpenAICompatible({ name: id, baseURL: url, apiKey: key, headers })(modelId) }
+      }
+    }
     default: {
       const url = baseURL(id)
       if (!url) throw new MissingKeyError(`Set the ${s.name} base URL in Integrations › AI models.`)
-      return createOpenAICompatible({ name: id, baseURL: url, apiKey: key })(modelId)
+      return { model: createOpenAICompatible({ name: id, baseURL: url, apiKey: key })(modelId), api: 'compatible' }
     }
   }
 }

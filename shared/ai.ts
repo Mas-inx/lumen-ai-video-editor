@@ -6,7 +6,7 @@
 
 // ─── Model providers ─────────────────────────────────────────────────────
 
-export type ProviderId = 'anthropic' | 'openai' | 'gemini' | 'openrouter' | 'opencode' | 'ollama' | 'lmstudio' | 'custom'
+export type ProviderId = 'anthropic' | 'openai' | 'gemini' | 'openrouter' | 'opencode' | 'opencode-go' | 'ollama' | 'lmstudio' | 'custom'
 
 export interface ProviderSpec {
   id: ProviderId
@@ -45,7 +45,22 @@ export const PROVIDERS: ProviderSpec[] = [
     keyPlaceholder: 'sk-or-…',
     oauth: true,
   },
-  { id: 'opencode', name: 'OpenCode Zen', tagline: 'OpenCode’s curated model gateway', keyUrl: 'https://opencode.ai/docs/zen/', defaultBaseURL: 'https://opencode.ai/zen/v1' },
+  {
+    id: 'opencode',
+    name: 'OpenCode Zen',
+    tagline: 'Pay as you go — Claude, GPT, Gemini and open models on one key',
+    keyUrl: 'https://opencode.ai/auth',
+    keyPlaceholder: 'sk-…',
+    defaultBaseURL: 'https://opencode.ai/zen/v1',
+  },
+  {
+    id: 'opencode-go',
+    name: 'OpenCode Go',
+    tagline: 'Low-cost subscription for open models — GLM, Kimi, DeepSeek, Qwen, MiniMax and more',
+    keyUrl: 'https://opencode.ai/auth',
+    keyPlaceholder: 'sk-…',
+    defaultBaseURL: 'https://opencode.ai/zen/go/v1',
+  },
   { id: 'ollama', name: 'Ollama', tagline: 'Open models running on this computer', local: true, defaultBaseURL: 'http://127.0.0.1:11434/v1' },
   { id: 'lmstudio', name: 'LM Studio', tagline: 'Open models running on this computer', local: true, defaultBaseURL: 'http://127.0.0.1:1234/v1' },
   { id: 'custom', name: 'Custom endpoint', tagline: 'Any server that speaks the OpenAI API', needsBaseURL: true },
@@ -66,7 +81,32 @@ export interface ModelInfo {
   id: string
   name: string
   context?: number
+  description?: string
+  /** The effort levels this model takes, lowest first (none: it has no effort setting). */
+  efforts?: Effort[]
+  /** The level it uses when the user leaves effort on Default, when known. */
+  defaultEffort?: Effort
+  /** false when the model is known not to take images. */
+  vision?: boolean
 }
+
+// ─── Effort ──────────────────────────────────────────────────────────────
+
+/** How hard the model thinks before it acts. Each brain offers the levels its model supports. */
+export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
+
+export const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
+
+export const EFFORT_INFO: Record<Effort, { label: string; hint: string }> = {
+  low: { label: 'Low', hint: 'Fastest — light reasoning for quick edits' },
+  medium: { label: 'Medium', hint: 'Balances speed and depth' },
+  high: { label: 'High', hint: 'Deeper reasoning for multi-step edits' },
+  xhigh: { label: 'Extra high', hint: 'More depth for hard problems' },
+  max: { label: 'Max', hint: 'Deepest reasoning — slowest and uses the most' },
+  ultra: { label: 'Ultra', hint: 'Max, and Codex may delegate parts of the task' },
+}
+
+export const isEffort = (value: unknown): value is Effort => typeof value === 'string' && (EFFORTS as readonly string[]).includes(value)
 
 // ─── Local agents ────────────────────────────────────────────────────────
 
@@ -81,11 +121,47 @@ export interface LocalAgentState {
   /** How it's signed in, e.g. "Claude subscription" or "ChatGPT". */
   account?: string
   error?: string
+  /** Models the agent can switch to (Claude Code's aliases, Codex's catalog). */
+  models?: ModelInfo[]
+  /** The agent's own default model and effort, from its settings (when Lumen can tell). */
+  defaultModel?: string
+  defaultEffort?: Effort
+  /** An effort set in the agent's own settings — it applies whichever model is picked. */
+  settingsEffort?: Effort
+  /** Effort levels offered while the agent is on its default model. */
+  efforts?: Effort[]
 }
 
 // ─── Copilot runs ────────────────────────────────────────────────────────
 
-export type CopilotTarget = { kind: 'model'; provider: ProviderId; model: string } | { kind: 'local'; agent: LocalAgentId; model?: string }
+/** The brain for a Copilot turn. No model or effort means the brain's own default. */
+export type CopilotTarget =
+  | { kind: 'model'; provider: ProviderId; model: string; effort?: Effort }
+  | { kind: 'local'; agent: LocalAgentId; model?: string; effort?: Effort }
+
+const MODEL_ID = /^\w[\w.:@/[\]+-]{0,199}$/
+
+/**
+ * A target from the editor, checked: a known provider or agent, an effort from
+ * the scale, and a model id that can't pass for a command-line flag (local
+ * agents get it as an argument). Null when it isn't a valid target.
+ */
+export function cleanTarget(value: unknown): CopilotTarget | null {
+  const t = value as Partial<Record<'kind' | 'provider' | 'agent' | 'model' | 'effort', unknown>> | null
+  if (!t || typeof t !== 'object') return null
+  const effort = isEffort(t.effort) ? t.effort : undefined
+  const model = typeof t.model === 'string' && MODEL_ID.test(t.model) ? t.model : undefined
+  if (t.kind === 'model') {
+    if (!PROVIDERS.some((p) => p.id === t.provider) || !model) return null
+    return { kind: 'model', provider: t.provider as ProviderId, model, effort }
+  }
+  if (t.kind === 'local') {
+    if (t.agent !== 'claude-code' && t.agent !== 'codex') return null
+    if (t.model !== undefined && !model) return null
+    return { kind: 'local', agent: t.agent, model, effort }
+  }
+  return null
+}
 
 export interface AgentRunRequest {
   runId: string

@@ -91,7 +91,7 @@ What the AI sees when it watches your edit — one call to `get_contact_sheet`:
 
 <img src="docs/screenshots/contact-sheet.jpg" alt="A contact sheet the Lumen AI generated of the whole edit: labelled frames of 3D backgrounds, the chrome title, the lower third and captions" />
 
-**Brains:** your own **Claude Code** or **Codex** (Lumen runs them headless, with only Lumen's tools), or a model with your key: **Anthropic, OpenAI, Google Gemini, OpenRouter, OpenCode Zen, Ollama, LM Studio** or any OpenAI-compatible endpoint. Keys are encrypted by Windows (DPAPI) and never leave the app's main process.
+**Brains:** your own **Claude Code** or **Codex** (Lumen runs them headless, with only Lumen's tools), or a model with your key: **Anthropic, OpenAI, Google Gemini, OpenRouter, OpenCode Zen, OpenCode Go, Ollama, LM Studio** or any OpenAI-compatible endpoint. Pick the model and the **effort** — how hard it thinks, from Low to Max (Ultra on Codex) — for every one of them, Claude Code's Fable, Opus, Sonnet and Haiku and Codex's own model list included. Keys are encrypted by Windows (DPAPI) and never leave the app's main process.
 
 ### Smart edits
 

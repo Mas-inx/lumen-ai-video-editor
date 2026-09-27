@@ -13,7 +13,7 @@ import { signInOpenRouter } from './ai/openrouter'
 import { listModels, providerStates, setProvider } from './ai/providers'
 import { transcribeWithOpenAI } from './ai/transcribe'
 import { generateImage, generateVideo, mediaModels } from './ai/media-gen'
-import { PROVIDERS, type AgentRunRequest, type LocalAgentId, type ProviderId } from '../../shared/ai'
+import { cleanTarget, PROVIDERS, type AgentRunRequest, type LocalAgentId, type ProviderId } from '../../shared/ai'
 
 /**
  * The integration IPC surface. Only the editor's own page may call it —
@@ -65,9 +65,9 @@ export function registerIntegrationIpc(isTrustedUrl: (url: string) => boolean) {
   handle(IPC.aiSignInLocal, (id: string) => signInLocal(localAgent(id)))
   handle(IPC.aiRun, (req: AgentRunRequest) => {
     if (!req || typeof req.runId !== 'string' || typeof req.conversationId !== 'string' || typeof req.prompt !== 'string') throw new Error('Bad request')
-    if (req.target?.kind === 'model') provider(req.target.provider)
-    if (req.target?.kind === 'local') localAgent(req.target.agent)
-    return startAgentRun({ ...req, prompt: req.prompt.slice(0, 20_000), context: typeof req.context === 'string' ? req.context.slice(0, 4000) : undefined })
+    const target = cleanTarget(req.target)
+    if (!target) throw new Error('Unknown model or agent')
+    return startAgentRun({ ...req, target, prompt: req.prompt.slice(0, 20_000), context: typeof req.context === 'string' ? req.context.slice(0, 4000) : undefined })
   })
   handle(IPC.aiStop, (runId: string) => stopAgentRun(String(runId)))
   handle(IPC.aiForget, (conversationId: string) => forgetConversation(String(conversationId)))
