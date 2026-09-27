@@ -5,7 +5,7 @@ import { setAnimatable } from '@/editor/edit'
 import { clipEnd } from '@/editor/ops'
 import { usePlayback } from '@/editor/playback'
 import { dispatch, getProject, useEditor } from '@/editor/store'
-import type { Clip, Crop } from '@/editor/types'
+import type { Clip, Crop, Mask } from '@/editor/types'
 import { useUI } from '@/editor/ui-store'
 import { renderFrame, type ClipBounds } from '@/engine/compositor'
 import { onMediaReady } from '@/engine/media'
@@ -18,6 +18,14 @@ export const useBounds = create<{ bounds: Map<string, ClipBounds> }>(() => ({ bo
 const latestBounds = { current: new Map<string, ClipBounds>() }
 
 const quality = { full: 1, half: 0.5 }
+
+const frameListeners = new Set<(canvas: HTMLCanvasElement) => void>()
+
+/** Called with the program monitor's canvas after every redraw (for the scopes). */
+export function onPreviewFrame(fn: (canvas: HTMLCanvasElement) => void) {
+  frameListeners.add(fn)
+  return () => void frameListeners.delete(fn)
+}
 
 export function PreviewStage({ q = 'full' }: { q?: keyof typeof quality }) {
   const stageRef = useRef<HTMLDivElement>(null)
@@ -50,6 +58,7 @@ export function PreviewStage({ q = 'full' }: { q?: keyof typeof quality }) {
       needsRender.current = false
       const { bounds } = renderFrame(ctx, getProject(), usePlayback.getState().frame)
       latestBounds.current = bounds
+      for (const fn of frameListeners) fn(canvas)
       const prev = useBounds.getState().bounds
       const sel = useUI.getState().selection
       if (sel.some((id) => JSON.stringify(prev.get(id)) !== JSON.stringify(bounds.get(id)))) useBounds.setState({ bounds })
@@ -201,6 +210,119 @@ function CropGizmo({ clip, b, scale }: { clip: Clip; b: ClipBounds; scale: numbe
   )
 }
 
+// ─── Mask gizmo ──────────────────────────────────────────────────────────
+
+type MaskHandle = 'move' | 'rotate' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
+
+const rot = (x: number, y: number, deg: number) => {
+  const a = (deg * Math.PI) / 180
+  return { x: x * Math.cos(a) - y * Math.sin(a), y: x * Math.sin(a) + y * Math.cos(a) }
+}
+
+/**
+ * Edits a mask on the canvas: drag inside to move it, the edges and corners to
+ * resize it (the opposite side stays put), the top knob to rotate it.
+ */
+function MaskGizmo({ clip, mask, layer, pw, ph, scale }: { clip: Clip; mask: Mask; layer: NonNullable<ClipBounds['layer']>; pw: number; ph: number; scale: number }) {
+  // The mask lives in the clip's full-frame layer; place it in project pixels.
+  const offset = rot((mask.x - 0.5) * pw * layer.scale, (mask.y - 0.5) * ph * layer.scale, layer.rotation)
+  const cx = layer.cx + offset.x
+  const cy = layer.cy + offset.y
+  const w = mask.width * pw * layer.scale
+  const h = mask.height * ph * layer.scale
+  const angle = layer.rotation + mask.rotation
+
+  const startDrag = (e: ReactPointerEvent, handle: MaskHandle) => {
+    e.stopPropagation()
+    e.preventDefault()
+    const start = { ...mask }
+    const x0 = e.clientX
+    const y0 = e.clientY
+    const key = `maskgizmo:${mask.id}:${handle}:${Date.now()}`
+    const frameEl = (e.currentTarget as HTMLElement).closest('[data-gizmo-root]') as HTMLElement
+    const r = frameEl.getBoundingClientRect()
+    const center = { x: cx, y: cy }
+    const move = (ev: PointerEvent) => {
+      // Screen → project pixels → the layer's own axes → fractions of the frame.
+      const d = rot((ev.clientX - x0) / scale / layer.scale, (ev.clientY - y0) / scale / layer.scale, -layer.rotation)
+      const patch: Partial<Mask> = {}
+      if (handle === 'move') {
+        patch.x = start.x + d.x / pw
+        patch.y = start.y + d.y / ph
+      } else if (handle === 'rotate') {
+        const p = { x: (ev.clientX - r.left) / scale, y: (ev.clientY - r.top) / scale }
+        let deg = (Math.atan2(p.y - center.y, p.x - center.x) * 180) / Math.PI + 90 - layer.rotation
+        if (ev.shiftKey) deg = Math.round(deg / 15) * 15
+        patch.rotation = Math.round(((((deg + 180) % 360) + 360) % 360) - 180)
+      } else {
+        // Resize in the mask's own axes, keeping the opposite edge in place.
+        const local = rot(d.x, d.y, -start.rotation)
+        const sx = handle.includes('e') ? 1 : handle.includes('w') ? -1 : 0
+        const sy = handle.includes('s') ? 1 : handle.includes('n') ? -1 : 0
+        const wpx = Math.max(8, start.width * pw + sx * local.x)
+        const hpx = Math.max(8, start.height * ph + sy * local.y)
+        const shift = rot((sx * (wpx - start.width * pw)) / 2, (sy * (hpx - start.height * ph)) / 2, start.rotation)
+        patch.width = wpx / pw
+        patch.height = hpx / ph
+        patch.x = start.x + shift.x / pw
+        patch.y = start.y + shift.y / ph
+      }
+      const round = (v: number) => Math.round(v * 10000) / 10000
+      for (const k of Object.keys(patch) as (keyof Mask)[]) if (typeof patch[k] === 'number' && k !== 'rotation') (patch as Record<string, number>)[k] = round(patch[k] as number)
+      dispatch('mask.update', { clipId: clip.id, maskId: mask.id, patch }, { coalesce: key, label: 'Edit mask' })
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
+  const knob = (h: MaskHandle, className: string, cursor: string) => (
+    <span key={h} onPointerDown={(e) => startDrag(e, h)} className={cn('absolute z-10 size-2.5 rounded-[3px] border-[1.5px] border-accent bg-white shadow-[0_1px_4px_rgb(0_0_0/0.5)]', className)} style={{ cursor }} />
+  )
+
+  return (
+    <>
+      <div
+        className="absolute cursor-move"
+        onPointerDown={(e) => startDrag(e, 'move')}
+        style={{ left: (cx - w / 2) * scale, top: (cy - h / 2) * scale, width: w * scale, height: h * scale, transform: `rotate(${angle}deg)` }}
+      >
+        <div
+          className={cn('pointer-events-none absolute inset-0 border-[1.5px] border-dashed border-accent shadow-[0_0_0_1px_rgb(0_0_0/0.35)]', mask.shape === 'ellipse' ? 'rounded-[50%]' : 'rounded-[2px]')}
+          style={mask.shape === 'rectangle' ? { borderRadius: `${(mask.roundness * Math.min(w, h) * scale) / 2}px` } : undefined}
+        />
+        {mask.feather > 0 && (
+          <div
+            className={cn('pointer-events-none absolute border border-dotted border-accent/50', mask.shape === 'ellipse' && 'rounded-[50%]')}
+            style={{ inset: `${-mask.feather * Math.min(pw, ph) * 0.5 * layer.scale * scale}px` }}
+          />
+        )}
+        {knob('nw', '-top-[5px] -left-[5px]', 'nwse-resize')}
+        {knob('ne', '-top-[5px] -right-[5px]', 'nesw-resize')}
+        {knob('sw', '-bottom-[5px] -left-[5px]', 'nesw-resize')}
+        {knob('se', '-right-[5px] -bottom-[5px]', 'nwse-resize')}
+        {knob('n', '-top-[5px] left-1/2 -translate-x-1/2', 'ns-resize')}
+        {knob('s', '-bottom-[5px] left-1/2 -translate-x-1/2', 'ns-resize')}
+        {knob('w', 'top-1/2 -left-[5px] -translate-y-1/2', 'ew-resize')}
+        {knob('e', 'top-1/2 -right-[5px] -translate-y-1/2', 'ew-resize')}
+        <span className="pointer-events-none absolute -top-6 left-1/2 h-6 w-px -translate-x-1/2 bg-accent/70" />
+        <span onPointerDown={(e) => startDrag(e, 'rotate')} className="absolute -top-[30px] left-1/2 size-3 -translate-x-1/2 cursor-grab rounded-full border-[1.5px] border-accent bg-white shadow-[0_1px_4px_rgb(0_0_0/0.5)]" />
+      </div>
+      <button
+        type="button"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={() => useUI.getState().setMaskEdit(null)}
+        className="absolute top-2 left-1/2 z-20 -translate-x-1/2 rounded-full bg-accent px-3 py-1 text-xs font-semibold text-accent-fg shadow-[0_4px_16px_-4px_rgb(0_0_0/0.7)] hover:bg-accent-2"
+      >
+        Done with mask
+      </button>
+    </>
+  )
+}
+
 // ─── Transform gizmo ─────────────────────────────────────────────────────
 
 type Handle = 'move' | 'nw' | 'ne' | 'sw' | 'se' | 'rotate'
@@ -220,6 +342,12 @@ function Gizmo({ scale }: { scale: number }) {
   const b = clipId ? bounds.get(clipId) : undefined
   const active = clip && frame >= clip.start && frame < clipEnd(clip) && clip.kind !== 'audio' && clip.kind !== 'adjustment'
   const cropping = Boolean(cropMode && active && b && (clip.kind === 'video' || clip.kind === 'image'))
+  const maskEdit = useUI((s) => s.maskEdit)
+  const mask = maskEdit ? clip?.masks?.find((m) => m.id === maskEdit) : undefined
+  const onScreen = Boolean(clip && frame >= clip.start && frame < clipEnd(clip))
+  // Adjustment layers cover the frame untransformed; other clips report where their layer sits.
+  const layer = b?.layer ?? (clip?.kind === 'adjustment' ? { cx: pw / 2, cy: ph / 2, scale: 1, rotation: 0 } : undefined)
+  const masking = Boolean(mask && onScreen && layer)
 
   const onCanvasPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     // Click-to-select: pick the top-most visible clip under the pointer.
@@ -297,7 +425,8 @@ function Gizmo({ scale }: { scale: number }) {
       {guides.v && <div className="pointer-events-none absolute top-0 bottom-0 left-1/2 w-px bg-accent-2 shadow-[0_0_6px_var(--color-accent)]" />}
       {guides.h && <div className="pointer-events-none absolute top-1/2 right-0 left-0 h-px bg-accent-2 shadow-[0_0_6px_var(--color-accent)]" />}
       {cropping && clip && b && !playing && <CropGizmo clip={clip} b={b} scale={scale} />}
-      {active && b && !playing && !cropping && (
+      {masking && clip && mask && layer && !playing && <MaskGizmo clip={clip} mask={mask} layer={layer} pw={pw} ph={ph} scale={scale} />}
+      {active && b && !playing && !cropping && !masking && (
         <div
           className="absolute cursor-move"
           onPointerDown={(e) => startDrag(e, 'move')}

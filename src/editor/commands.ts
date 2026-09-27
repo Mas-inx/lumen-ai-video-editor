@@ -7,7 +7,7 @@
  */
 import { z } from 'zod'
 import { uid } from '@/lib/id'
-import { createClip, createTrack, DEFAULT_BUS, DEFAULT_COMPRESSOR, DEFAULT_EQ, DEFAULT_LIMITER, TRACK_HEIGHTS } from './defaults'
+import { createClip, createTrack, DEFAULT_BUS, DEFAULT_COMPRESSOR, DEFAULT_EQ, DEFAULT_LIMITER, IDENTITY_CURVES, NEUTRAL_WHEELS, TRACK_HEIGHTS } from './defaults'
 import { ANIMATABLE, evalKeyframes } from './keyframes'
 import { EFFECTS } from './presets'
 import {
@@ -54,8 +54,11 @@ const clipKind = z.enum(['video', 'image', 'audio', 'text', 'adjustment'])
 const blend = z.enum(['normal', 'screen', 'multiply', 'overlay', 'soft-light', 'lighten', 'darken', 'color-dodge', 'difference'])
 const animPreset = z.enum(['none', 'fade', 'rise', 'drop', 'pop', 'zoom', 'blur', 'wipe', 'typewriter', 'spin3d', 'flip3d'])
 const transitionKind = z.enum(['dissolve', 'dip', 'flash', 'slide', 'push', 'zoom', 'wipe', 'blur', 'cube', 'flip', 'door', 'swing', 'page', 'warp', 'shatter', 'spin'])
-const effectKind = z.enum(['blur', 'glow', 'vignette', 'grain', 'mono', 'shake', 'pulse', 'leak', 'rgb', 'sharpen', 'tilt3d', 'curve3d', 'wave3d', 'cube3d', 'mirror3d'])
+const effectKind = z.enum(['blur', 'glow', 'vignette', 'grain', 'mono', 'shake', 'pulse', 'leak', 'rgb', 'sharpen', 'chromaKey', 'lumaKey', 'tilt3d', 'curve3d', 'wave3d', 'cube3d', 'mirror3d'])
 const fontId = z.enum(['sans', 'display', 'serif', 'mono', 'hand'])
+/** A built-in font, or `custom:<id>` for one imported into the project (ids in get_project → fonts). */
+const fontRef = z.union([fontId, z.templateLiteral(['custom:', z.string().min(1)])])
+const effectParams = z.record(z.string(), z.union([z.number(), z.string()]))
 const easing = z.enum(['linear', 'ease', 'ease-in', 'ease-out', 'hold'])
 const animatable = z.enum(['x', 'y', 'scale', 'rotation', 'opacity', 'volume', 'rotateX', 'rotateY', 'z', 'speed'])
 const markerColor = z.enum(['lime', 'violet', 'pink', 'amber', 'emerald', 'sky'])
@@ -82,6 +85,15 @@ const transform = z.object({
   z: z.number().min(-20000).max(5000),
 })
 
+const unit = z.number().min(0).max(1)
+const curvePoints = z.array(z.tuple([unit, unit])).min(2).max(16)
+const curves = z.object({ master: curvePoints, red: curvePoints, green: curvePoints, blue: curvePoints })
+const wheel = z.object({ x: z.number().min(-1).max(1), y: z.number().min(-1).max(1), luma: z.number().min(-1).max(1) })
+const wheels = z.object({ lift: wheel, gamma: wheel, gain: wheel })
+const hslBand = z.enum(['red', 'orange', 'yellow', 'green', 'aqua', 'blue', 'purple', 'magenta'])
+const hsl = z.partialRecord(hslBand, z.object({ hue: z.number().min(-60).max(60), saturation: pct, luminance: pct }))
+const lutRef = z.object({ id, amount: unit })
+
 const grade = z.object({
   exposure: pct,
   contrast: pct,
@@ -89,6 +101,29 @@ const grade = z.object({
   temperature: pct,
   tint: pct,
   vignette: z.number().min(0).max(100),
+  curves: curves.optional(),
+  wheels: wheels.optional(),
+  hsl: hsl.optional(),
+  lut: lutRef.optional(),
+})
+
+/** A colour change: basic sliders, plus curves, wheels, HSL and a LUT (null removes one). */
+const gradePatch = grade
+  .extend({ curves: curves.partial().nullable(), wheels: wheels.partial().nullable(), hsl: hsl.nullable(), lut: lutRef.partial().nullable() })
+  .partial()
+
+const mask = z.object({
+  id,
+  shape: z.enum(['rectangle', 'ellipse']),
+  x: z.number().min(-1).max(2),
+  y: z.number().min(-1).max(2),
+  width: z.number().min(0.001).max(3),
+  height: z.number().min(0.001).max(3),
+  rotation: z.number().min(-360).max(360),
+  feather: z.number().min(0).max(0.5),
+  roundness: unit,
+  invert: z.boolean(),
+  opacity: unit,
 })
 
 const audioMix = z.object({
@@ -144,7 +179,7 @@ const busPatch = z
 
 const textStyle = z.object({
   content: z.string(),
-  font: fontId,
+  font: fontRef,
   size: z.number().min(4).max(800),
   weight: z.number().min(100).max(900),
   color: z.string(),
@@ -156,6 +191,7 @@ const textStyle = z.object({
   background: z.string().nullable(),
   shadow: z.number().min(0).max(1),
   glow: z.string().nullable(),
+  outline: z.object({ color: z.string(), width: z.number().min(0).max(0.3) }).nullable().optional(),
   extrude: z.number().min(0).max(2),
   material: z.enum(['chrome', 'gold', 'matte', 'neon']),
   bevel: z.boolean(),
@@ -172,11 +208,12 @@ export const clipPatch = z
     blend,
     look: z.string().nullable(),
     transform: transform.partial(),
-    color: grade.partial(),
+    color: gradePatch,
     audio: audioMix.partial(),
     text: textStyle.partial(),
     animation: z.object({ in: animSpec.partial(), out: animSpec.partial() }).partial(),
     crop: crop.partial().nullable(),
+    masks: z.array(mask).nullable(),
   })
   .partial()
 
@@ -207,6 +244,7 @@ export const clipSnapshot = z.object({
   effects: z.array(z.object({ id, kind: effectKind, enabled: z.boolean(), amount: z.number().min(0).max(100) }).loose()),
   keyframes: z.partialRecord(animatable, z.array(keyframe)),
   crop: crop.optional(),
+  masks: z.array(mask).optional(),
   groupId: z.string().optional(),
   freeze: z.boolean().optional(),
 })
@@ -291,10 +329,27 @@ function assertEditable(p: Project, clip: Clip) {
 const NO_CROP = { left: 0, right: 0, top: 0, bottom: 0, radius: 0 }
 
 function applyPatch(p: Project, clip: Clip, patch: ClipPatch) {
-  const { transform, color, audio, text, animation, speed, crop, ...flat } = patch
+  const { transform, color, audio, text, animation, speed, crop, masks, ...flat } = patch
   Object.assign(clip, flat)
   if (transform) Object.assign(clip.transform, transform)
-  if (color) Object.assign(clip.color, color)
+  if (color) {
+    const { curves: cv, wheels: wh, hsl: hs, lut, ...basic } = color
+    Object.assign(clip.color, basic)
+    if (cv === null) delete clip.color.curves
+    else if (cv) clip.color.curves = { ...IDENTITY_CURVES, ...clip.color.curves, ...cv }
+    if (wh === null) delete clip.color.wheels
+    else if (wh) clip.color.wheels = { ...NEUTRAL_WHEELS, ...clip.color.wheels, ...wh }
+    if (hs === null) delete clip.color.hsl
+    else if (hs) clip.color.hsl = { ...clip.color.hsl, ...hs }
+    if (lut === null) delete clip.color.lut
+    else if (lut) {
+      const next = { amount: 1, ...clip.color.lut, ...lut }
+      if (!next.id || !p.luts?.[next.id]) throw new CommandError(`LUT ${next.id ?? ''} isn't in this project — import it first`)
+      clip.color.lut = { id: next.id, amount: next.amount }
+    }
+  }
+  if (masks === null) delete clip.masks
+  else if (masks) clip.masks = masks
   if (audio) Object.assign(clip.audio, audio)
   if (text && clip.text) Object.assign(clip.text, text)
   if (animation?.in) Object.assign(clip.animation.in, animation.in)
@@ -799,8 +854,9 @@ export const commands = {
 
   // Effects
   'effect.add': command({
-    description: 'Add an effect to clips (or update its amount if already present). Amount is 0–100.',
-    input: z.object({ ids: z.array(id).min(1), kind: effectKind, amount: z.number().min(0).max(100).optional() }),
+    description:
+      'Add an effect to clips (or update it if already present). Amount is 0–100. Keys make part of the picture transparent: chromaKey takes params { color: "#00ff00" (the screen colour), tolerance, softness, spill } and lumaKey takes { threshold, softness, invert: 0 keys out the dark, 1 the bright }, all 0–100.',
+    input: z.object({ ids: z.array(id).min(1), kind: effectKind, amount: z.number().min(0).max(100).optional(), params: effectParams.optional() }),
     title: (i) => `Add ${EFFECTS.find((e) => e.kind === i.kind)?.name ?? 'effect'}`,
     run(p, i) {
       const preset = EFFECTS.find((e) => e.kind === i.kind)!
@@ -808,25 +864,32 @@ export const commands = {
         const clip = getClip(p, clipId)
         assertEditable(p, clip)
         const existing = clip.effects.find((e) => e.kind === i.kind)
-        if (existing) existing.amount = i.amount ?? existing.amount
-        else clip.effects.push({ id: uid('fx'), kind: i.kind, enabled: true, amount: i.amount ?? preset.amount })
+        if (existing) {
+          existing.amount = i.amount ?? existing.amount
+          if (i.params) existing.params = { ...existing.params, ...i.params }
+        } else {
+          const params = preset.params || i.params ? { ...preset.params, ...i.params } : undefined
+          clip.effects.push({ id: uid('fx'), kind: i.kind, enabled: true, amount: i.amount ?? preset.amount, ...(params ? { params } : {}) })
+        }
       }
     },
   }),
 
   'effect.update': command({
-    description: 'Turn an effect on or off, or change its amount (0–100). Effect ids are in get_clip → effects.',
+    description: 'Turn an effect on or off, change its amount (0–100) or its params (merged). Effect ids are in get_clip → effects.',
     input: z.object({
       clipId: id,
       effectId: id,
-      patch: z.object({ enabled: z.boolean(), amount: z.number().min(0).max(100) }).partial(),
+      patch: z.object({ enabled: z.boolean(), amount: z.number().min(0).max(100), params: effectParams }).partial(),
     }),
     title: () => 'Edit effect',
     run(p, i) {
       const clip = getClip(p, i.clipId)
       const fx = clip.effects.find((e) => e.id === i.effectId)
       if (!fx) throw new CommandError('Effect not found')
-      Object.assign(fx, i.patch)
+      const { params, ...rest } = i.patch
+      Object.assign(fx, rest)
+      if (params) fx.params = { ...fx.params, ...params }
     },
   }),
 
@@ -838,6 +901,47 @@ export const commands = {
       const clip = getClip(p, i.clipId)
       if (!clip.effects.some((e) => e.id === i.effectId)) throw new CommandError(`"${clip.name}" has no effect ${i.effectId}`)
       clip.effects = clip.effects.filter((e) => e.id !== i.effectId)
+    },
+  }),
+
+  // Masks
+  'mask.add': command({
+    description:
+      'Add a shape mask to a clip: only the part inside the shape shows (invert: only the part outside). On an adjustment layer, the grade applies only there. Position and size are fractions of the frame (x, y = center); feather is a fraction of the frame. Returns the mask id.',
+    input: z.object({ clipId: id, mask: mask.omit({ id: true }).partial() }),
+    title: () => 'Add mask',
+    run(p, i) {
+      const clip = getClip(p, i.clipId)
+      assertEditable(p, clip)
+      if (clip.kind === 'audio') throw new CommandError('Audio clips have no picture to mask')
+      const m = { id: uid('mask'), shape: 'ellipse' as const, x: 0.5, y: 0.5, width: 0.5, height: 0.5, rotation: 0, feather: 0.04, roundness: 0, invert: false, opacity: 1, ...i.mask }
+      clip.masks = [...(clip.masks ?? []), m]
+      return m.id
+    },
+  }),
+
+  'mask.update': command({
+    description: 'Change a mask: move, resize, rotate, feather, round, invert or fade it (mask ids are in get_clip → masks).',
+    input: z.object({ clipId: id, maskId: id, patch: mask.omit({ id: true }).partial() }),
+    title: () => 'Edit mask',
+    run(p, i) {
+      const clip = getClip(p, i.clipId)
+      assertEditable(p, clip)
+      const m = clip.masks?.find((x) => x.id === i.maskId)
+      if (!m) throw new CommandError(`“${clip.name}” has no mask ${i.maskId}`)
+      Object.assign(m, i.patch)
+    },
+  }),
+
+  'mask.remove': command({
+    description: 'Remove a mask from a clip.',
+    input: z.object({ clipId: id, maskId: id }),
+    title: () => 'Remove mask',
+    run(p, i) {
+      const clip = getClip(p, i.clipId)
+      if (!clip.masks?.some((m) => m.id === i.maskId)) throw new CommandError(`“${clip.name}” has no mask ${i.maskId}`)
+      clip.masks = clip.masks.filter((m) => m.id !== i.maskId)
+      if (!clip.masks.length) delete clip.masks
     },
   }),
 
@@ -1051,6 +1155,53 @@ export const commands = {
     run(p, i) {
       if (!p.markers.some((m) => m.id === i.id)) throw new CommandError('Marker not found')
       p.markers = p.markers.filter((m) => m.id !== i.id)
+    },
+  }),
+
+  // LUTs & fonts
+  'lut.add': command({
+    description:
+      'Add a 3D LUT to the project (from a .cube file: `size` points per side and size³ RGB triples, red fastest, as 8-bit values in base64). Apply it with clip_update → color.lut. Returns the id.',
+    input: z.object({ lut: z.object({ id: id.optional(), name: z.string().min(1), size: z.number().int().min(2).max(65), data: z.string().min(1) }) }),
+    title: (i) => `Import LUT ${i.lut.name}`,
+    run(p, i) {
+      const lutId = i.lut.id ?? uid('lut')
+      if (atob(i.lut.data).length !== i.lut.size ** 3 * 3) throw new CommandError(`A ${i.lut.size}-point LUT needs ${i.lut.size ** 3 * 3} bytes`)
+      p.luts = { ...p.luts, [lutId]: { ...i.lut, id: lutId } }
+      return lutId
+    },
+  }),
+
+  'lut.remove': command({
+    description: 'Remove a LUT from the project; clips using it lose it.',
+    input: z.object({ id }),
+    title: () => 'Remove LUT',
+    run(p, i) {
+      if (!p.luts?.[i.id]) throw new CommandError(`LUT ${i.id} not found`)
+      delete p.luts[i.id]
+      for (const c of Object.values(p.clips)) if (c.color.lut?.id === i.id) delete c.color.lut
+    },
+  }),
+
+  'font.add': command({
+    description: 'Embed a font file (base64) in the project so titles can use it as `custom:<id>`. Returns the id.',
+    input: z.object({ font: z.object({ id: id.optional(), name: z.string().min(1), family: z.string().min(1), fileName: z.string(), data: z.string().min(1) }) }),
+    title: (i) => `Add font ${i.font.name}`,
+    run(p, i) {
+      const fontId = i.font.id ?? uid('font')
+      p.fonts = { ...p.fonts, [fontId]: { ...i.font, id: fontId } }
+      return fontId
+    },
+  }),
+
+  'font.remove': command({
+    description: 'Remove a font from the project; titles using it go back to the default typeface.',
+    input: z.object({ id }),
+    title: () => 'Remove font',
+    run(p, i) {
+      if (!p.fonts?.[i.id]) throw new CommandError(`Font ${i.id} not found`)
+      delete p.fonts[i.id]
+      for (const c of Object.values(p.clips)) if (c.text?.font === `custom:${i.id}`) c.text.font = 'sans'
     },
   }),
 

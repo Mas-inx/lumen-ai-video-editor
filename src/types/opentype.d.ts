@@ -24,7 +24,11 @@ declare module 'opentype.js' {
     letterSpacing?: number
   }
 
+  /** Name-table entries by language, e.g. { en: 'Inter Tight' }. */
+  export type LocalizedName = Partial<Record<string, string>>
+
   export interface Font {
+    names: { fontFamily?: LocalizedName; fullName?: LocalizedName; fontSubfamily?: LocalizedName }
     unitsPerEm: number
     ascender: number
     descender: number

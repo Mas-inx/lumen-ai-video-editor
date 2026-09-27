@@ -1,7 +1,7 @@
 import { Plus } from 'lucide-react'
 import { useState, type CSSProperties } from 'react'
 import { Preview3D } from '@/components/Preview3D'
-import { FONTS } from '@/editor/defaults'
+import { fontCss } from '@/engine/fonts'
 import { placeTitle } from '@/editor/placement'
 import { usePlayback } from '@/editor/playback'
 import { TITLE_PRESETS, type TitlePreset } from '@/editor/presets'
@@ -37,7 +37,7 @@ function previewStyle(p: TitlePreset): CSSProperties {
   const t = p.text
   const size = Math.max(10, Math.min(19, (t.size ?? 96) * 0.14))
   return {
-    fontFamily: FONTS[t.font ?? 'sans'].css,
+    fontFamily: fontCss(t.font ?? 'sans'),
     fontSize: size,
     fontWeight: t.weight ?? 600,
     fontStyle: t.italic ? 'italic' : undefined,

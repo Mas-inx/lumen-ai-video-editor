@@ -129,6 +129,8 @@ function projectSummary() {
         ...(c.keyframes.speed?.length ? { speed_ramp: true } : c.speed !== 1 ? { speed: c.speed } : {}),
         ...(c.reverse ? { reverse: true } : {}),
         ...(c.crop ? { cropped: true } : {}),
+        ...(c.masks?.length ? { masks: c.masks.length } : {}),
+        ...(c.color.lut ? { lut: c.color.lut.id } : {}),
       }))
   const duration = projectDuration(p)
   return {
@@ -158,6 +160,8 @@ function projectSummary() {
       ...(a.generated ? { generated_by: a.provenance?.integration ?? 'ai' } : {}),
     })),
     markers: p.markers.map((m) => ({ id: m.id, frame: m.frame, label: m.label, color: m.color })),
+    ...(p.luts && Object.keys(p.luts).length ? { luts: Object.values(p.luts).map((l) => ({ id: l.id, name: l.name, size: l.size })) } : {}),
+    ...(p.fonts && Object.keys(p.fonts).length ? { fonts: Object.values(p.fonts).map((f) => ({ ref: `custom:${f.id}`, name: f.name })) } : {}),
   }
 }
 

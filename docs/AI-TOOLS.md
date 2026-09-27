@@ -1,6 +1,6 @@
 # Lumen AI tools
 
-Every AI that works in Lumen — the Copilot's API models, your own Claude Code or Codex, and any agent connected to Lumen's MCP server — uses this same set of **84 tools**. This page is generated from the tool registry ([`src/integrations/agent-tools.ts`](../src/integrations/agent-tools.ts) and [`src/integrations/tools/`](../src/integrations/tools)).
+Every AI that works in Lumen — the Copilot's API models, your own Claude Code or Codex, and any agent connected to Lumen's MCP server — uses this same set of **91 tools**. This page is generated from the tool registry ([`src/integrations/agent-tools.ts`](../src/integrations/agent-tools.ts) and [`src/integrations/tools/`](../src/integrations/tools)).
 
 - **Times:** the helper tools take seconds; editor commands take integer frames at the project's fps (see `get_project`).
 - **Pictures:** `get_frame`, `get_contact_sheet`, `get_media_frames` and `get_editor_screenshot` return an image block along with JSON — over MCP as `image` content, and to the Copilot's models as real images.
@@ -14,7 +14,7 @@ Every AI that works in Lumen — the Copilot's API models, your own Claude Code 
 - [Act](#act) — 10 tools
 - [Smart edits](#smart-edits) — 6 tools
 - [Generate and import](#generate-and-import) — 16 tools
-- [Editor commands](#editor-commands) — 40 tools
+- [Editor commands](#editor-commands) — 47 tools
 
 ## See
 
@@ -701,17 +701,18 @@ Speed ramp: make a video or audio clip change speed smoothly over its length. `p
 
 ### `effect_add`
 
-Add an effect to clips (or update its amount if already present). Amount is 0–100.
+Add an effect to clips (or update it if already present). Amount is 0–100. Keys make part of the picture transparent: chromaKey takes params { color: "#00ff00" (the screen colour), tolerance, softness, spill } and lumaKey takes { threshold, softness, invert: 0 keys out the dark, 1 the bright }, all 0–100.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
 | `ids` **(required)** | string[] |  |
-| `kind` **(required)** | `blur` · `glow` · `vignette` · `grain` · `mono` · `shake` · `pulse` · `leak` · `rgb` · `sharpen` · `tilt3d` · `curve3d` · `wave3d` · `cube3d` · `mirror3d` |  |
+| `kind` **(required)** | `blur` · `glow` · `vignette` · `grain` · `mono` · `shake` · `pulse` · `leak` · `rgb` · `sharpen` · `chromaKey` · `lumaKey` · `tilt3d` · `curve3d` · `wave3d` · `cube3d` · `mirror3d` |  |
 | `amount` | number | (≥ 0, ≤ 100) |
+| `params` | object |  |
 
 ### `effect_update`
 
-Turn an effect on or off, or change its amount (0–100). Effect ids are in get_clip → effects.
+Turn an effect on or off, change its amount (0–100) or its params (merged). Effect ids are in get_clip → effects.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
@@ -727,6 +728,34 @@ Remove an effect from a clip. Effect ids are in get_clip → effects.
 | --- | --- | --- |
 | `clipId` **(required)** | string |  |
 | `effectId` **(required)** | string |  |
+
+### `mask_add`
+
+Add a shape mask to a clip: only the part inside the shape shows (invert: only the part outside). On an adjustment layer, the grade applies only there. Position and size are fractions of the frame (x, y = center); feather is a fraction of the frame. Returns the mask id.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `clipId` **(required)** | string |  |
+| `mask` **(required)** | object |  |
+
+### `mask_update`
+
+Change a mask: move, resize, rotate, feather, round, invert or fade it (mask ids are in get_clip → masks).
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `clipId` **(required)** | string |  |
+| `maskId` **(required)** | string |  |
+| `patch` **(required)** | object |  |
+
+### `mask_remove`
+
+Remove a mask from a clip.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `clipId` **(required)** | string |  |
+| `maskId` **(required)** | string |  |
 
 ### `keyframe_set`
 
@@ -846,6 +875,38 @@ Move, rename or recolor a marker (marker ids are in get_project → markers).
 ### `marker_remove`
 
 Remove a marker (marker ids are in get_project → markers).
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `id` **(required)** | string |  |
+
+### `lut_add`
+
+Add a 3D LUT to the project (from a .cube file: `size` points per side and size³ RGB triples, red fastest, as 8-bit values in base64). Apply it with clip_update → color.lut. Returns the id.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `lut` **(required)** | object |  |
+
+### `lut_remove`
+
+Remove a LUT from the project; clips using it lose it.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `id` **(required)** | string |  |
+
+### `font_add`
+
+Embed a font file (base64) in the project so titles can use it as `custom:<id>`. Returns the id.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `font` **(required)** | object |  |
+
+### `font_remove`
+
+Remove a font from the project; titles using it go back to the default typeface.
 
 | Parameter | Type | Description |
 | --- | --- | --- |

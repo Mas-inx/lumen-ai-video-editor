@@ -120,8 +120,8 @@ function buildGeometry(font: Font, style: TextStyle): TextGeometry {
   return { geometry, width, height, uv: { x: box.min.x, y: box.min.y, w: Math.max(1, width), h: Math.max(1, height) } }
 }
 
-function geometryFor(style: TextStyle): TextGeometry | null {
-  const url = fontUrl(style)
+function geometryFor(style: TextStyle, customUrl?: string | null): TextGeometry | null {
+  const url = customUrl ?? fontUrl(style)
   const font = getFont(url)
   if (!font) return null
   const key = [url, style.content, style.uppercase, style.size, style.extrude, style.bevel, style.letterSpacing, style.lineHeight, style.align].join('|')
@@ -284,6 +284,8 @@ function sceneFor(stage: Stage): TextScene {
 
 export interface Text3D {
   style: TextStyle
+  /** The font file for a project font (built-in fonts are found from the style). */
+  fontUrl?: string | null
   x: number
   y: number
   z: number
@@ -297,7 +299,7 @@ export interface Text3D {
 
 /** Renders a 3D title; returns null until its font has loaded. */
 export function renderText3D(stage: Stage, text: Text3D) {
-  const g = geometryFor(text.style)
+  const g = geometryFor(text.style, text.fontUrl)
   if (!g) return null
   const s = sceneFor(stage)
   const mats = materialsFor(text.style)

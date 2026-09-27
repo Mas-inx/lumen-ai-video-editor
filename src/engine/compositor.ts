@@ -5,14 +5,15 @@
  * with grade/effects, keyframed transforms, in/out animations, transitions,
  * adjustment layers and titles. Preview and export both render through here.
  */
-import { FONTS } from '@/editor/defaults'
 import { propAt } from '@/editor/keyframes'
 import { adjacentBefore, clipEnd } from '@/editor/ops'
 import { is3dEffect, is3dTransition } from '@/editor/presets'
 import { sourceFrameAt, speedAt } from '@/editor/timing'
-import type { AnimPreset, BlendMode, Clip, Crop, Effect, EffectKind, Project, Transition } from '@/editor/types'
+import type { AnimPreset, BlendMode, Clip, Crop, Effect, EffectKind, Mask, Project, Transition } from '@/editor/types'
 import { clamp, easeInOutCubic, easeOutBack, easeOutCubic, lerp, noise1 } from '@/lib/math'
 import { gradeFilter, gradeOverlays } from './color'
+import { fontCss, fontFileUrl } from './fonts'
+import { gpuGrade, needsGpuGrade } from './gl-grade'
 import { usePlayback } from '@/editor/playback'
 import { grainCanvas } from './grain'
 import { beginVideoFrame, endVideoFrame, getImage, sequenceFrame, sourceSize, videoFrame } from './media'
@@ -33,6 +34,8 @@ export interface ClipBounds {
   py?: number
   /** The whole picture before cropping (same rotation), for the crop gizmo. */
   full?: { cx: number; cy: number; w: number; h: number }
+  /** Where the clip's full-frame layer sits (its center, scale and rotation), for editing masks. */
+  layer?: { cx: number; cy: number; scale: number; rotation: number }
 }
 
 type Rect = { x: number; y: number; w: number; h: number }
@@ -303,7 +306,7 @@ const failed3D = new Set<string>()
 function drawClip(ctx: CanvasRenderingContext2D, project: Project, clip: Clip, frame: number, mods: Mods, bounds: Map<string, ClipBounds>) {
   const local = frame - clip.start
   if (clip.kind === 'adjustment') {
-    drawAdjustment(ctx, clip, local, project.settings.fps, mods)
+    drawAdjustment(ctx, project, clip, local, project.settings.fps, mods)
     return
   }
 
@@ -362,13 +365,13 @@ function drawClip(ctx: CanvasRenderingContext2D, project: Project, clip: Clip, f
   const wipe = Math.min(anim.wipe, mods.wipe ?? 1)
 
   if (clip.kind === 'text' && clip.text) {
-    const box = drawText(ctx, clip, k, anim.reveal, wipe, anim.blur + (mods.blur ?? 0))
+    const box = drawText(ctx, project, clip, k, anim.reveal, wipe, anim.blur + (mods.blur ?? 0))
     bounds.set(clip.id, { cx: PW / 2 + x, cy: PH / 2 + y, w: (box.w / k) * scale, h: (box.h / k) * scale, rotation })
     ctx.restore()
     return
   }
 
-  const { canvas: layer, rect, full } = renderMediaLayer(project, clip, local, W, H)
+  const { canvas: layer, rect, full, graded } = renderMediaLayer(project, clip, local, W, H)
   if (wipe < 1) {
     ctx.beginPath()
     ctx.rect(-W / 2, -H / 2, W * wipe, H)
@@ -376,7 +379,7 @@ function drawClip(ctx: CanvasRenderingContext2D, project: Project, clip: Clip, f
   }
   const blur = anim.blur + (mods.blur ?? 0) + (fx(clip, 'blur')?.amount ?? 0) * 0.25
   const mono = fx(clip, 'mono')?.amount ?? 0
-  ctx.filter = gradeFilter(clip.color, { mono, blur: blur * k })
+  ctx.filter = graded ? blurFilter(blur * k) : gradeFilter(clip.color, { mono, blur: blur * k })
   ctx.drawImage(layer, -W / 2, -H / 2, W, H)
 
   const glow = fx(clip, 'glow')
@@ -405,7 +408,7 @@ function drawClip(ctx: CanvasRenderingContext2D, project: Project, clip: Clip, f
     const dy = ((r.y + r.h / 2 - H / 2) / k) * scale
     return { cx: PW / 2 + x + dx * Math.cos(a) - dy * Math.sin(a), cy: PH / 2 + y + dx * Math.sin(a) + dy * Math.cos(a), w: (r.w / k) * scale, h: (r.h / k) * scale }
   }
-  bounds.set(clip.id, { ...box(rect), rotation, px: PW / 2 + x, py: PH / 2 + y, ...(clip.crop ? { full: box(full) } : {}) })
+  bounds.set(clip.id, { ...box(rect), rotation, px: PW / 2 + x, py: PH / 2 + y, layer: { cx: PW / 2 + x, cy: PH / 2 + y, scale, rotation }, ...(clip.crop ? { full: box(full) } : {}) })
 }
 
 interface Placement {
@@ -437,7 +440,7 @@ function draw3D(ctx: CanvasRenderingContext2D, project: Project, clip: Clip, loc
   let bh = PH * p.scale
 
   if (p.text3d && clip.text) {
-    const r = renderText3D(s3, { style: clip.text, ...place })
+    const r = renderText3D(s3, { style: clip.text, fontUrl: fontFileUrl(project, clip.text.font), ...place })
     if (r) {
       out = r.canvas
       bw = r.width * p.scale
@@ -448,18 +451,18 @@ function draw3D(ctx: CanvasRenderingContext2D, project: Project, clip: Clip, loc
     const wipe = Math.min(p.anim.wipe, p.mods.wipe ?? 1)
     if (clip.kind === 'text' && clip.text) {
       flat.ctx.translate(W / 2, H / 2)
-      const box = drawText(flat.ctx, clip, k, p.anim.reveal, wipe, p.anim.blur + (p.mods.blur ?? 0))
+      const box = drawText(flat.ctx, project, clip, k, p.anim.reveal, wipe, p.anim.blur + (p.mods.blur ?? 0))
       bw = (box.w / k) * p.scale
       bh = (box.h / k) * p.scale
     } else {
-      const layer = renderMediaLayer(project, clip, local, W, H).canvas
+      const { canvas: layer, graded } = renderMediaLayer(project, clip, local, W, H)
       if (wipe < 1) {
         flat.ctx.beginPath()
         flat.ctx.rect(0, 0, W * wipe, H)
         flat.ctx.clip()
       }
       const blur = p.anim.blur + (p.mods.blur ?? 0) + (fx(clip, 'blur')?.amount ?? 0) * 0.25
-      flat.ctx.filter = gradeFilter(clip.color, { mono: fx(clip, 'mono')?.amount ?? 0, blur: blur * k })
+      flat.ctx.filter = graded ? blurFilter(blur * k) : gradeFilter(clip.color, { mono: fx(clip, 'mono')?.amount ?? 0, blur: blur * k })
       flat.ctx.drawImage(layer, 0, 0, W, H)
     }
     out = renderLayer3D(s3, { canvas: flat.canvas, ...place, effects: p.fx3d })
@@ -487,7 +490,7 @@ function draw3D(ctx: CanvasRenderingContext2D, project: Project, clip: Clip, loc
  * Content + grade washes + per-clip texture effects, drawn untransformed.
  * Returns the layer, the rect the visible picture covers and the rect of the whole picture before cropping.
  */
-function renderMediaLayer(project: Project, clip: Clip, local: number, W: number, H: number): { canvas: HTMLCanvasElement; rect: Rect; full: Rect } {
+function renderMediaLayer(project: Project, clip: Clip, local: number, W: number, H: number): { canvas: HTMLCanvasElement; rect: Rect; full: Rect; graded: boolean } {
   layerCanvas = sized(layerCanvas, W, H)
   const lctx = layerCanvas.getContext('2d')!
   resetCtx(lctx)
@@ -529,7 +532,20 @@ function renderMediaLayer(project: Project, clip: Clip, local: number, W: number
     lctx.globalCompositeOperation = 'source-over'
   }
 
-  const overlays = asset?.alpha ? [] : gradeOverlays(clip.color)
+  if (clip.masks?.length) applyMasks(lctx, clip.masks, W, H)
+
+  // Curves, wheels, HSL, LUTs, keys and sharpening run on the GPU.
+  let graded = false
+  if (needsGpuGrade(clip)) {
+    const out = gpuGrade(layerCanvas, { color: clip.color, effects: clip.effects, mono: fx(clip, 'mono')?.amount ?? 0, washes: !asset?.alpha }, project)
+    if (out) {
+      lctx.clearRect(0, 0, W, H)
+      lctx.drawImage(out, 0, 0)
+      graded = true
+    }
+  }
+
+  const overlays = asset?.alpha || graded ? [] : gradeOverlays(clip.color)
   const vignette = clip.color.vignette + (fx(clip, 'vignette')?.amount ?? 0)
   const grain = fx(clip, 'grain')
   const leak = fx(clip, 'leak')
@@ -547,14 +563,51 @@ function renderMediaLayer(project: Project, clip: Clip, local: number, W: number
       lctx.fillStyle = o.color
       lctx.fillRect(0, 0, W, H)
     }
-    lctx.globalCompositeOperation = 'source-over'
+    // Only on the picture itself: keyed-out and masked-off areas stay clear.
+    lctx.globalCompositeOperation = 'source-atop'
     lctx.globalAlpha = 1
     if (vignette) drawVignette(lctx, W, H, Math.min(100, vignette) / 100)
     if (leak) drawLeak(lctx, W, H, local / fps, leak.amount / 100)
     if (grain) drawGrain(lctx, W, H, local, grain.amount / 100)
     lctx.restore()
   }
-  return { canvas: layerCanvas, rect, full }
+  return { canvas: layerCanvas, rect, full, graded }
+}
+
+let maskCanvas: HTMLCanvasElement | null = null
+
+/**
+ * Cuts a layer down to its masks: shapes add up, inverted ones cut holes (with
+ * only inverted masks, the rest of the frame shows), edges feathered by a blur.
+ */
+function applyMasks(ctx: CanvasRenderingContext2D, masks: Mask[], W: number, H: number) {
+  maskCanvas = sized(maskCanvas, W, H)
+  const m = maskCanvas.getContext('2d')!
+  resetCtx(m)
+  m.clearRect(0, 0, W, H)
+  m.fillStyle = '#fff'
+  if (masks.every((x) => x.invert)) m.fillRect(0, 0, W, H)
+  const short = Math.min(W, H)
+  for (const mask of [...masks.filter((x) => !x.invert), ...masks.filter((x) => x.invert)]) {
+    m.save()
+    m.globalCompositeOperation = mask.invert ? 'destination-out' : 'source-over'
+    m.globalAlpha = mask.opacity
+    m.filter = mask.feather > 0 ? `blur(${(mask.feather * short * 0.5).toFixed(1)}px)` : 'none'
+    m.translate(mask.x * W, mask.y * H)
+    m.rotate((mask.rotation * Math.PI) / 180)
+    const w = mask.width * W
+    const h = mask.height * H
+    m.beginPath()
+    if (mask.shape === 'ellipse') m.ellipse(0, 0, w / 2, h / 2, 0, 0, Math.PI * 2)
+    else m.roundRect(-w / 2, -h / 2, w, h, (mask.roundness * Math.min(w, h)) / 2)
+    m.fill()
+    m.restore()
+  }
+  ctx.save()
+  resetCtx(ctx)
+  ctx.globalCompositeOperation = 'destination-in'
+  ctx.drawImage(maskCanvas, 0, 0)
+  ctx.restore()
 }
 
 /** The part of a picture rect a crop keeps. */
@@ -566,7 +619,14 @@ export function cropRect(r: Rect, crop: Crop): Rect {
   return { x: r.x + r.w * left, y: r.y + r.h * top, w: r.w * w, h: r.h * h }
 }
 
-function drawAdjustment(ctx: CanvasRenderingContext2D, clip: Clip, local: number, fps: number, mods: Mods) {
+let adjustCanvas: HTMLCanvasElement | null = null
+
+/**
+ * An adjustment layer grades everything beneath it: the frame so far is copied,
+ * graded (on the GPU for curves, wheels, HSL and LUTs), cut to the layer's masks
+ * and laid back over the original at the layer's strength.
+ */
+function drawAdjustment(ctx: CanvasRenderingContext2D, project: Project, clip: Clip, local: number, fps: number, mods: Mods) {
   const W = ctx.canvas.width
   const H = ctx.canvas.height
   const anim = animState(clip, local)
@@ -578,41 +638,57 @@ function drawAdjustment(ctx: CanvasRenderingContext2D, clip: Clip, local: number
   sctx.clearRect(0, 0, W, H)
   sctx.drawImage(ctx.canvas, 0, 0)
 
+  adjustCanvas = sized(adjustCanvas, W, H)
+  const actx = adjustCanvas.getContext('2d')!
+  resetCtx(actx)
+  actx.clearRect(0, 0, W, H)
+  const mono = fx(clip, 'mono')?.amount ?? 0
+  const blur = (fx(clip, 'blur')?.amount ?? 0) * 0.25 * (W / 1920)
+  const gpu = needsGpuGrade(clip) ? gpuGrade(scratchCanvas, { color: clip.color, effects: clip.effects, mono, washes: true }, project) : null
+  if (gpu) {
+    actx.filter = blurFilter(blur)
+    actx.drawImage(gpu, 0, 0)
+    actx.filter = 'none'
+  } else {
+    actx.filter = gradeFilter(clip.color, { mono, blur })
+    actx.drawImage(scratchCanvas, 0, 0)
+    actx.filter = 'none'
+    for (const o of gradeOverlays(clip.color)) {
+      actx.globalCompositeOperation = 'soft-light'
+      actx.globalAlpha = o.alpha
+      actx.fillStyle = o.color
+      actx.fillRect(0, 0, W, H)
+    }
+  }
+  actx.globalCompositeOperation = 'source-over'
+  actx.globalAlpha = 1
+  const vignette = clip.color.vignette + (fx(clip, 'vignette')?.amount ?? 0)
+  if (vignette) drawVignette(actx, W, H, Math.min(100, vignette) / 100)
+  const leak = fx(clip, 'leak')
+  if (leak) drawLeak(actx, W, H, local / fps, leak.amount / 100)
+  const grain = fx(clip, 'grain')
+  if (grain) drawGrain(actx, W, H, local, grain.amount / 100)
+  if (clip.masks?.length) applyMasks(actx, clip.masks, W, H)
+
   ctx.save()
   resetCtx(ctx)
   ctx.globalAlpha = strength
-  const mono = fx(clip, 'mono')?.amount ?? 0
-  const blur = (fx(clip, 'blur')?.amount ?? 0) * 0.25 * (W / 1920)
-  ctx.filter = gradeFilter(clip.color, { mono, blur })
-  ctx.drawImage(scratchCanvas, 0, 0)
-  ctx.filter = 'none'
-  for (const o of gradeOverlays(clip.color)) {
-    ctx.globalCompositeOperation = 'soft-light'
-    ctx.globalAlpha = o.alpha * strength
-    ctx.fillStyle = o.color
-    ctx.fillRect(0, 0, W, H)
-  }
-  ctx.globalCompositeOperation = 'source-over'
-  ctx.globalAlpha = strength
-  const vignette = clip.color.vignette + (fx(clip, 'vignette')?.amount ?? 0)
-  if (vignette) drawVignette(ctx, W, H, Math.min(100, vignette) / 100)
-  const leak = fx(clip, 'leak')
-  if (leak) drawLeak(ctx, W, H, local / fps, leak.amount / 100)
-  const grain = fx(clip, 'grain')
-  if (grain) drawGrain(ctx, W, H, local, grain.amount / 100)
+  ctx.drawImage(adjustCanvas, 0, 0)
   ctx.restore()
 }
+
+const blurFilter = (px: number) => (px > 0.05 ? `blur(${px.toFixed(2)}px)` : 'none')
 
 // ─── Text ────────────────────────────────────────────────────────────────
 
 const measureCache = new Map<string, number>()
 
-function drawText(ctx: CanvasRenderingContext2D, clip: Clip, k: number, reveal: number, wipe: number, blur: number) {
+function drawText(ctx: CanvasRenderingContext2D, project: Project, clip: Clip, k: number, reveal: number, wipe: number, blur: number) {
   const st = clip.text!
   const size = st.size * k
   const content = st.uppercase ? st.content.toUpperCase() : st.content
   const lines = content.split('\n')
-  ctx.font = `${st.italic ? 'italic ' : ''}${st.weight} ${size}px ${FONTS[st.font].css}`
+  ctx.font = `${st.italic ? 'italic ' : ''}${st.weight} ${size}px ${fontCss(st.font, project)}`
   ctx.letterSpacing = `${(st.letterSpacing * size).toFixed(2)}px`
   ctx.textBaseline = 'middle'
   ctx.textAlign = st.align
@@ -652,8 +728,22 @@ function drawText(ctx: CanvasRenderingContext2D, clip: Clip, k: number, reveal: 
   const total = content.replace(/\n/g, '').length
   const budget = reveal >= 1 ? Infinity : Math.floor(total * reveal)
 
+  const outline = st.outline && st.outline.width > 0 ? st.outline : null
   const paint = () => {
     let remaining = budget
+    // An outline is stroked under the fill, so it grows outward and never thins the letters.
+    const draw = (text: string, x: number, y: number) => {
+      if (outline) {
+        ctx.save()
+        ctx.lineJoin = 'round'
+        ctx.miterLimit = 2
+        ctx.lineWidth = outline.width * size * 2
+        ctx.strokeStyle = outline.color
+        ctx.strokeText(text, x, y)
+        ctx.restore()
+      }
+      ctx.fillText(text, x, y)
+    }
     lines.forEach((line, i) => {
       if (remaining <= 0) return
       const visible = remaining === Infinity ? line : line.slice(0, remaining)
@@ -662,9 +752,9 @@ function drawText(ctx: CanvasRenderingContext2D, clip: Clip, k: number, reveal: 
       if (st.align === 'center' && visible.length < line.length) {
         // Keep typewriter text anchored where the finished line will sit.
         ctx.textAlign = 'left'
-        ctx.fillText(visible, -widths[i] / 2, y)
+        draw(visible, -widths[i] / 2, y)
         ctx.textAlign = 'center'
-      } else ctx.fillText(visible, anchorX, y)
+      } else draw(visible, anchorX, y)
     })
   }
 

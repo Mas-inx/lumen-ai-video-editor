@@ -20,7 +20,14 @@ Every notable change to Lumen, newest first. The format follows [Keep a Changelo
   - Faders, pan and processing change smoothly while playing, and the export renders exactly the same mix.
 - **Crossfades.** Transitions now crossfade the sound as well as the picture (equal power), and audio tracks show a + at each cut to add one; `Ctrl+Shift+D` crossfades the selected clip with the one before.
 - **Loudness normalization** in the Export dialog: −14 LUFS (YouTube, Spotify, TikTok), −16 (Apple, podcasts), −23 (EBU R128) or −24 (ATSC A/85). Lumen measures the whole mix first, then sets its level with peaks held under the ceiling. The AI's `export_video` takes a `loudness_lufs` target too.
-- `mix_update` gives the AI the mixer, for 84 AI tools in all.
+- `mix_update` gives the AI the mixer.
+- **Colour grading on the GPU.** Curves (master and red, green, blue), colour wheels (lift, gamma, gain, each with a brightness slider), HSL for eight colour ranges, and **.cube LUTs** (3D and 1D) imported into the project with an amount slider. Clips that don't use them keep the fast path, and look the same either way.
+- **Scopes** beside the program monitor: waveform, RGB parade, vectorscope (with colour targets and the skin-tone line) and histogram.
+- **Keys:** *Chroma Key* (green or blue screen, a custom colour or an eyedropper that samples the unkeyed picture; tolerance, softness and spill suppression) and *Luma Key*.
+- **Masks:** feathered ellipse and rectangle masks with roundness, opacity and invert, edited on the canvas. On an adjustment layer they limit the grade to part of the frame.
+- **Titles:** outlines, and any font — import a font file or pick one installed on your computer; it's embedded in the project so it opens the same anywhere, 3D titles included.
+- *Sharpen* now actually sharpens.
+- 7 new AI tools (masks, LUTs and fonts), and effects take settings, for 91 AI tools in all.
 
 - **OpenCode Go** as a Copilot brain: paste your OpenCode Go key and pick from GLM, Kimi, DeepSeek, Qwen, MiniMax, MiMo, Grok, GPT Luna and the rest of its models.
 - **Choose the model and effort for every brain.**

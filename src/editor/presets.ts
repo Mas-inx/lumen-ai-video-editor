@@ -64,7 +64,7 @@ export const is3dTransition = (kind: TransitionKind) => TRANSITIONS.some((t) => 
 
 // ─── Effects ─────────────────────────────────────────────────────────────
 
-export const EFFECTS: { kind: EffectKind; name: string; description: string; amount: number; is3d?: boolean }[] = [
+export const EFFECTS: { kind: EffectKind; name: string; description: string; amount: number; is3d?: boolean; params?: Record<string, number | string> }[] = [
   { kind: 'blur', name: 'Gaussian Blur', description: 'Soften the whole frame', amount: 30 },
   { kind: 'glow', name: 'Glow', description: 'Dreamy highlight bloom', amount: 45 },
   { kind: 'vignette', name: 'Vignette', description: 'Darken the edges', amount: 50 },
@@ -75,6 +75,8 @@ export const EFFECTS: { kind: EffectKind; name: string; description: string; amo
   { kind: 'leak', name: 'Light Leak', description: 'Warm drifting flare', amount: 55 },
   { kind: 'rgb', name: 'RGB Split', description: 'Chromatic glitch offset', amount: 30 },
   { kind: 'sharpen', name: 'Sharpen', description: 'Crisp up soft footage', amount: 40 },
+  { kind: 'chromaKey', name: 'Chroma Key', description: 'Remove a green or blue screen', amount: 100, params: { color: '#00d84a', tolerance: 32, softness: 18, spill: 60 } },
+  { kind: 'lumaKey', name: 'Luma Key', description: 'Drop out the black (or white)', amount: 100, params: { threshold: 18, softness: 12, invert: 0 } },
   { kind: 'tilt3d', name: '3D Tilt', description: 'Floating card with depth', amount: 60, is3d: true },
   { kind: 'curve3d', name: 'Curved Screen', description: 'Wrap the shot like a cinema screen', amount: 55, is3d: true },
   { kind: 'wave3d', name: 'Flag Wave', description: 'Ripples like fabric in the wind', amount: 45, is3d: true },

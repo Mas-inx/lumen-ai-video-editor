@@ -1,4 +1,4 @@
-import { Camera, Grid3x3, Maximize2, Pause, Play, Repeat, SkipBack, SkipForward, StepBack, StepForward } from 'lucide-react'
+import { Activity, Camera, Grid3x3, Maximize2, Pause, Play, Repeat, SkipBack, SkipForward, StepBack, StepForward } from 'lucide-react'
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { toast } from 'sonner'
 import { desktop } from '@/lib/platform'
@@ -19,10 +19,12 @@ import { cn } from '@/lib/cn'
 import { clamp } from '@/lib/math'
 import { formatTimecode } from '@/lib/time'
 import { PreviewStage } from './PreviewStage'
+import { Scopes } from './Scopes'
 
 export function PreviewPanel() {
   const panelRef = useRef<HTMLDivElement>(null)
   const [quality, setQuality] = useState<'full' | 'half'>('full')
+  const [scopes, setScopes] = useState(false)
   const settings = useEditor((s) => s.project.settings)
   const showGuides = useUI((s) => s.showGuides)
   const setShowGuides = useUI((s) => s.setShowGuides)
@@ -76,6 +78,9 @@ export function PreviewPanel() {
               { value: 'half', label: 'Half' },
             ]}
           />
+          <IconButton label="Scopes" active={scopes} onClick={() => setScopes(!scopes)}>
+            <Activity />
+          </IconButton>
           <IconButton label="Safe-area guides" shortcut="g" active={showGuides} onClick={() => setShowGuides(!showGuides)}>
             <Grid3x3 />
           </IconButton>
@@ -87,7 +92,10 @@ export function PreviewPanel() {
           </IconButton>
         </div>
       </div>
-      <PreviewStage q={quality} />
+      <div className="flex min-h-0 flex-1">
+        <PreviewStage q={quality} />
+        {scopes && <Scopes />}
+      </div>
       <Transport />
     </div>
   )

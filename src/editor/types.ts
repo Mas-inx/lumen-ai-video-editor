@@ -163,6 +163,36 @@ export interface Transform {
   z: number
 }
 
+/** A tone curve: points (x in, y out, both 0..1) joined by a smooth spline, sorted by x. */
+export type CurvePoints = [number, number][]
+
+/** Tone curves: master (all channels), then red, green and blue. */
+export interface Curves {
+  master: CurvePoints
+  red: CurvePoints
+  green: CurvePoints
+  blue: CurvePoints
+}
+
+/** A colour wheel: the colour it pushes toward (x, y on the wheel, -1..1) and a brightness offset (-1..1). */
+export interface Wheel {
+  x: number
+  y: number
+  luma: number
+}
+
+/** Lift (shadows), gamma (midtones) and gain (highlights). */
+export interface Wheels {
+  lift: Wheel
+  gamma: Wheel
+  gain: Wheel
+}
+
+export type HslBand = 'red' | 'orange' | 'yellow' | 'green' | 'aqua' | 'blue' | 'purple' | 'magenta'
+
+/** Per colour range: hue shift (degrees, -60..60), saturation and luminance (-100..100). */
+export type HslAdjust = Partial<Record<HslBand, { hue: number; saturation: number; luminance: number }>>
+
 /** All values -100..100 except vignette (0..100). */
 export interface ColorGrade {
   exposure: number
@@ -171,6 +201,11 @@ export interface ColorGrade {
   temperature: number
   tint: number
   vignette: number
+  curves?: Curves
+  wheels?: Wheels
+  hsl?: HslAdjust
+  /** A 3D LUT from the project's LUTs, mixed in by `amount` (0..1). */
+  lut?: { id: string; amount: number }
 }
 
 export interface AudioMix {
@@ -198,11 +233,14 @@ export interface Crop {
 
 export type FontId = 'sans' | 'display' | 'serif' | 'mono' | 'hand'
 
+/** A built-in font id, or `custom:<id>` for a font in the project. */
+export type FontRef = FontId | `custom:${string}`
+
 export type Material3D = 'chrome' | 'gold' | 'matte' | 'neon'
 
 export interface TextStyle {
   content: string
-  font: FontId
+  font: FontRef
   /** px at project resolution */
   size: number
   weight: number
@@ -219,6 +257,8 @@ export interface TextStyle {
   shadow: number
   /** Neon-style glow color, null for none. */
   glow: string | null
+  /** Outline around the letters; width as a fraction of the font size (0..0.3). */
+  outline?: { color: string; width: number } | null
   /** Extrusion depth relative to font size — 0 keeps the title flat, >0 makes it real 3D. */
   extrude: number
   material: Material3D
@@ -272,6 +312,9 @@ export type EffectKind =
   | 'leak'
   | 'rgb'
   | 'sharpen'
+  // Keys — make part of the picture transparent
+  | 'chromaKey'
+  | 'lumaKey'
   // 3D — rendered with the WebGL stage
   | 'tilt3d'
   | 'curve3d'
@@ -285,6 +328,30 @@ export interface Effect {
   enabled: boolean
   /** 0..100 */
   amount: number
+  /** Extra settings some effects take (a key's colour, a threshold…). */
+  params?: Record<string, number | string>
+}
+
+/** A shape that shows (or, inverted, hides) part of a clip — or limits where an adjustment layer applies. */
+export interface Mask {
+  id: string
+  shape: 'rectangle' | 'ellipse'
+  /** Center, as fractions of the frame (0..1). */
+  x: number
+  y: number
+  /** Size, as fractions of the frame. */
+  width: number
+  height: number
+  /** degrees */
+  rotation: number
+  /** Soft edge, as a fraction of the frame's shorter side (0..0.5). */
+  feather: number
+  /** Rounded corners for rectangles, 0..1. */
+  roundness: number
+  /** Show what's outside the shape instead. */
+  invert: boolean
+  /** 0..1 */
+  opacity: number
 }
 
 export type BlendMode =
@@ -335,10 +402,31 @@ export interface Clip {
   effects: Effect[]
   keyframes: Partial<Record<AnimatableProp, Keyframe[]>>
   crop?: Crop
+  masks?: Mask[]
   /** Clips sharing a group move and select together (a video and its detached sound, or a user group). */
   groupId?: string
   /** Holds the frame at `inPoint` for the whole clip (a freeze frame). */
   freeze?: boolean
+}
+
+export interface ProjectLut {
+  id: string
+  name: string
+  /** Points per side (e.g. 33). */
+  size: number
+  /** size³ RGB triples, red fastest, as 8-bit values in base64. */
+  data: string
+}
+
+export interface ProjectFont {
+  id: string
+  /** Display name, e.g. “Inter Tight Bold”. */
+  name: string
+  /** CSS family it's registered under. */
+  family: string
+  fileName: string
+  /** The font file, base64. */
+  data: string
 }
 
 // ─── Project ─────────────────────────────────────────────────────────────
@@ -376,5 +464,9 @@ export interface Project {
   range?: TimelineRange | null
   /** The master bus every track feeds. */
   master?: BusMix
+  /** Imported 3D LUTs (.cube), by id. */
+  luts?: Record<string, ProjectLut>
+  /** Imported fonts (from files or the system), embedded so the project travels. */
+  fonts?: Record<string, ProjectFont>
   createdAt: number
 }

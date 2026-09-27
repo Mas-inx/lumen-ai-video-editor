@@ -9,11 +9,13 @@ import type {
   ClipAnimation,
   ClipKind,
   ColorGrade,
+  Curves,
   FontId,
   TextStyle,
   Track,
   TrackKind,
   Transform,
+  Wheels,
 } from './types'
 
 export const PEAKS_PER_SECOND = 50
@@ -28,6 +30,27 @@ export const DEFAULT_COLOR: ColorGrade = {
   tint: 0,
   vignette: 0,
 }
+
+export const IDENTITY_CURVES: Curves = {
+  master: [
+    [0, 0],
+    [1, 1],
+  ],
+  red: [
+    [0, 0],
+    [1, 1],
+  ],
+  green: [
+    [0, 0],
+    [1, 1],
+  ],
+  blue: [
+    [0, 0],
+    [1, 1],
+  ],
+}
+
+export const NEUTRAL_WHEELS: Wheels = { lift: { x: 0, y: 0, luma: 0 }, gamma: { x: 0, y: 0, luma: 0 }, gain: { x: 0, y: 0, luma: 0 } }
 
 export const DEFAULT_AUDIO: AudioMix = { volume: 0, fadeIn: 0, fadeOut: 0, enhance: false, denoise: false }
 

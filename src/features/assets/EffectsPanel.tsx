@@ -19,7 +19,25 @@ const imgStyle: Partial<Record<EffectKind, CSSProperties>> = {
 }
 
 /** Previews an effect on the user's footage (or abstract artwork before there is any). */
+const CHECKER = 'repeating-conic-gradient(#3a3a40 0% 25%, #242428 0% 50%) 50% / 12px 12px'
+
 export function EffectPreview({ kind, src, className }: { kind: EffectKind; src: string; className?: string }) {
+  if (kind === 'chromaKey' || kind === 'lumaKey')
+    return (
+      <div className={cn('relative aspect-video overflow-hidden rounded-[10px]', className)} style={{ background: CHECKER }}>
+        <img
+          src={src}
+          alt=""
+          draggable={false}
+          className="h-full w-full object-cover"
+          style={
+            kind === 'lumaKey'
+              ? { maskImage: `url(${src})`, maskMode: 'luminance', maskSize: 'cover', maskPosition: 'center' }
+              : { maskImage: 'linear-gradient(100deg, transparent 38%, black 62%)' }
+          }
+        />
+      </div>
+    )
   return (
     <div className={cn('relative aspect-video overflow-hidden rounded-[10px] bg-black', className)}>
       <img

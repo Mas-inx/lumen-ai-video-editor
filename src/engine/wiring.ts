@@ -7,6 +7,7 @@ import { useEditor } from '@/editor/store'
 import type { Project } from '@/editor/types'
 import { analyzeAssets, releaseUnusedAudio } from '@/project/media-import'
 import { audioEngine, isAudible, loadAudio } from './audio-engine'
+import { registerProjectFonts } from './fonts'
 import { pruneVideos } from './media'
 
 function prefetch(project: Project) {
@@ -22,6 +23,7 @@ export function startMediaEngine() {
   started = true
   let pruneTimer: ReturnType<typeof setTimeout> | undefined
   useEditor.subscribe((s, prev) => {
+    if (s.project.fonts !== prev.project.fonts) registerProjectFonts(s.project)
     if (s.project.id !== prev.project.id) {
       // A different project was opened: measure anything it's missing.
       void analyzeAssets()
@@ -37,5 +39,6 @@ export function startMediaEngine() {
     }
   })
   prefetch(useEditor.getState().project)
+  registerProjectFonts(useEditor.getState().project)
   audioEngine.warm()
 }

@@ -34,13 +34,13 @@ import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
 import { Menu, MenuContent, MenuItem, MenuTrigger } from '@/components/ui/menu'
 import type { ClipPatch } from '@/editor/commands'
-import { DEFAULT_COLOR, FONTS } from '@/editor/defaults'
+import { DEFAULT_COLOR } from '@/editor/defaults'
 import { setAnimatable } from '@/editor/edit'
 import { ANIMATABLE } from '@/editor/keyframes'
 import { ANIMATIONS, EFFECTS, LOOKS } from '@/editor/presets'
 import { isRamped } from '@/editor/timing'
 import { dispatch, useEditor } from '@/editor/store'
-import type { AnimPreset, BlendMode, Clip, ColorGrade, FontId, Material3D, TextStyle } from '@/editor/types'
+import type { AnimPreset, BlendMode, Clip, ColorGrade, Material3D, TextStyle } from '@/editor/types'
 import { useUI } from '@/editor/ui-store'
 import { usePreviewArt } from '@/engine/preview-art'
 import { EffectPreview } from '@/features/assets/EffectsPanel'
@@ -49,6 +49,10 @@ import { cn } from '@/lib/cn'
 import { formatDuration } from '@/lib/time'
 import { ColorSwatches, KeyframeButton, PropSlider, usePropValue, ValueSlider } from './controls'
 import { SpeedRamp } from './SpeedRamp'
+import { KeyParams } from './KeyParams'
+import { CurvesSection, HslSection, LutSection, WheelsSection } from './GradeSections'
+import { FontPicker } from './FontPicker'
+import { fontCss } from '@/engine/fonts'
 
 const update = (ids: string[], patch: ClipPatch, key?: string) =>
   dispatch('clip.update', { ids, patch }, { coalesce: key })
@@ -204,6 +208,7 @@ export function EffectsSection({ clip }: { clip: Clip }) {
                   <Slider value={fx.amount} min={0} max={100} onChange={(v) => dispatch('effect.update', { clipId: clip.id, effectId: fx.id, patch: { amount: v } }, { coalesce: `fx:${fx.id}` })} />
                   <span className="w-8 text-right text-xs text-fg-3 tabular">{Math.round(fx.amount)}</span>
                 </div>
+                {(fx.kind === 'chromaKey' || fx.kind === 'lumaKey') && fx.enabled && <KeyParams clip={clip} fx={fx} />}
               </div>
             )
           })}
@@ -234,7 +239,7 @@ export function ColorSections({ clips }: { clips: Clip[] }) {
         title="Look"
         icon={<Aperture />}
         actions={
-          <IconButton size="xs" label="Reset color" onClick={() => update(ids, { color: DEFAULT_COLOR, look: null })}>
+          <IconButton size="xs" label="Reset color" onClick={() => update(ids, { color: { ...DEFAULT_COLOR, curves: null, wheels: null, hsl: null, lut: null }, look: null })}>
             <RotateCcw />
           </IconButton>
         }
@@ -264,6 +269,10 @@ export function ColorSections({ clips }: { clips: Clip[] }) {
           <ValueSlider label="Tint" value={g.tint} onChange={set('tint')} min={-100} max={100} gradient={GRADIENTS.tint} />
         </div>
       </Section>
+      <WheelsSection clips={clips} />
+      <CurvesSection clips={clips} />
+      <HslSection clips={clips} />
+      <LutSection clips={clips} />
     </>
   )
 }
@@ -471,6 +480,7 @@ const WEIGHTS = [
 
 export function TextSection({ clip }: { clip: Clip }) {
   const t = clip.text!
+  const projectFonts = { fonts: useEditor((s) => s.project.fonts) }
   const set = (patch: Partial<TextStyle>, key?: string) => update([clip.id], { text: patch, ...(patch.content !== undefined && { name: patch.content.split('\n')[0] || 'Title' }) }, key)
   return (
     <>
@@ -482,10 +492,10 @@ export function TextSection({ clip }: { clip: Clip }) {
             onKeyDown={(e) => e.stopPropagation()}
             rows={Math.min(5, t.content.split('\n').length + 1)}
             className="w-full resize-none rounded-lg bg-white/[0.045] px-2.5 py-2 text-sm leading-relaxed text-fg shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)] outline-none focus:shadow-[inset_0_0_0_1px_rgb(214_238_0/0.5),0_0_0_3px_rgb(214_238_0/0.12)]"
-            style={{ fontFamily: FONTS[t.font].css }}
+            style={{ fontFamily: fontCss(t.font, projectFonts) }}
           />
           <Row label="Font">
-            <Select<FontId> aria-label="Font" value={t.font} onChange={(font) => set({ font })} options={(Object.keys(FONTS) as FontId[]).map((f) => ({ value: f, label: <span style={{ fontFamily: FONTS[f].css }}>{FONTS[f].label}</span> }))} className="w-full" />
+            <FontPicker value={t.font} onChange={(font) => set({ font })} />
           </Row>
           <Row label="Weight">
             <Select aria-label="Weight" value={String(t.weight)} onChange={(w) => set({ weight: Number(w) })} options={WEIGHTS} className="w-full" />
@@ -555,8 +565,17 @@ export function TextSection({ clip }: { clip: Clip }) {
           {t.extrude === 0 && <p className="text-2xs leading-relaxed text-fg-4">Give the title depth to render it as real 3D geometry — lit, reflective, and animatable in 3D.</p>}
         </div>
       </Section>
-      <Section title="Background & glow" icon={<Palette />} defaultOpen={Boolean(t.background || t.glow)}>
+      <Section title="Outline, box & glow" icon={<Palette />} defaultOpen={Boolean(t.background || t.glow || t.outline)}>
         <div className="space-y-3">
+          <Row label="Outline">
+            <ColorSwatches allowNone value={t.outline?.color ?? null} onChange={(c) => set({ outline: c ? { color: c, width: t.outline?.width ?? 0.06 } : null })} />
+          </Row>
+          {t.outline && (
+            <Row label="Thickness">
+              <Slider value={t.outline.width * 100} min={1} max={30} defaultValue={6} onChange={(v) => set({ outline: { color: t.outline!.color, width: Math.round(v) / 100 } }, `outline:${clip.id}`)} />
+              <span className="w-10 shrink-0 text-right text-xs text-fg-3 tabular">{Math.round(t.outline.width * 100)}</span>
+            </Row>
+          )}
           <Row label="Box">
             <ColorSwatches allowNone value={t.background} onChange={(c) => set({ background: c ? `${c}cc` : null })} />
           </Row>

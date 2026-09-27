@@ -22,6 +22,8 @@ interface UIState {
   showGuides: boolean
   /** The preview gizmo edits the selected clip's crop instead of its transform. */
   cropMode: boolean
+  /** The mask being edited on the canvas (on the selected clip). */
+  maskEdit: string | null
   pasteAttributesOpen: boolean
   paletteOpen: boolean
   exportOpen: boolean
@@ -41,6 +43,7 @@ interface UIState {
   clearSelection: () => void
   setShowGuides: (v: boolean) => void
   setCropMode: (v: boolean) => void
+  setMaskEdit: (id: string | null) => void
   setPasteAttributesOpen: (v: boolean) => void
   setPaletteOpen: (v: boolean) => void
   setExportOpen: (v: boolean) => void
@@ -61,6 +64,7 @@ export const useUI = create<UIState>()(
       selection: [],
       showGuides: false,
       cropMode: false,
+      maskEdit: null,
       pasteAttributesOpen: false,
       paletteOpen: false,
       exportOpen: false,
@@ -87,7 +91,8 @@ export const useUI = create<UIState>()(
         }),
       clearSelection: () => set({ selection: [] }),
       setShowGuides: (showGuides) => set({ showGuides }),
-      setCropMode: (cropMode) => set({ cropMode }),
+      setCropMode: (cropMode) => set({ cropMode, ...(cropMode ? { maskEdit: null } : {}) }),
+      setMaskEdit: (maskEdit) => set({ maskEdit, ...(maskEdit ? { cropMode: false } : {}) }),
       setPasteAttributesOpen: (pasteAttributesOpen) => set({ pasteAttributesOpen }),
       setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
       setExportOpen: (exportOpen) => set({ exportOpen }),
@@ -123,7 +128,7 @@ useEditor.subscribe((state, prev) => {
   if (alive.length !== selection.length) useUI.setState({ selection: alive })
 })
 
-// Crop mode belongs to one clip: selecting something else leaves it.
+// Crop and mask editing belong to one clip: selecting something else leaves them.
 useUI.subscribe((state, prev) => {
-  if (state.cropMode && state.selection !== prev.selection) useUI.setState({ cropMode: false })
+  if ((state.cropMode || state.maskEdit) && state.selection !== prev.selection) useUI.setState({ cropMode: false, maskEdit: null })
 })

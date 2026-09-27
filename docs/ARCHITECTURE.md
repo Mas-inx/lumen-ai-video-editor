@@ -25,11 +25,16 @@ src/
     ops.ts            timeline rules: magnetic main track, gap-seeking moves, trims, ripple, roll / slip / slide,
                       insert / overwrite, freeze frames, linked sound and groups, range removal
     timing.ts         clip time → source time: speed, speed ramps (integrated), reverse, freeze frames
+    color-math.ts     tone curves (monotone cubic), colour wheels, HSL bands
+    lut.ts            .cube LUT parsing (3D and 1D, custom domains)
     clipboard.ts      copy / paste of clips and their media, across projects
     smart.ts          speech-aware edits: pauses, captions, ducking, reframing
     playback.ts       transport, clocked by the audio engine
   engine/           pixels and samples
-    compositor.ts     tracks, transforms, keyframes, animations, transitions, grades, effects, titles
+    compositor.ts     tracks, transforms, keyframes, animations, transitions, grades, effects, masks, titles
+    gl-grade.ts       the GPU grade: sharpen, keys, curves, wheels, HSL and 3D LUTs in one WebGL2 shader
+    scopes.ts         waveform, RGB parade, vectorscope and histogram of the rendered frame
+    fonts.ts          built-in and embedded fonts (from files or the system), registered with the page
     three/            3D stage: 3D transitions, 3D layer effects, extruded titles
     decode.ts         probing, filmstrips, frame-exact decoding (Mediabunny / WebCodecs)
     stills.ts         frame-exact stills and contact sheets (the AI's eyes)
