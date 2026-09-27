@@ -4,6 +4,26 @@ Every notable change to Lumen, newest first. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+### Added
+
+- **OpenCode Go** as a Copilot brain: paste your OpenCode Go key and pick from GLM, Kimi, DeepSeek, Qwen, MiniMax, MiMo, Grok, GPT Luna and the rest of its models.
+- **Choose the model and effort for every brain.**
+  - Claude Code gets its default plus Fable, Opus, Sonnet and Haiku.
+  - Codex gets its full model list, read from Codex itself, with your `config.toml` default shown.
+  - Every API model is listed too.
+  - A new effort picker next to the model offers Low, Medium, High, Extra high and Max — only the levels the chosen model supports — and Ultra on Codex models that have it.
+- **Automatic updates** from the GitHub Releases page.
+  - Lumen checks shortly after launch and every few hours, and downloads a new version in the background.
+  - It installs when you restart: from the **Restart to update** button or notification, or the next time you quit.
+  - **Check for updates** lives in the Lumen menu, and the About box shows progress and release notes.
+
+### Fixed
+
+- Lumen's taskbar, Start menu and desktop icons were blank after installing 1.0.2. The app's long description overflowed into the shortcuts' icon path; it's short again, and a test keeps it that way.
+- Claude, GPT and Gemini models on **OpenCode Zen** now work. Each goes to the endpoint of its own family (Anthropic, OpenAI Responses, Google) instead of OpenAI chat completions. Requests also carry the client name and session that OpenCode's gateways ask for.
+- Follow-up messages to Claude Opus 5.5 and Fable 5.1 no longer risk being rejected. Earlier turns' thinking isn't replayed once their pictures and long results have been trimmed.
+- A model that doesn't take an effort setting carries on at its default instead of failing.
+
 ## [1.0.2] — 2026-09-23
 
 ### Added

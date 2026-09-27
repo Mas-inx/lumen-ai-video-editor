@@ -14,9 +14,9 @@ Lumen is an Electron app: a React editor (the *renderer*) and a Node main proces
 
 ```
 shared/
-  app.ts            files, projects, export, window capture — main ↔ editor contract
+  app.ts            files, projects, export, window capture, updates — main ↔ editor contract
   integrations.ts   integrations contract (types + IPC channel names)
-  ai.ts             Copilot brains, agent events, instructions
+  ai.ts             Copilot brains, effort scale, agent events, instructions
 src/
   editor/           the document and its rules (framework-free, unit-tested)
     types.ts          project model — integer frames at the project's fps
@@ -44,8 +44,10 @@ electron/
   files.ts          lumen-media:// protocol (byte ranges, allow-listed files, model cache), dialogs
   project.ts        .lumen files, recent projects, crash recovery, close guard
   export.ts         streamed export writes
-  app-ipc.ts        file / project / export / window-capture IPC for the editor page only
-  integrations/     Blender, HyperFrames, MCP host, Lumen's MCP server, AI providers, media generation
+  updater.ts        updates from GitHub Releases (electron-updater)
+  app-ipc.ts        file / project / export / window-capture / update IPC for the editor page only
+  integrations/     Blender, HyperFrames, MCP host, Lumen's MCP server, media generation
+    ai/               AI providers and OpenCode routing, effort, local agents, the Copilot's tool loop
 ```
 
 ## The media engine
@@ -59,8 +61,10 @@ electron/
 
 **Brains.** The Copilot runs on one of:
 
-- **Your own Claude Code or Codex.** Lumen finds the CLI and runs it headless for each message — `claude -p --output-format stream-json` with only Lumen's MCP tools (no shell, file or web tools), or `codex exec --json` in its read-only sandbox — wired to Lumen's MCP server for that run. Sign-in uses each tool's own login; conversations continue with `--resume` / `exec resume`.
-- **A model with your API key** — Anthropic, OpenAI, Google Gemini, OpenRouter, OpenCode Zen, Ollama, LM Studio or any OpenAI-compatible endpoint — through an AI SDK tool loop in the main process.
+- **Your own Claude Code or Codex.** Lumen finds the CLI and runs it headless for each message — `claude -p --output-format stream-json` with only Lumen's MCP tools (no shell, file or web tools), or `codex exec --json` in its read-only sandbox — wired to Lumen's MCP server for that run. Sign-in uses each tool's own login; conversations continue with `--resume` / `exec resume`. The model and effort go in as `--model` / `--effort`, or `-m` / `-c model_reasoning_effort=…`; Codex's models and each one's effort levels come from `codex debug models`, its defaults from `config.toml`.
+- **A model with your API key** — Anthropic, OpenAI, Google Gemini, OpenRouter, OpenCode Zen, OpenCode Go, Ollama, LM Studio or any OpenAI-compatible endpoint — through an AI SDK tool loop in the main process. OpenCode's gateways serve each model through its family's API (Claude and MiniMax through Anthropic's, GPT and Grok through OpenAI's Responses, Gemini through Google's, open models through chat completions); Lumen routes by the [models.dev](https://models.dev) catalog OpenCode itself uses, cached for a day.
+
+**Effort.** One scale — Low, Medium, High, Extra high, Max (and Codex's Ultra) — offered per model with only the levels it takes ([`electron/integrations/ai/effort.ts`](../electron/integrations/ai/effort.ts)). Low to Extra high use the AI SDK's portable `reasoning` setting, which each provider turns into its own (Claude's adaptive thinking and effort or a thinking budget, OpenAI's reasoning effort, Gemini's thinking level, `reasoning_effort`); Max goes through Anthropic's and OpenAI's own options. A model that refuses the setting is remembered and the run carries on at its default. Claude binds its thinking to the exact conversation, so earlier turns' thinking isn't replayed once their pictures and long results have been trimmed.
 
 **Tools.** The registry ([`src/integrations/agent-tools.ts`](../src/integrations/agent-tools.ts)) combines the purpose-built tools in [`src/integrations/tools/`](../src/integrations/tools) with every editor command. See the [full reference](AI-TOOLS.md).
 
@@ -79,6 +83,10 @@ electron/
 ## Projects
 
 `.lumen` files are JSON: the project plus, for every media file, its absolute path and its path relative to the project file — so a project folder moved to another drive or computer still finds its media. The editor autosaves a recovery copy; closing with unsaved changes asks first. One Lumen runs at a time: opening a `.lumen` file hands it to the running window.
+
+## Updates
+
+[`electron/updater.ts`](../electron/updater.ts) uses electron-updater with the GitHub provider: shortly after launch and every four hours it reads `latest.yml` from the newest release, downloads the new installer in the background (only the changed blocks when a blockmap allows, verified against the release's SHA-512) and installs it silently when Lumen restarts — at once from **Restart to update**, otherwise on the next quit. The release workflow uploads `latest.yml` and the blockmap with every installer. Development builds don't update themselves; `LUMEN_UPDATE_URL` points a build at a local feed to try the whole flow without publishing.
 
 ## Stack
 
