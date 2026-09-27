@@ -39,7 +39,10 @@ export function AboutDialog() {
           your keys stay on this machine.
         </p>
         <p className="mt-3 text-xs text-fg-3">
-          Vibecoded with <span className="text-fg-2">Claude Opus 5.5</span> by <span className="text-accent">Mas-Inx</span>
+          Vibecoded with <span className="text-fg-2">Claude Opus 5.5</span> by <span className="text-accent">Mas-Inx</span> at{' '}
+          <a href="https://async.tech/" target="_blank" rel="noreferrer" className="text-accent hover:underline">
+            AsyncTech
+          </a>
         </p>
       </div>
     </Dialog>

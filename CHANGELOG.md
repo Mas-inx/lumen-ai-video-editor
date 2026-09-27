@@ -4,6 +4,10 @@ Every notable change to Lumen, newest first. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-09-28
+
+The pro update: 27 features that good editors have, and the first version that updates itself.
+
 ### Added
 
 - **Pro trim tools.** The **roll** (`R`), **slip** (`Y`) and **slide** (`U`) tools; hold `Ctrl` on a trim handle to **ripple trim** on any track; hold `Ctrl` while dragging clips to **insert** (push clips later) or `Shift` to **overwrite**.
@@ -119,7 +123,8 @@ First release.
 - **Integrations** — Blender renders (3D titles, backgrounds, agent-written scenes), HyperFrames motion graphics, MCP host (Higgsfield, Runway, Replicate, fal.ai or any server) and Lumen's own MCP server for external agents.
 - Windows installer (NSIS, per-user or all-users).
 
-[Unreleased]: https://github.com/Mas-inx/lumen-ai-video-editor/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/Mas-inx/lumen-ai-video-editor/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.1.0
 [1.0.2]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.0.2
 [1.0.1]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.0.1
 [1.0.0]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.0.0

@@ -6,7 +6,7 @@
 
 **Edit video with an AI that can see, hear and cut.**
 
-<sub>Vibecoded with <b>Claude Opus 5.5</b> by <a href="https://github.com/Mas-inx"><b>Mas-Inx</b></a></sub>
+<sub>Vibecoded with <b>Claude Opus 5.5</b> by <a href="https://github.com/Mas-inx"><b>Mas-Inx</b></a> at <a href="https://async.tech/"><b>AsyncTech</b></a></sub>
 
 Lumen is a desktop video editor where the AI isn't a chatbot bolted onto a timeline. It watches your edit frame by frame, listens to the mix, reads what's said — and makes real, undoable edits with the same tools you use. Bring your own brain: **Claude Code**, **Codex**, or a model with your **OpenAI, Anthropic, Gemini, OpenRouter** or local **Ollama / LM Studio** key.
 
@@ -233,7 +233,7 @@ Bug reports, ideas and pull requests are welcome — start with [CONTRIBUTING.md
 
 ## Credits
 
-Lumen was vibecoded with **[Claude Opus 5.5](https://www.anthropic.com/claude)** in [Claude Code](https://claude.com/claude-code) by **[Mas-Inx](https://github.com/Mas-inx)**.
+Lumen was vibecoded with **[Claude Opus 5.5](https://www.anthropic.com/claude)** in [Claude Code](https://claude.com/claude-code) by **[Mas-Inx](https://github.com/Mas-inx)** at **[AsyncTech](https://async.tech/)**.
 
 ## License
 
