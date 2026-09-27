@@ -3,7 +3,7 @@
   "productName": "Lumen",
   "version": "1.0.2",
   "private": true,
-  "description": "Open-source, AI-native video editor for Windows: timeline editing, frame-exact WebCodecs export, on-device Whisper captions, Blender and HyperFrames motion graphics, and an AI Copilot (Claude Code, Codex, OpenAI, Gemini or any MCP agent) that can see, hear and edit your video.",
+  "description": "Open-source AI video editor for Windows, with a Copilot that can see, hear and edit your video.",
   "keywords": [
     "video-editor",
     "ai-video-editor",
