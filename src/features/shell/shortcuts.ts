@@ -57,6 +57,7 @@ export const SHORTCUTS: Shortcut[] = [
   { id: 'freeze', label: 'Freeze frame', group: 'Editing', keys: ['shift+f'], run: actions.freezeFrame },
   { id: 'detach-audio', label: 'Detach / reattach audio', group: 'Editing', keys: ['mod+l'], run: actions.toggleAudioLink },
   { id: 'group', label: 'Group clips', group: 'Editing', keys: ['mod+g'], run: actions.group },
+  { id: 'crossfade', label: 'Crossfade with the clip before', group: 'Editing', keys: ['mod+shift+d'], run: actions.crossfade },
   { id: 'ungroup', label: 'Ungroup clips', group: 'Editing', keys: ['mod+shift+g'], run: actions.ungroup },
 
   // Tools

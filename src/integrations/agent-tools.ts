@@ -142,7 +142,8 @@ function projectSummary() {
     playing: usePlayback.getState().playing,
     selection: useUI.getState().selection,
     ...(p.range ? { in_out: { in: p.range.in, out: p.range.out } } : {}),
-    tracks: p.tracks.map((t) => ({ id: t.id, name: t.name, kind: t.kind, role: t.role, locked: t.locked, hidden: t.hidden, ...(t.muted ? { muted: true } : {}), ...(t.solo ? { solo: true } : {}), clips: clipsOn(t.id) })),
+    ...(p.master ? { master_mix: p.master } : {}),
+    tracks: p.tracks.map((t) => ({ id: t.id, name: t.name, kind: t.kind, role: t.role, locked: t.locked, hidden: t.hidden, ...(t.muted ? { muted: true } : {}), ...(t.solo ? { solo: true } : {}), ...(t.mix ? { mix: t.mix } : {}), clips: clipsOn(t.id) })),
     media: Object.values(p.assets).map((a) => ({
       id: a.id,
       name: a.name,

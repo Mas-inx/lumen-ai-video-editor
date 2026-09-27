@@ -33,8 +33,10 @@ src/
     three/            3D stage: 3D transitions, 3D layer effects, extruded titles
     decode.ts         probing, filmstrips, frame-exact decoding (Mediabunny / WebCodecs)
     stills.ts         frame-exact stills and contact sheets (the AI's eyes)
-    audio-engine.ts   Web Audio playback, offline mixdown, waveforms, speech detection
-    loudness.ts       ITU-R BS.1770 loudness (LUFS), peaks, clipping
+    audio-engine.ts   Web Audio playback, offline mixdown, crossfades, waveforms, speech detection
+    mixer.ts          channel and master buses: EQ → compressor → limiter → fader → balance, meters
+    eq-response.ts    the EQ's response curve, from the same biquads Web Audio runs
+    loudness.ts       ITU-R BS.1770 loudness (LUFS), streamed block by block; peaks, clipping
     export.ts         render → encode → mux, streamed to disk
   project/          session (new/open/save/recover), import, transcription, Whisper worker
   integrations/     AI brains, Blender / HyperFrames / MCP clients
@@ -56,8 +58,10 @@ electron/
 ## The media engine
 
 - **Import** registers files with the main process, which serves them to the page as `lumen-media://file/…` with byte-range support, only for files the user chose (or an open project references). Mediabunny probes each file with WebCodecs for duration, size, frame rate and audio; waveforms and filmstrips are measured from the media itself.
-- **Playback** draws the timeline on a canvas: video from `<video>` elements for smooth preview, images, image sequences and titles, with a three.js stage for 3D. Audio is a Web Audio graph per clip (volume, fades, keyframes, *Studio voice*, RNNoise) and its clock drives the playhead.
+- **Playback** draws the timeline on a canvas: video from `<video>` elements for smooth preview, images, image sequences and titles, with a three.js stage for 3D. Audio is a Web Audio graph per clip (volume, fades, keyframes, crossfades, *Studio voice*, RNNoise) feeding its track's channel and then the master bus, and the audio clock drives the playhead.
 - **Export** replays the same compositor frame by frame, with video decoded frame-exactly by Mediabunny instead of `<video>`, mixes audio offline with the same graph, encodes with WebCodecs (hardware when available) and streams the file to disk in chunks. MP4, MOV, WebM, GIF, WAV and M4A.
+  - Audio renders in two-second blocks, each starting a second early so compressors and limiters join seamlessly.
+  - Loudness normalization measures the mix first, then renders it with the gain and a limiter.
 - **Stills** for the AI reuse the export's frame feeder, drawn without disturbing the live preview.
 
 ## AI

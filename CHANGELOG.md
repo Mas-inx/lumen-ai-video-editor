@@ -14,7 +14,13 @@ Every notable change to Lumen, newest first. The format follows [Keep a Changelo
 - **Detach audio** (`Ctrl+L`) onto its own clip, linked to the picture, for J- and L-cuts; it stays in sync when the main track moves. Reattach it any time.
 - **Groups** (`Ctrl+G`): grouped and linked clips select, move and cut together; hold `Alt` to pick just one.
 - **Solo** tracks, **mute** a video track's sound, and **reorder tracks** by dragging.
-- 14 new AI tools for all of the above, for 83 in all.
+- 14 new AI tools for all of the above.
+- **A mixer** (the new Mixer tab). Every track that makes sound gets a channel strip with a fader, pan, mute, solo and a live stereo meter with peak hold and a clip light; the master bus has one too, and a slim master meter sits by the transport.
+  - Each channel, and the master, can have an **EQ** (low cut plus low, mid and high bands, with a response curve you drag), a **compressor** and a **limiter**, with live gain-reduction readouts, and presets such as *Clear voice*, *Music under voice* and *Finished master*.
+  - Faders, pan and processing change smoothly while playing, and the export renders exactly the same mix.
+- **Crossfades.** Transitions now crossfade the sound as well as the picture (equal power), and audio tracks show a + at each cut to add one; `Ctrl+Shift+D` crossfades the selected clip with the one before.
+- **Loudness normalization** in the Export dialog: −14 LUFS (YouTube, Spotify, TikTok), −16 (Apple, podcasts), −23 (EBU R128) or −24 (ATSC A/85). Lumen measures the whole mix first, then sets its level with peaks held under the ceiling. The AI's `export_video` takes a `loudness_lufs` target too.
+- `mix_update` gives the AI the mixer, for 84 AI tools in all.
 
 - **OpenCode Go** as a Copilot brain: paste your OpenCode Go key and pick from GLM, Kimi, DeepSeek, Qwen, MiniMax, MiMo, Grok, GPT Luna and the rest of its models.
 - **Choose the model and effort for every brain.**
@@ -31,6 +37,7 @@ Every notable change to Lumen, newest first. The format follows [Keep a Changelo
 
 - A video at a speed other than 1× now plays smoothly in the preview; before, it played at normal speed and kept jumping to catch up.
 - `Shift+←` and `Shift+→` move one second at any frame rate, not 30 frames.
+- The sound under a video transition now crossfades instead of cutting hard at the edit.
 - Lumen's taskbar, Start menu and desktop icons were blank after installing 1.0.2. The app's long description overflowed into the shortcuts' icon path; it's short again, and a test keeps it that way.
 - Claude, GPT and Gemini models on **OpenCode Zen** now work. Each goes to the endpoint of its own family (Anthropic, OpenAI Responses, Google) instead of OpenAI chat completions. Requests also carry the client name and session that OpenCode's gateways ask for.
 - Follow-up messages to Claude Opus 5.5 and Fable 5.1 no longer risk being rejected. Earlier turns' thinking isn't replayed once their pictures and long results have been trimmed.

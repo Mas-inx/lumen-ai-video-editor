@@ -10,6 +10,7 @@ import { create } from 'zustand'
 import { audioEngine } from '@/engine/audio-engine'
 import { projectDuration } from './ops'
 import { useEditor } from './store'
+import type { Track } from './types'
 
 interface PlaybackState {
   frame: number
@@ -159,11 +160,27 @@ usePlayback.subscribe((s, prev) => {
   if (s.volume !== prev.volume || s.muted !== prev.muted) audioEngine.setVolume(s.volume, s.muted)
 })
 
+/** Whether two track lists differ only in their mixer settings (faders, pan, processing). */
+function onlyMixChanged(a: Track[], b: Track[]) {
+  if (a.length !== b.length) return false
+  return a.every((t, i) => {
+    const { mix: _a, ...restA } = t
+    const { mix: _b, ...restB } = b[i]
+    return (Object.keys(restA) as (keyof typeof restA)[]).every((k) => restA[k] === restB[k]) && Object.keys(restA).length === Object.keys(restB).length
+  })
+}
+
 // Edits made while playing are heard right away.
 let refreshTimer: ReturnType<typeof setTimeout> | undefined
 useEditor.subscribe((s, prev) => {
-  // Only clips and tracks change the mix (waveform analysis updates assets in the background).
-  if ((s.project.clips === prev.project.clips && s.project.tracks === prev.project.tracks) || !usePlayback.getState().playing || anchorAudio === null) return
+  if (!usePlayback.getState().playing || anchorAudio === null) return
+  const clipsSame = s.project.clips === prev.project.clips
+  // Moving a fader or pan, or tweaking an EQ, glides in place instead of restarting the sound.
+  if (clipsSame && (s.project.tracks === prev.project.tracks || onlyMixChanged(s.project.tracks, prev.project.tracks))) {
+    if (s.project.tracks !== prev.project.tracks || s.project.master !== prev.project.master) audioEngine.updateMix(s.project)
+    return
+  }
+  // Only clips and tracks change what plays (waveform analysis updates assets in the background).
   clearTimeout(refreshTimer)
   refreshTimer = setTimeout(() => {
     if (usePlayback.getState().playing && anchorAudio !== null) audioEngine.refresh(useEditor.getState().project)

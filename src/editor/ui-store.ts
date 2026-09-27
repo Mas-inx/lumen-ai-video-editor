@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware'
 import { useEditor } from './store'
 
 export type LeftTab = 'media' | 'audio' | 'text' | 'effects' | 'transitions' | 'looks' | 'generate'
-export type RightTab = 'inspector' | 'copilot'
+export type RightTab = 'inspector' | 'mixer' | 'copilot'
 /** select: move and trim · blade: cut · roll: move a cut · slip: change the footage in place · slide: move a clip between its neighbours */
 export type Tool = 'select' | 'blade' | 'roll' | 'slip' | 'slide'
 export type SelectMode = 'replace' | 'toggle' | 'add'

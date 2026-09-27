@@ -1,9 +1,9 @@
-import { Blend } from 'lucide-react'
+import { Blend, Plus } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { Slider } from '@/components/ui/slider'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Button } from '@/components/ui/button'
-import { adjacentBefore } from '@/editor/ops'
+import { adjacentBefore, clipEnd } from '@/editor/ops'
 import { TRANSITIONS } from '@/editor/presets'
 import { dispatch, useEditor } from '@/editor/store'
 import type { Clip, Project, Track, TransitionKind } from '@/editor/types'
@@ -29,7 +29,7 @@ export function TrackLane({ track, width }: { track: Track; width: number }) {
     <div
       data-lane={track.id}
       className={cn(
-        'relative shrink-0 border-b border-line/70',
+        'group/lane relative shrink-0 border-b border-line/70',
         track.role === 'main' && 'bg-white/[0.016]',
         (track.hidden || track.muted) && 'opacity-45',
       )}
@@ -39,6 +39,7 @@ export function TrackLane({ track, width }: { track: Track; width: number }) {
         <ClipView key={id} clipId={id} locked={track.locked} />
       ))}
       <TransitionBadges trackId={track.id} />
+      {track.kind === 'audio' && !track.locked && <CrossfadeHandles trackId={track.id} />}
       {ghost && (
         <div
           className="pointer-events-none absolute top-[3px] bottom-[3px] z-20 flex items-center overflow-hidden rounded-[7px] border-2 border-dashed px-2 text-[11px] font-medium text-white/90"
@@ -67,6 +68,37 @@ function TransitionBadges({ trackId }: { trackId: string }) {
   return items.map((id) => <TransitionBadge key={id} clipId={id} />)
 }
 
+/** On audio tracks, a + at every cut between touching clips adds a crossfade. */
+function CrossfadeHandles({ trackId }: { trackId: string }) {
+  const cuts = useEditor(
+    useShallow((s) => {
+      const clips = Object.values(s.project.clips)
+        .filter((c) => c.trackId === trackId)
+        .sort((a, b) => a.start - b.start)
+      return clips.filter((c, i) => i > 0 && !c.transitionIn && clipEnd(clips[i - 1]) === c.start).map((c) => c.id)
+    }),
+  )
+  return cuts.map((id) => <CrossfadeHandle key={id} clipId={id} />)
+}
+
+function CrossfadeHandle({ clipId }: { clipId: string }) {
+  const clip = useEditor((s) => s.project.clips[clipId]) as Clip | undefined
+  const moving = useDrag((s) => Boolean(s.previews[clipId]))
+  const { pps, fps } = useLayout()
+  if (!clip || moving) return null
+  return (
+    <button
+      type="button"
+      title="Add a crossfade"
+      onClick={() => dispatch('clip.setTransition', { id: clip.id, transition: { kind: 'dissolve', duration: Math.max(2, Math.min(clip.duration, Math.round(fps / 2))) } }, { label: 'Add crossfade' })}
+      className="absolute top-1/2 z-[12] grid size-4 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-surface-5 text-fg-2 opacity-0 shadow-[0_0_0_1px_rgb(255_255_255/0.18),0_4px_10px_rgb(0_0_0/0.5)] outline-none transition-[opacity,transform] group-hover/lane:opacity-100 hover:scale-110 hover:text-fg focus-visible:opacity-100"
+      style={{ left: (clip.start / fps) * pps }}
+    >
+      <Plus className="size-2.5" />
+    </button>
+  )
+}
+
 function TransitionBadge({ clipId }: { clipId: string }) {
   const clip = useEditor((s) => s.project.clips[clipId]) as Clip | undefined
   const moving = useDrag((s) => Boolean(s.previews[clipId]))
@@ -75,7 +107,9 @@ function TransitionBadge({ clipId }: { clipId: string }) {
   const tr = clip.transitionIn
   const x = (clip.start / fps) * pps
   const w = (tr.duration / fps) * pps
-  const name = TRANSITIONS.find((t) => t.kind === tr.kind)?.name ?? 'Transition'
+  // On audio, every transition is a crossfade.
+  const audio = clip.kind === 'audio'
+  const name = audio ? 'Crossfade' : (TRANSITIONS.find((t) => t.kind === tr.kind)?.name ?? 'Transition')
 
   return (
     <>
@@ -95,8 +129,9 @@ function TransitionBadge({ clipId }: { clipId: string }) {
           </button>
         </PopoverTrigger>
         <PopoverContent side="top" className="w-64">
-          <div className="mb-2 text-xs font-semibold text-fg">Transition</div>
-          <div className="grid grid-cols-2 gap-1">
+          <div className="mb-2 text-xs font-semibold text-fg">{audio ? 'Crossfade' : 'Transition'}</div>
+          {audio && <p className="-mt-1 mb-1 text-2xs text-fg-4">Equal-power: the outgoing sound plays on into its handle while the next fades in.</p>}
+          <div className={cn('grid grid-cols-2 gap-1', audio && 'hidden')}>
             {TRANSITIONS.map((t) => (
               <button
                 key={t.kind}
@@ -122,7 +157,7 @@ function TransitionBadge({ clipId }: { clipId: string }) {
             <span className="w-10 text-right text-xs text-fg-2 tabular">{formatDuration(tr.duration, fps)}</span>
           </div>
           <Button variant="danger" size="sm" className="mt-3 w-full" onClick={() => dispatch('clip.setTransition', { id: clip.id, transition: null })}>
-            Remove transition
+            {audio ? 'Remove crossfade' : 'Remove transition'}
           </Button>
         </PopoverContent>
       </Popover>

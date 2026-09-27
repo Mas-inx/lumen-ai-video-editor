@@ -19,6 +19,7 @@ import {
   codecSupport,
   ExportCancelled,
   FORMAT_INFO,
+  LOUDNESS_TARGETS,
   runExport,
   videoBitrate,
   type ExportFormat,
@@ -75,6 +76,23 @@ export function ExportDialog() {
   const [rate, setRate] = useState(String(projectFps))
   const [quality, setQuality] = useState(72)
   const [hw, setHw] = useState(true)
+  // The loudness target is a delivery habit, so it's remembered between exports.
+  const [loudness, setLoudnessState] = useState<string>(() => {
+    try {
+      return localStorage.getItem('lumen.export.loudness') ?? 'off'
+    } catch {
+      return 'off'
+    }
+  })
+  const setLoudness = (v: string) => {
+    setLoudnessState(v)
+    try {
+      localStorage.setItem('lumen.export.loudness', v)
+    } catch {
+      /* private storage */
+    }
+  }
+  const target = LOUDNESS_TARGETS.find((t) => t.id === loudness)
   const [support, setSupport] = useState<Partial<Record<ExportVideoCodec, boolean>>>({})
   const [state, setState] = useState<State>({ kind: 'idle' })
   const [preview, setPreview] = useState<string>()
@@ -139,7 +157,7 @@ export function ExportDialog() {
     try {
       const r = getProject().range
       const range: [number, number] | undefined = useRange && r ? [r.in, r.out] : undefined
-      const res = await runExport(getProject(), { format, codec, width: out.width, height: out.height, fps, quality, hardware: hw, range }, handle, (p) => {
+      const res = await runExport(getProject(), { format, codec, width: out.width, height: out.height, fps, quality, hardware: hw, range, ...(target && !gif ? { loudness: { lufs: target.lufs, peak: target.peak } } : {}) }, handle, (p) => {
         if (p.preview) setPreview(p.preview)
         setState({ kind: 'running', progress: p })
       }, controller.signal)
@@ -253,6 +271,18 @@ export function ExportDialog() {
               </span>
             </Row>
           )}
+          {!gif && (
+            <Row label="Loudness">
+              <Select
+                aria-label="Loudness"
+                value={loudness}
+                onChange={setLoudness}
+                options={[{ value: 'off', label: 'As mixed' }, ...LOUDNESS_TARGETS.map((t) => ({ value: t.id, label: t.label }))]}
+                className="w-full"
+              />
+            </Row>
+          )}
+          {target && !gif && <p className="text-2xs leading-relaxed text-fg-4">Measures the mix first, then sets it to {target.lufs} LUFS with peaks held under {target.peak} dBFS.</p>}
           {gif && <p className="text-2xs leading-relaxed text-fg-4">GIFs export at up to 720 px wide and 20 fps, without sound.</p>}
           {!info.video && <p className="text-2xs leading-relaxed text-fg-4">Exports the mixed audio of {useRange ? 'the marked in-to-out stretch' : 'the whole timeline'}.</p>}
         </div>

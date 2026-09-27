@@ -81,6 +81,50 @@ export interface Asset {
 
 export type TrackKind = 'video' | 'audio'
 
+/** Channel EQ: a low cut, low and high shelves and one bell in the middle. Gains in dB. */
+export interface EqSettings {
+  enabled: boolean
+  /** High-pass corner in Hz; 0 = off. */
+  lowCut: number
+  lowFreq: number
+  lowGain: number
+  midFreq: number
+  midGain: number
+  midQ: number
+  highFreq: number
+  highGain: number
+}
+
+export interface CompressorSettings {
+  enabled: boolean
+  /** dB */
+  threshold: number
+  ratio: number
+  /** ms */
+  attack: number
+  /** ms */
+  release: number
+  /** Make-up gain, dB */
+  makeup: number
+}
+
+export interface LimiterSettings {
+  enabled: boolean
+  /** Highest peak let through, dBFS */
+  ceiling: number
+}
+
+/** A mixer channel — a track's, or the master bus: level, pan and processing, in that order after the processing. */
+export interface BusMix {
+  /** Fader, dB (-60..+12) */
+  volume: number
+  /** -1 left … 1 right */
+  pan: number
+  eq?: EqSettings
+  compressor?: CompressorSettings
+  limiter?: LimiterSettings
+}
+
 export interface Track {
   id: string
   kind: TrackKind
@@ -90,6 +134,8 @@ export interface Track {
   locked: boolean
   /** Only soloed tracks are heard while any track is soloed. */
   solo?: boolean
+  /** The track's mixer channel; missing means unity gain, centered, no processing. */
+  mix?: BusMix
   /** Lane height in px — a view preference that travels with the project. */
   height: number
   role?: 'main' | 'titles' | 'captions'
@@ -328,5 +374,7 @@ export interface Project {
   clips: Record<string, Clip>
   markers: Marker[]
   range?: TimelineRange | null
+  /** The master bus every track feeds. */
+  master?: BusMix
   createdAt: number
 }

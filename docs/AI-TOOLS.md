@@ -1,6 +1,6 @@
 # Lumen AI tools
 
-Every AI that works in Lumen — the Copilot's API models, your own Claude Code or Codex, and any agent connected to Lumen's MCP server — uses this same set of **83 tools**. This page is generated from the tool registry ([`src/integrations/agent-tools.ts`](../src/integrations/agent-tools.ts) and [`src/integrations/tools/`](../src/integrations/tools)).
+Every AI that works in Lumen — the Copilot's API models, your own Claude Code or Codex, and any agent connected to Lumen's MCP server — uses this same set of **84 tools**. This page is generated from the tool registry ([`src/integrations/agent-tools.ts`](../src/integrations/agent-tools.ts) and [`src/integrations/tools/`](../src/integrations/tools)).
 
 - **Times:** the helper tools take seconds; editor commands take integer frames at the project's fps (see `get_project`).
 - **Pictures:** `get_frame`, `get_contact_sheet`, `get_media_frames` and `get_editor_screenshot` return an image block along with JSON — over MCP as `image` content, and to the Copilot's models as real images.
@@ -14,7 +14,7 @@ Every AI that works in Lumen — the Copilot's API models, your own Claude Code 
 - [Act](#act) — 10 tools
 - [Smart edits](#smart-edits) — 6 tools
 - [Generate and import](#generate-and-import) — 16 tools
-- [Editor commands](#editor-commands) — 39 tools
+- [Editor commands](#editor-commands) — 40 tools
 
 ## See
 
@@ -226,7 +226,7 @@ Save the project file. If it has never been saved — or as_new_file is true —
 
 ### `export_video`
 
-Export the edit to a video (or audio) file. The user chooses where to save it in a Save dialog — nothing is written without them — and sees progress with a Cancel button. Waits for the export and returns the file path. Renders the whole timeline unless from_seconds / to_seconds are given.
+Export the edit to a video (or audio) file. The user chooses where to save it in a Save dialog — nothing is written without them — and sees progress with a Cancel button. Waits for the export and returns the file path. Renders the whole timeline unless from_seconds / to_seconds are given. loudness_lufs normalizes the mix to a target (−14 for YouTube and Spotify, −16 for Apple and podcasts, −23 for broadcast), with peaks held under −1 dBFS.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
@@ -238,6 +238,7 @@ Export the edit to a video (or audio) file. The user chooses where to save it in
 | `from_seconds` | number | Start of the part to export |
 | `to_seconds` | number | End of the part to export |
 | `file_name` | string | Suggested file name (default: the project name) |
+| `loudness_lufs` | number | Normalize the mix to this integrated loudness in LUFS (e.g. -14); omit to keep the mix as it is |
 
 ## Smart edits
 
@@ -795,6 +796,15 @@ Remove a track and every clip on it (track ids are in get_project → tracks).
 | Parameter | Type | Description |
 | --- | --- | --- |
 | `id` **(required)** | string |  |
+
+### `mix_update`
+
+Mix a track (its id) or the master bus ("master"): fader volume in dB (-60 to +12), pan (-1 left to 1 right), and processing in this order — EQ (low cut Hz, low / mid / high shelves and bell in dB with their frequencies), compressor (threshold dB, ratio, attack and release ms, make-up dB) and limiter (ceiling dBFS). Pass null for a processor to remove it; fields you leave out keep their values.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `target` **(required)** | string or string |  |
+| `patch` **(required)** | object |  |
 
 ### `timeline_setRange`
 

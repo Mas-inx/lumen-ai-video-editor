@@ -23,8 +23,9 @@ import { projectDuration } from '@/editor/ops'
 import { playback } from '@/editor/playback'
 import type { Project } from '@/editor/types'
 import { desktop } from '@/lib/platform'
-import { prepareAudio, renderMix } from './audio-engine'
+import { prepareAudio, renderMix, type MixOptions } from './audio-engine'
 import { renderFrame } from './compositor'
+import { LoudnessMeter } from './loudness'
 import { setExportFrames } from './media'
 import { FrameFeeder } from './stills'
 import { encodeWav } from './wav'
@@ -44,7 +45,17 @@ export interface ExportSettings {
   hardware: boolean
   /** Project frames [start, end) to export; defaults to the whole timeline. */
   range?: [number, number]
+  /** Normalize the mix to this integrated loudness (LUFS), with peaks held under `peak` dBFS. */
+  loudness?: { lufs: number; peak: number }
 }
+
+/** Loudness targets people deliver to. */
+export const LOUDNESS_TARGETS = [
+  { id: 'streaming', label: '−14 LUFS · YouTube, Spotify, TikTok', lufs: -14, peak: -1 },
+  { id: 'apple', label: '−16 LUFS · Apple, podcasts', lufs: -16, peak: -1 },
+  { id: 'ebu', label: '−23 LUFS · EBU R128 broadcast', lufs: -23, peak: -1 },
+  { id: 'atsc', label: '−24 LUFS · ATSC A/85 broadcast', lufs: -24, peak: -2 },
+] as const
 
 export interface ExportProgress {
   phase: 'preparing' | 'rendering' | 'finishing'
@@ -130,6 +141,31 @@ async function audioCodecFor(format: 'mp4' | 'mov' | 'webm' | 'm4a'): Promise<Au
   return format === 'mov' ? 'pcm-s16' : 'opus'
 }
 
+/**
+ * Loudness normalization, pass one: renders the mix once to measure its integrated
+ * loudness (BS.1770), then returns the gain that lands it on the target, with a
+ * limiter holding the peaks under the ceiling.
+ */
+async function normalization(project: Project, range: [number, number], target: { lufs: number; peak: number }, onProgress: (p: ExportProgress) => void, check: () => void): Promise<MixOptions> {
+  const fps = project.settings.fps
+  const meter = new LoudnessMeter(48000)
+  const step = 10
+  const total = Math.max(1, Math.ceil((range[1] - range[0]) / fps / step))
+  for (let i = 0; i < total; i++) {
+    check()
+    const t0 = range[0] / fps + i * step
+    const t1 = Math.min(range[1] / fps, t0 + step)
+    const buf = await renderMix(project, t0, t1)
+    meter.push([buf.getChannelData(0), buf.getChannelData(1)])
+    onProgress({ phase: 'preparing', done: i + 1, total, speed: 0, eta: 0, message: `Measuring loudness (${Math.round(((i + 1) / total) * 100)}%)…` })
+  }
+  const measured = meter.result().lufs
+  if (measured === null) return {}
+  const gainDb = Math.max(-40, Math.min(30, target.lufs - measured))
+  onProgress({ phase: 'preparing', done: 1, total: 1, speed: 0, eta: 0, message: `Loudness ${measured.toFixed(1)} LUFS → ${target.lufs} LUFS (${gainDb >= 0 ? '+' : ''}${gainDb.toFixed(1)} dB)` })
+  return { gainDb, ceiling: target.peak }
+}
+
 const hasAudio = (project: Project) => Object.values(project.clips).some((c) => c.kind === 'audio' || c.kind === 'video')
 
 /** Everything a frame needs is decoded before it's drawn: video frames, sequence frames, stills. */
@@ -188,15 +224,16 @@ async function exportOnce(project: Project, settings: ExportSettings, handle: Ex
     await document.fonts.ready
     await prepareAudio(project, (done, total) => onProgress({ phase: 'preparing', done, total, speed: 0, eta: 0, message: `Preparing audio (${done}/${total})…` }))
     check()
+    const mixOpts = settings.loudness && settings.format !== 'gif' && hasAudio(project) ? await normalization(project, range, settings.loudness, onProgress, check) : {}
 
     if (settings.format === 'wav') {
-      const mix = await renderMix(project, range[0] / project.settings.fps, range[1] / project.settings.fps)
+      const mix = await renderMix(project, range[0] / project.settings.fps, range[1] / project.settings.fps, mixOpts)
       check()
       await api.export.write(handle.id, 0, encodeWav(mix))
       return await api.export.finish(handle.id)
     }
     if (settings.format === 'gif') return await exportGif(project, settings, range, handle, onProgress, check)
-    return await exportMedia(project, settings, range, handle, onProgress, check)
+    return await exportMedia(project, settings, range, handle, onProgress, check, mixOpts)
   } catch (err) {
     await api.export.abort(handle.id).catch(() => {})
     throw err
@@ -213,6 +250,7 @@ async function exportMedia(
   handle: ExportHandle,
   onProgress: (p: ExportProgress) => void,
   check: () => void,
+  mixOpts: MixOptions,
 ) {
   const api = desktop!
   const format = settings.format as 'mp4' | 'mov' | 'webm' | 'm4a'
@@ -267,7 +305,7 @@ async function exportMedia(
       check()
       const t0 = b * block
       const t1 = Math.min(duration, t0 + block)
-      if (audioSource) await audioSource.add(await renderMix(project, start + t0, start + t1))
+      if (audioSource) await audioSource.add(await renderMix(project, start + t0, start + t1, mixOpts))
       if (!video) {
         progress(b + 1)
         continue

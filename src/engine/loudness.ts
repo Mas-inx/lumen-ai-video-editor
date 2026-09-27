@@ -55,79 +55,114 @@ function highPass(fs: number): Biquad {
 const loudness = (meanSquare: number) => -0.691 + 10 * Math.log10(meanSquare)
 const db = (v: number) => (v > 0 ? 20 * Math.log10(v) : -Infinity)
 
+/**
+ * Measures loudness a block at a time, so a whole mix never has to sit in memory:
+ * the K-weighting filters and 100 ms energy bins carry on across `push` calls.
+ */
+export class LoudnessMeter {
+  private readonly step: number
+  private readonly shelf: Biquad
+  private readonly pass: Biquad
+  /** Per channel: [s1x1, s1x2, s1y1, s1y2, s2x1, s2x2, s2y1, s2y2] */
+  private readonly state: Float64Array[] = []
+  private energy: number[] = []
+  private samples = 0
+  private peak = 0
+  private sumSq = 0
+  private clipped = 0
+  private total = 0
+  private channelCount = 0
+
+  constructor(private readonly sampleRate: number) {
+    this.step = Math.max(1, Math.round(sampleRate * 0.1))
+    this.shelf = highShelf(sampleRate)
+    this.pass = highPass(sampleRate)
+  }
+
+  push(channels: Float32Array[]) {
+    const n = channels[0]?.length ?? 0
+    const { shelf, pass, step } = this
+    this.channelCount = Math.max(this.channelCount, channels.length)
+    const bins = Math.ceil((this.samples + n) / step)
+    while (this.energy.length < bins) this.energy.push(0)
+    channels.forEach((x, c) => {
+      const st = (this.state[c] ??= new Float64Array(8))
+      let [s1x1, s1x2, s1y1, s1y2, s2x1, s2x2, s2y1, s2y2] = st
+      let peak = this.peak
+      let sumSq = 0
+      let clipped = 0
+      let total = 0
+      for (let i = 0; i < n; i++) {
+        const v = x[i]
+        const a = v < 0 ? -v : v
+        if (a > peak) peak = a
+        if (a >= 0.999) clipped++
+        sumSq += v * v
+        const y1 = shelf.b0 * v + shelf.b1 * s1x1 + shelf.b2 * s1x2 - shelf.a1 * s1y1 - shelf.a2 * s1y2
+        s1x2 = s1x1
+        s1x1 = v
+        s1y2 = s1y1
+        s1y1 = y1
+        const y2 = pass.b0 * y1 + pass.b1 * s2x1 + pass.b2 * s2x2 - pass.a1 * s2y1 - pass.a2 * s2y2
+        s2x2 = s2x1
+        s2x1 = y1
+        s2y2 = s2y1
+        s2y1 = y2
+        this.energy[((this.samples + i) / step) | 0] += y2 * y2
+        total += y2 * y2
+      }
+      st.set([s1x1, s1x2, s1y1, s1y2, s2x1, s2x2, s2y1, s2y2])
+      this.peak = peak
+      this.sumSq += sumSq
+      this.clipped += clipped
+      this.total += total
+    })
+    this.samples += n
+  }
+
+  result(): LoudnessReport {
+    const { step, samples: n } = this
+    // K-weighted energy per 100 ms, summed over channels; blocks are 4 of these (400 ms, 75% overlap).
+    const subs = Math.floor(n / step)
+    const energy = this.energy
+    const blockMeans: number[] = []
+    for (let b = 0; b + 4 <= subs; b++) blockMeans.push((energy[b] + energy[b + 1] + energy[b + 2] + energy[b + 3]) / (4 * step))
+    let lufs: number | null = null
+    if (blockMeans.length) {
+      const absolute = blockMeans.filter((m) => m > 0 && loudness(m) > -70)
+      if (absolute.length) {
+        const relative = loudness(absolute.reduce((s, m) => s + m, 0) / absolute.length) - 10
+        const gated = absolute.filter((m) => loudness(m) > relative)
+        if (gated.length) lufs = loudness(gated.reduce((s, m) => s + m, 0) / gated.length)
+      }
+    } else if (this.total > 0 && n > 0) {
+      lufs = loudness(this.total / n) // shorter than one 400 ms block: ungated
+    }
+
+    let shortTermMax: number | null = null
+    let window = 0
+    for (let b = 0; b < subs; b++) {
+      window += energy[b]
+      if (b >= 30) window -= energy[b - 30]
+      if (b >= 29 && window > 0) shortTermMax = Math.max(shortTermMax ?? -Infinity, loudness(window / (30 * step)))
+    }
+
+    const samples = n * Math.max(1, this.channelCount)
+    return {
+      lufs: lufs !== null && Number.isFinite(lufs) ? lufs : null,
+      shortTermMax,
+      peakDb: db(this.peak),
+      rmsDb: samples ? db(Math.sqrt(this.sumSq / samples)) : -Infinity,
+      clipped: this.clipped,
+      seconds: n / this.sampleRate,
+    }
+  }
+}
+
 export function measureLoudness(channels: Float32Array[], sampleRate: number): LoudnessReport {
-  const n = channels[0]?.length ?? 0
-  const step = Math.max(1, Math.round(sampleRate * 0.1))
-  const subs = Math.floor(n / step)
-  // K-weighted energy per 100 ms, summed over channels; blocks are 4 of these (400 ms, 75% overlap).
-  const energy = new Float64Array(subs)
-  const shelf = highShelf(sampleRate)
-  const pass = highPass(sampleRate)
-  let peak = 0
-  let sumSq = 0
-  let clipped = 0
-  let total = 0
-  for (const x of channels) {
-    let s1x1 = 0,
-      s1x2 = 0,
-      s1y1 = 0,
-      s1y2 = 0,
-      s2x1 = 0,
-      s2x2 = 0,
-      s2y1 = 0,
-      s2y2 = 0
-    for (let i = 0; i < n; i++) {
-      const v = x[i]
-      const a = v < 0 ? -v : v
-      if (a > peak) peak = a
-      if (a >= 0.999) clipped++
-      sumSq += v * v
-      const y1 = shelf.b0 * v + shelf.b1 * s1x1 + shelf.b2 * s1x2 - shelf.a1 * s1y1 - shelf.a2 * s1y2
-      s1x2 = s1x1
-      s1x1 = v
-      s1y2 = s1y1
-      s1y1 = y1
-      const y2 = pass.b0 * y1 + pass.b1 * s2x1 + pass.b2 * s2x2 - pass.a1 * s2y1 - pass.a2 * s2y2
-      s2x2 = s2x1
-      s2x1 = y1
-      s2y2 = s2y1
-      s2y1 = y2
-      const sub = (i / step) | 0
-      if (sub < subs) energy[sub] += y2 * y2
-      total += y2 * y2
-    }
-  }
-
-  const blockMeans: number[] = []
-  for (let b = 0; b + 4 <= subs; b++) blockMeans.push((energy[b] + energy[b + 1] + energy[b + 2] + energy[b + 3]) / (4 * step))
-  let lufs: number | null = null
-  if (blockMeans.length) {
-    const absolute = blockMeans.filter((m) => m > 0 && loudness(m) > -70)
-    if (absolute.length) {
-      const relative = loudness(absolute.reduce((s, m) => s + m, 0) / absolute.length) - 10
-      const gated = absolute.filter((m) => loudness(m) > relative)
-      if (gated.length) lufs = loudness(gated.reduce((s, m) => s + m, 0) / gated.length)
-    }
-  } else if (total > 0 && n > 0) {
-    lufs = loudness(total / n) // shorter than one 400 ms block: ungated
-  }
-
-  let shortTermMax: number | null = null
-  for (let b = 0; b + 30 <= subs; b++) {
-    let e = 0
-    for (let k = 0; k < 30; k++) e += energy[b + k]
-    if (e > 0) shortTermMax = Math.max(shortTermMax ?? -Infinity, loudness(e / (30 * step)))
-  }
-
-  const samples = n * Math.max(1, channels.length)
-  return {
-    lufs: lufs !== null && Number.isFinite(lufs) ? lufs : null,
-    shortTermMax,
-    peakDb: db(peak),
-    rmsDb: samples ? db(Math.sqrt(sumSq / samples)) : -Infinity,
-    clipped,
-    seconds: n / sampleRate,
-  }
+  const meter = new LoudnessMeter(sampleRate)
+  meter.push(channels)
+  return meter.result()
 }
 
 /** Loudness of a decoded AudioBuffer. */

@@ -1,6 +1,10 @@
 import { uid } from '@/lib/id'
 import type {
   AudioMix,
+  BusMix,
+  CompressorSettings,
+  EqSettings,
+  LimiterSettings,
   Clip,
   ClipAnimation,
   ClipKind,
@@ -26,6 +30,14 @@ export const DEFAULT_COLOR: ColorGrade = {
 }
 
 export const DEFAULT_AUDIO: AudioMix = { volume: 0, fadeIn: 0, fadeOut: 0, enhance: false, denoise: false }
+
+export const DEFAULT_BUS: BusMix = { volume: 0, pan: 0 }
+
+export const DEFAULT_EQ: EqSettings = { enabled: true, lowCut: 0, lowFreq: 120, lowGain: 0, midFreq: 1000, midGain: 0, midQ: 1, highFreq: 8000, highGain: 0 }
+
+export const DEFAULT_COMPRESSOR: CompressorSettings = { enabled: true, threshold: -18, ratio: 3, attack: 10, release: 150, makeup: 0 }
+
+export const DEFAULT_LIMITER: LimiterSettings = { enabled: true, ceiling: -1 }
 
 export const DEFAULT_ANIMATION: ClipAnimation = {
   in: { preset: 'none', duration: 15 },

@@ -1,10 +1,13 @@
-import { SlidersHorizontal } from 'lucide-react'
+import { SlidersHorizontal, SlidersVertical } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { AiSparkle } from '@/components/brand'
 import { Segmented } from '@/components/ui/segmented'
 import { useUI, type RightTab } from '@/editor/ui-store'
 import { CopilotPanel } from '@/features/copilot/CopilotPanel'
 import { Inspector } from '@/features/inspector/Inspector'
+import { MixerPanel } from '@/features/mixer/MixerPanel'
+
+const ORDER: RightTab[] = ['inspector', 'mixer', 'copilot']
 
 export function SidePanel() {
   const tab = useUI((s) => s.rightTab)
@@ -18,6 +21,7 @@ export function SidePanel() {
           stretch
           options={[
             { value: 'inspector', label: 'Inspector', icon: <SlidersHorizontal /> },
+            { value: 'mixer', label: 'Mixer', icon: <SlidersVertical /> },
             { value: 'copilot', label: 'Copilot', icon: <AiSparkle className="!size-3.5" /> },
           ]}
         />
@@ -26,13 +30,13 @@ export function SidePanel() {
         <AnimatePresence mode="popLayout" initial={false}>
           <motion.div
             key={tab}
-            initial={{ opacity: 0, x: tab === 'copilot' ? 12 : -12 }}
+            initial={{ opacity: 0, x: ORDER.indexOf(tab) > 0 ? 12 : -12 }}
             animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: tab === 'copilot' ? -12 : 12 }}
+            exit={{ opacity: 0, x: ORDER.indexOf(tab) > 0 ? -12 : 12 }}
             transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
             className="absolute inset-0"
           >
-            {tab === 'inspector' ? <Inspector /> : <CopilotPanel />}
+            {tab === 'inspector' ? <Inspector /> : tab === 'mixer' ? <MixerPanel /> : <CopilotPanel />}
           </motion.div>
         </AnimatePresence>
       </div>

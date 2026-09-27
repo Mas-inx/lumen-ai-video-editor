@@ -1,5 +1,5 @@
 import { Camera, Grid3x3, Maximize2, Pause, Play, Repeat, SkipBack, SkipForward, StepBack, StepForward } from 'lucide-react'
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { toast } from 'sonner'
 import { desktop } from '@/lib/platform'
 import { importMediaFiles } from '@/project/media-import'
@@ -10,7 +10,9 @@ import { projectDuration } from '@/editor/ops'
 import { playback, usePlayback } from '@/editor/playback'
 import { getProject, useEditor } from '@/editor/store'
 import { useUI } from '@/editor/ui-store'
+import { audioEngine } from '@/engine/audio-engine'
 import { timelineStills } from '@/engine/stills'
+import { meterPos } from '@/features/mixer/scales'
 import { MARKER_COLORS } from '@/features/timeline/Ruler'
 import { actions } from '@/features/shell/actions'
 import { cn } from '@/lib/cn'
@@ -135,12 +137,51 @@ function Transport() {
           </IconButton>
         </div>
         <div className="flex items-center justify-end gap-1">
+          <MasterMeter />
           <IconButton label={loop ? 'Loop on' : 'Loop off'} active={loop} onClick={() => playback.toggleLoop()}>
             <Repeat />
           </IconButton>
         </div>
       </div>
     </div>
+  )
+}
+
+/** A slim stereo meter of the master output; click it to open the mixer. */
+function MasterMeter() {
+  const left = useRef<HTMLSpanElement>(null)
+  const right = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    const bars = [left, right]
+    let raf = 0
+    let last = performance.now()
+    const shown = [-60, -60]
+    const tick = (now: number) => {
+      const dt = (now - last) / 1000
+      last = now
+      const lv = audioEngine.levels('master') ?? [-Infinity, -Infinity]
+      for (let i = 0; i < 2; i++) {
+        shown[i] = Math.max(Number.isFinite(lv[i]) ? lv[i] : -60, shown[i] - 24 * dt)
+        const el = bars[i].current
+        if (el) {
+          el.style.clipPath = `inset(0 ${((1 - meterPos(shown[i])) * 100).toFixed(2)}% 0 0)`
+        }
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [])
+  return (
+    <Tip content="Master level — open the mixer">
+      <button type="button" aria-label="Open the mixer" onClick={() => useUI.getState().setRightTab('mixer')} className="mr-1 flex w-16 flex-col gap-[3px] rounded-md px-1 py-1.5 outline-none hover:bg-white/[0.05] focus-visible:ring-2 focus-visible:ring-accent/60">
+        {[left, right].map((ref, i) => (
+          <span key={i} className="relative h-[4px] w-full overflow-hidden rounded-full bg-white/[0.07]">
+            <span ref={ref} className="absolute inset-0 bg-[linear-gradient(to_right,#2fcf7e_0%,#2fcf7e_62%,#e6e238_76%,#f5a524_88%,#ef4444_96%)]" style={{ clipPath: 'inset(0 100% 0 0)' }} />
+          </span>
+        ))}
+      </button>
+    </Tip>
   )
 }
 

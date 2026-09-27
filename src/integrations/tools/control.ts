@@ -226,7 +226,7 @@ export const CONTROL_TOOLS: AgentTool[] = [
   {
     name: 'export_video',
     description:
-      'Export the edit to a video (or audio) file. The user chooses where to save it in a Save dialog — nothing is written without them — and sees progress with a Cancel button. Waits for the export and returns the file path. Renders the whole timeline unless from_seconds / to_seconds are given.',
+      'Export the edit to a video (or audio) file. The user chooses where to save it in a Save dialog — nothing is written without them — and sees progress with a Cancel button. Waits for the export and returns the file path. Renders the whole timeline unless from_seconds / to_seconds are given. loudness_lufs normalizes the mix to a target (−14 for YouTube and Spotify, −16 for Apple and podcasts, −23 for broadcast), with peaks held under −1 dBFS.',
     inputSchema: obj({
       format: oneOf('File type (default mp4)', ['mp4', 'mov', 'webm', 'gif', 'wav', 'm4a']),
       resolution: int('Output size by its short side (default: the project’s own size)', { enum: [2160, 1440, 1080, 720, 480] }),
@@ -236,6 +236,7 @@ export const CONTROL_TOOLS: AgentTool[] = [
       from_seconds: num('Start of the part to export', { minimum: 0 }),
       to_seconds: num('End of the part to export', { minimum: 0 }),
       file_name: str('Suggested file name (default: the project name)'),
+      loudness_lufs: num('Normalize the mix to this integrated loudness in LUFS (e.g. -14); omit to keep the mix as it is', { minimum: -36, maximum: -6 }),
     }),
     run: async (a) => {
       if (!desktop) throw new Error('Exporting needs the desktop app.')
@@ -276,7 +277,17 @@ export const CONTROL_TOOLS: AgentTool[] = [
       try {
         const res = await runExport(
           p,
-          { format, codec, width, height, fps, quality: Math.round(clampNum(number(a, 'quality') ?? 72, 10, 100)), hardware: true, range: [fromF, toF] },
+          {
+            format,
+            codec,
+            width,
+            height,
+            fps,
+            quality: Math.round(clampNum(number(a, 'quality') ?? 72, 10, 100)),
+            hardware: true,
+            range: [fromF, toF],
+            ...(number(a, 'loudness_lufs') !== undefined ? { loudness: { lufs: clampNum(number(a, 'loudness_lufs')!, -36, -6), peak: -1 } } : {}),
+          },
           handle,
           (prog) => {
             if (prog.phase === 'rendering' && prog.total) toast.loading(`Exporting… ${Math.round((prog.done / prog.total) * 100)}%`, { id, description: 'Started by the Copilot', action: { label: 'Cancel', onClick: () => controller.abort() }, duration: Infinity })

@@ -7,7 +7,7 @@
  */
 import { z } from 'zod'
 import { uid } from '@/lib/id'
-import { createClip, createTrack, TRACK_HEIGHTS } from './defaults'
+import { createClip, createTrack, DEFAULT_BUS, DEFAULT_COMPRESSOR, DEFAULT_EQ, DEFAULT_LIMITER, TRACK_HEIGHTS } from './defaults'
 import { ANIMATABLE, evalKeyframes } from './keyframes'
 import { EFFECTS } from './presets'
 import {
@@ -40,7 +40,7 @@ import {
   ungroupClips,
 } from './ops'
 import { averageSpeed, consumed, localForConsumed, MAX_SPEED, MIN_SPEED } from './timing'
-import type { AnimatableProp, Clip, Project } from './types'
+import type { AnimatableProp, BusMix, Clip, Project } from './types'
 
 export class CommandError extends Error {}
 
@@ -107,6 +107,40 @@ const crop = z.object({
   bottom: z.number().min(0).max(0.95),
   radius: z.number().min(0).max(1),
 })
+
+const eq = z.object({
+  enabled: z.boolean(),
+  lowCut: z.number().min(0).max(1000),
+  lowFreq: z.number().min(20).max(1000),
+  lowGain: z.number().min(-24).max(24),
+  midFreq: z.number().min(100).max(10000),
+  midGain: z.number().min(-24).max(24),
+  midQ: z.number().min(0.1).max(12),
+  highFreq: z.number().min(1000).max(20000),
+  highGain: z.number().min(-24).max(24),
+})
+
+const compressor = z.object({
+  enabled: z.boolean(),
+  threshold: z.number().min(-60).max(0),
+  ratio: z.number().min(1).max(20),
+  attack: z.number().min(0.1).max(1000),
+  release: z.number().min(10).max(3000),
+  makeup: z.number().min(0).max(24),
+})
+
+const limiter = z.object({ enabled: z.boolean(), ceiling: z.number().min(-24).max(0) })
+
+/** A change to a mixer channel; null removes a processor. */
+const busPatch = z
+  .object({
+    volume: z.number().min(-60).max(12),
+    pan: z.number().min(-1).max(1),
+    eq: eq.partial().nullable(),
+    compressor: compressor.partial().nullable(),
+    limiter: limiter.partial().nullable(),
+  })
+  .partial()
 
 const textStyle = z.object({
   content: z.string(),
@@ -933,6 +967,35 @@ export const commands = {
       getTrack(p, i.id)
       for (const c of Object.values(p.clips)) if (c.trackId === i.id) delete p.clips[c.id]
       p.tracks = p.tracks.filter((t) => t.id !== i.id)
+    },
+  }),
+
+  // Mixer
+  'mix.update': command({
+    description:
+      'Mix a track (its id) or the master bus ("master"): fader volume in dB (-60 to +12), pan (-1 left to 1 right), and processing in this order — EQ (low cut Hz, low / mid / high shelves and bell in dB with their frequencies), compressor (threshold dB, ratio, attack and release ms, make-up dB) and limiter (ceiling dBFS). Pass null for a processor to remove it; fields you leave out keep their values.',
+    input: z.object({ target: z.union([z.literal('master'), id]), patch: busPatch }),
+    title: (i, p) => {
+      const name = i.target === 'master' ? 'master' : (p.tracks.find((t) => t.id === i.target)?.name ?? 'track')
+      const [key] = Object.keys(i.patch)
+      const what = key === 'volume' ? 'volume' : key === 'pan' ? 'pan' : key === 'eq' ? 'EQ' : key === 'compressor' ? 'compressor' : key === 'limiter' ? 'limiter' : 'mix'
+      return `${what === 'volume' || what === 'pan' ? `${what[0].toUpperCase()}${what.slice(1)}` : what === 'mix' ? 'Mix' : `Edit ${what}`} · ${name}`
+    },
+    run(p, i) {
+      let bus: BusMix
+      if (i.target === 'master') bus = p.master ??= { ...DEFAULT_BUS }
+      else {
+        const track = getTrack(p, i.target)
+        bus = track.mix ??= { ...DEFAULT_BUS }
+      }
+      const { eq: e, compressor: c, limiter: l, ...levels } = i.patch
+      Object.assign(bus, levels)
+      if (e === null) delete bus.eq
+      else if (e) bus.eq = { ...DEFAULT_EQ, ...bus.eq, ...e }
+      if (c === null) delete bus.compressor
+      else if (c) bus.compressor = { ...DEFAULT_COMPRESSOR, ...bus.compressor, ...c }
+      if (l === null) delete bus.limiter
+      else if (l) bus.limiter = { ...DEFAULT_LIMITER, ...bus.limiter, ...l }
     },
   }),
 

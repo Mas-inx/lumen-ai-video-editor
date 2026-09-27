@@ -4,14 +4,16 @@
  * OfflineAudioContext per block), so what you hear is exactly what you get.
  *
  * Per clip: decoded source (optionally reversed / denoised) → optional voice
- * enhancement chain → gain (volume, keyframes, fades) → track → master.
+ * enhancement chain → gain (volume, keyframes, fades, crossfades) → its
+ * track's channel (EQ, compressor, limiter, fader, pan) → the master bus.
  */
 import { PEAKS_PER_SECOND } from '@/editor/defaults'
 import { propAt } from '@/editor/keyframes'
-import { clipEnd } from '@/editor/ops'
+import { adjacentAfter, adjacentBefore, clipEnd } from '@/editor/ops'
 import { isRamped, sourceFrameAt, speedAt } from '@/editor/timing'
 import type { Asset, Clip, Project } from '@/editor/types'
 import { decodeAudio } from './decode'
+import { createBus, createGraph, dbToGain, disposeGraph, hasDynamics, readMeter, updateGraph, type MixGraph } from './mixer'
 
 // ─── Decoded sources ─────────────────────────────────────────────────────
 
@@ -161,8 +163,6 @@ async function clipBuffer(asset: Asset, clip: Clip): Promise<AudioBuffer | null>
 
 // ─── Scheduling ──────────────────────────────────────────────────────────
 
-const dbToGain = (db: number) => (db <= -60 ? 0 : Math.pow(10, db / 20))
-
 /** Whether a clip makes sound at all: freeze frames and video whose sound was detached are silent, and while any track is soloed only soloed tracks play. */
 export function isAudible(project: Project, clip: Clip) {
   if (clip.kind !== 'audio' && clip.kind !== 'video') return false
@@ -175,10 +175,34 @@ export function isAudible(project: Project, clip: Clip) {
 
 /** Gain of a clip (volume, keyframes and fades) at a local frame. */
 export function clipGainAt(clip: Clip, local: number) {
-  let g = dbToGain(propAt(clip, 'volume', local))
+  let g = dbToGain(propAt(clip, 'volume', Math.min(local, clip.duration)))
   const { fadeIn, fadeOut } = clip.audio
   if (fadeIn > 0 && local < fadeIn) g *= Math.max(0, local / fadeIn)
   if (fadeOut > 0 && local > clip.duration - fadeOut) g *= Math.max(0, (clip.duration - local) / fadeOut)
+  return g
+}
+
+/**
+ * How a clip's sound meets its neighbours: a transition (on any track) is an
+ * equal-power crossfade. The incoming clip fades in over the transition; the
+ * outgoing one plays on past its end, into its handle, fading out.
+ */
+export function crossfades(project: Project, clip: Clip): { fadeIn: number; tail: number } {
+  const fadeIn = clip.transitionIn && adjacentBefore(project, clip) ? Math.min(clip.transitionIn.duration, clip.duration) : 0
+  const next = adjacentAfter(project, clip)
+  const tail = next?.transitionIn ? Math.min(next.transitionIn.duration, next.duration) : 0
+  return { fadeIn, tail }
+}
+
+/** Gain at a local frame including crossfades; past the clip's end (in its handle) it fades out. */
+function mixGainAt(clip: Clip, local: number, xf: { fadeIn: number; tail: number }) {
+  if (local >= clip.duration) {
+    if (!xf.tail) return 0
+    const t = Math.min(1, (local - clip.duration) / xf.tail)
+    return clipGainAt(clip, clip.duration - 1e-6) * Math.cos((t * Math.PI) / 2)
+  }
+  let g = clipGainAt(clip, local)
+  if (xf.fadeIn && local < xf.fadeIn) g *= Math.sin((Math.max(0, local / xf.fadeIn) * Math.PI) / 2)
   return g
 }
 
@@ -225,8 +249,9 @@ interface Scheduled {
  */
 function scheduleClip(ctx: BaseAudioContext, dest: AudioNode, project: Project, clip: Clip, buffer: AudioBuffer, from: number, to: number, at: number): Scheduled | null {
   const fps = project.settings.fps
+  const xf = crossfades(project, clip)
   const cs = clip.start / fps
-  const ce = clipEnd(clip) / fps
+  const ce = (clipEnd(clip) + xf.tail) / fps
   const a = Math.max(cs, from)
   const b = Math.min(ce, to)
   if (b - a <= 1e-4) return null
@@ -261,12 +286,12 @@ function scheduleClip(ctx: BaseAudioContext, dest: AudioNode, project: Project, 
 
   // Gain automation from the start of the scheduled part to its end.
   const animated = Boolean(clip.keyframes.volume?.length)
-  if (!animated && !clip.audio.fadeIn && !clip.audio.fadeOut) {
+  if (!animated && !clip.audio.fadeIn && !clip.audio.fadeOut && !xf.fadeIn && !xf.tail) {
     gain.gain.setValueAtTime(clipGainAt(clip, localAt(a)), when)
   } else {
     const steps = Math.max(2, Math.min(24000, Math.ceil(dur * 60)))
     const curve = new Float32Array(steps)
-    for (let i = 0; i < steps; i++) curve[i] = clipGainAt(clip, localAt(a + (dur * i) / (steps - 1)))
+    for (let i = 0; i < steps; i++) curve[i] = mixGainAt(clip, localAt(a + (dur * i) / (steps - 1)), xf)
     gain.gain.setValueCurveAtTime(curve, when, Math.max(0.001, dur))
   }
 
@@ -276,10 +301,21 @@ function scheduleClip(ctx: BaseAudioContext, dest: AudioNode, project: Project, 
   return { source, nodes }
 }
 
+/** Where a clip's sound goes: its track's channel. */
+const channelFor = (graph: MixGraph, clip: Clip) => graph.tracks.get(clip.trackId)?.input ?? graph.master.input
+
+/** Timeline seconds a clip is heard for, crossfade tail included. */
+function audibleSpan(project: Project, clip: Clip): [number, number] {
+  const fps = project.settings.fps
+  return [clip.start / fps, (clipEnd(clip) + crossfades(project, clip).tail) / fps]
+}
+
 // ─── Live playback ───────────────────────────────────────────────────────
 
 let ctx: AudioContext | null = null
-let master: GainNode | null = null
+/** Monitor level (the transport's volume and mute): after the master bus, never exported. */
+let monitor: GainNode | null = null
+let graph: MixGraph | null = null
 let active: Scheduled[] = []
 let running: { from: number; at: number; project: Project } | null = null
 let masterLevel = 0.8
@@ -287,11 +323,16 @@ let masterLevel = 0.8
 function context() {
   if (!ctx) {
     ctx = new AudioContext({ latencyHint: 'interactive', sampleRate: 48000 })
-    master = ctx.createGain()
-    master.gain.value = masterLevel
-    master.connect(ctx.destination)
+    monitor = ctx.createGain()
+    monitor.gain.value = masterLevel
+    monitor.connect(ctx.destination)
   }
   return ctx
+}
+
+function rebuildGraph(project: Project) {
+  if (graph) disposeGraph(graph)
+  graph = createGraph(context(), project, monitor!, true)
 }
 
 export const audioEngine = {
@@ -309,6 +350,7 @@ export const audioEngine = {
     const c = context()
     void c.resume()
     this.stopAll()
+    rebuildGraph(project)
     const at = c.currentTime + 0.04
     running = { from, at, project }
     scheduleAll(project, from, at)
@@ -337,27 +379,49 @@ export const audioEngine = {
     if (!running || !ctx) return
     const t = running.from + (ctx.currentTime - running.at)
     this.stopAll()
+    rebuildGraph(project)
     const at = ctx.currentTime + 0.02
     running = { from: t + 0.02, at, project }
     scheduleAll(project, running.from, at)
   },
 
+  /** Only mixer settings changed: faders, pan and processing follow without a restart. */
+  updateMix(project: Project) {
+    if (!ctx || !graph) return
+    updateGraph(ctx, graph, project)
+    if (running) running.project = project
+  },
+
   setVolume(volume: number, muted: boolean) {
     masterLevel = muted ? 0 : volume
-    if (master && ctx) master.gain.setTargetAtTime(masterLevel, ctx.currentTime, 0.015)
+    if (monitor && ctx) monitor.gain.setTargetAtTime(masterLevel, ctx.currentTime, 0.015)
+  },
+
+  /** Live peak levels (dBFS, left and right) of a track's channel or the master, while playing. */
+  levels(target: 'master' | string): [number, number] | null {
+    if (!running || !graph) return null
+    const bus = target === 'master' ? graph.master : graph.tracks.get(target)
+    return bus?.meter ? readMeter(bus.meter) : null
+  },
+
+  /** Gain reduction (dB, 0 or below) a channel's compressor and limiter are applying right now. */
+  reduction(target: 'master' | string): { compressor: number; limiter: number } | null {
+    if (!running || !graph) return null
+    const bus = target === 'master' ? graph.master : graph.tracks.get(target)
+    if (!bus) return null
+    return { compressor: bus.compressor?.reduction ?? 0, limiter: bus.limiter?.reduction ?? 0 }
   },
 }
 
 function scheduleAll(project: Project, from: number, at: number) {
-  if (!ctx || !master) return
+  if (!ctx || !graph) return
   for (const clip of Object.values(project.clips)) {
     if (!isAudible(project, clip)) continue
-    const fps = project.settings.fps
-    if (clipEnd(clip) / fps <= from) continue
+    if (audibleSpan(project, clip)[1] <= from) continue
     const asset = project.assets[clip.assetId!]
     const buffer = clipBufferNow(asset, clip)
     if (buffer) {
-      const s = scheduleClip(ctx, master, project, clip, buffer, from, Infinity, at)
+      const s = scheduleClip(ctx, channelFor(graph, clip), project, clip, buffer, from, Infinity, at)
       if (s) active.push(s)
     } else void clipBuffer(asset, clip) // ready later → onAudioReady → refresh
   }
@@ -380,20 +444,62 @@ export async function prepareAudio(project: Project, onProgress?: (done: number,
   }
 }
 
-/** Renders the mix of timeline seconds [from, to) as stereo at `sampleRate`. */
-export async function renderMix(project: Project, from: number, to: number, sampleRate = 48000): Promise<AudioBuffer> {
-  const length = Math.max(1, Math.round((to - from) * sampleRate))
+export interface MixOptions {
+  sampleRate?: number
+  /** Extra gain after the master bus, dB (loudness normalization). */
+  gainDb?: number
+  /** A final peak ceiling after that gain, dBFS. */
+  ceiling?: number
+}
+
+/**
+ * Renders the mix of timeline seconds [from, to) as stereo. Compressors and
+ * limiters remember what came before, so each block starts a second early and
+ * that lead-in is dropped: renders made block by block join seamlessly.
+ */
+export async function renderMix(project: Project, from: number, to: number, opts: MixOptions = {}): Promise<AudioBuffer> {
+  const sampleRate = opts.sampleRate ?? 48000
+  const dynamic = hasDynamics(project.master) || project.tracks.some((t) => hasDynamics(t.mix)) || opts.ceiling !== undefined
+  const lead = dynamic ? Math.min(from, 1) : 0
+  const start = from - lead
+  const length = Math.max(1, Math.round((to - start) * sampleRate))
   const off = new OfflineAudioContext({ numberOfChannels: 2, length, sampleRate })
-  const bus = off.createGain()
-  bus.connect(off.destination)
+  let out: AudioNode = off.destination
+  if (opts.ceiling !== undefined) out = createBus(off, out, { volume: 0, pan: 0, limiter: { enabled: true, ceiling: opts.ceiling } }, false).input
+  if (opts.gainDb) {
+    const gain = off.createGain()
+    gain.gain.value = dbToGain(opts.gainDb)
+    gain.connect(out)
+    out = gain
+  }
+  const mix = createGraph(off, project, out, false)
   for (const clip of Object.values(project.clips)) {
     if (!isAudible(project, clip)) continue
-    const fps = project.settings.fps
-    if (clipEnd(clip) / fps <= from || clip.start / fps >= to) continue
+    const [a, b] = audibleSpan(project, clip)
+    if (b <= start || a >= to) continue
     const buffer = await clipBuffer(project.assets[clip.assetId!], clip)
-    if (buffer) scheduleClip(off, bus, project, clip, buffer, from, to, 0)
+    if (buffer) scheduleClip(off, channelFor(mix, clip), project, clip, buffer, start, to, 0)
   }
-  return off.startRendering()
+  const rendered = await off.startRendering()
+  const skip = Math.round(lead * sampleRate)
+  const keep = Math.max(1, Math.round((to - from) * sampleRate))
+  let result = rendered
+  if (skip || rendered.length !== keep) {
+    result = new AudioBuffer({ length: keep, numberOfChannels: 2, sampleRate })
+    for (let c = 0; c < 2; c++) result.getChannelData(c).set(rendered.getChannelData(c).subarray(skip, skip + keep))
+  }
+  if (opts.ceiling !== undefined) {
+    // The limiter reacts in a millisecond; a hard stop at the ceiling catches whatever slips through.
+    const max = dbToGain(opts.ceiling)
+    for (let c = 0; c < 2; c++) {
+      const d = result.getChannelData(c)
+      for (let i = 0; i < d.length; i++) {
+        if (d[i] > max) d[i] = max
+        else if (d[i] < -max) d[i] = -max
+      }
+    }
+  }
+  return result
 }
 
 // ─── Analysis ────────────────────────────────────────────────────────────

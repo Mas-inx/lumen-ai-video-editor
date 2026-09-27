@@ -5,7 +5,7 @@
 import { toast } from 'sonner'
 import { copyClips, pasteClips } from '@/editor/clipboard'
 import type { EditMode } from '@/editor/commands'
-import { clipEnd, clipsAt, editPoints, projectDuration, withGroups } from '@/editor/ops'
+import { adjacentBefore, clipEnd, clipsAt, editPoints, projectDuration, withGroups } from '@/editor/ops'
 import { playback, usePlayback } from '@/editor/playback'
 import { dispatch, getProject, useEditor } from '@/editor/store'
 import type { Tool } from '@/editor/ui-store'
@@ -133,6 +133,17 @@ export const actions = {
     if (!clip) return void toast('Put the playhead over a video clip to freeze a frame')
     const res = dispatch('clip.freeze', { id: clip.id, frame: f, duration: getProject().settings.fps * 2 })
     if (ok(res)) ui().select([res.result as string])
+  },
+
+  /** Crossfades each selected clip with the one before it (a dissolve on video, a crossfade on sound). */
+  crossfade() {
+    const p = getProject()
+    const clips = targetClips().filter((c) => adjacentBefore(p, c))
+    if (!clips.length) return void toast('Select a clip that directly follows another to crossfade them')
+    const duration = Math.round(p.settings.fps / 2)
+    useEditor.getState().transaction(clips.length > 1 ? 'Add crossfades' : 'Add crossfade', 'user', () => {
+      for (const c of clips) dispatch('clip.setTransition', { id: c.id, transition: c.transitionIn ?? { kind: 'dissolve', duration: Math.max(2, Math.min(duration, c.duration)) } })
+    })
   },
 
   // ── In & out points ──

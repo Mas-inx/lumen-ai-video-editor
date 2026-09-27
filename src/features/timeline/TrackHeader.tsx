@@ -102,7 +102,16 @@ export function TrackHeader({ track }: { track: Track }) {
           />
         ) : (
           <>
-            <div className={cn('truncate text-sm font-medium', visibilityOn ? 'text-fg-4' : 'text-fg-2')}>{track.name}</div>
+            <div className="flex min-w-0 items-center gap-1">
+              <span className={cn('truncate text-sm font-medium', visibilityOn ? 'text-fg-4' : 'text-fg-2')}>{track.name}</span>
+              {/* At rest, just the states that are on — the full controls appear on hover. */}
+              <span className="flex shrink-0 items-center gap-0.5 transition-opacity group-hover/track:opacity-0 [&_svg]:size-3">
+                {track.solo && <Headphones className="text-accent-2" aria-label="Soloed" />}
+                {track.muted && <VolumeX className="text-warn" aria-label="Muted" />}
+                {track.hidden && <EyeOff className="text-warn" aria-label="Hidden" />}
+                {track.locked && <Lock className="text-warn" aria-label="Locked" />}
+              </span>
+            </div>
             {!compact && track.role === 'main' && <div className="text-2xs text-fg-4">Main track</div>}
           </>
         )}
@@ -110,16 +119,15 @@ export function TrackHeader({ track }: { track: Track }) {
       {/* Controls float over the name on hover, so names get the full width at rest. */}
       <div
         className={cn(
-          'absolute inset-y-0 right-0 flex items-center pr-1 pl-6 opacity-0 transition-opacity group-hover/track:opacity-100 has-[[data-state=open]]:opacity-100',
+          'pointer-events-none absolute inset-y-0 right-0 flex items-center pr-1 pl-6 opacity-0 transition-opacity group-hover/track:pointer-events-auto group-hover/track:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100',
           'bg-[linear-gradient(90deg,transparent,var(--color-surface)_22px)]',
-          (visibilityOn || track.locked || track.solo || track.muted) && 'opacity-100',
         )}
       >
         {track.kind === 'video' && (
           <IconButton
             size="xs"
             label={track.muted ? 'Unmute track sound' : 'Mute track sound'}
-            className={cn('opacity-0 transition-opacity group-hover/track:opacity-100', track.muted && 'text-warn opacity-100')}
+            className={cn(track.muted && 'text-warn')}
             onClick={() => update({ muted: !track.muted })}
           >
             {track.muted ? <VolumeX /> : <Volume2 />}
@@ -128,7 +136,7 @@ export function TrackHeader({ track }: { track: Track }) {
         <IconButton
           size="xs"
           label={track.solo ? 'Unsolo' : 'Solo (hear only soloed tracks)'}
-          className={cn('opacity-0 transition-opacity group-hover/track:opacity-100', track.solo && 'text-accent-2 opacity-100')}
+          className={cn(track.solo && 'text-accent-2')}
           onClick={() => update({ solo: !track.solo })}
         >
           <Headphones />
@@ -136,7 +144,7 @@ export function TrackHeader({ track }: { track: Track }) {
         <IconButton
           size="xs"
           label={track.kind === 'video' ? (track.hidden ? 'Show track' : 'Hide track') : track.muted ? 'Unmute track' : 'Mute track'}
-          className={cn('opacity-0 transition-opacity group-hover/track:opacity-100', visibilityOn && 'text-warn opacity-100')}
+          className={cn(visibilityOn && 'text-warn')}
           onClick={() => (track.kind === 'video' ? update({ hidden: !track.hidden }) : update({ muted: !track.muted }))}
         >
           {track.kind === 'video' ? track.hidden ? <EyeOff /> : <Eye /> : track.muted ? <VolumeX /> : <Volume2 />}
@@ -144,14 +152,14 @@ export function TrackHeader({ track }: { track: Track }) {
         <IconButton
           size="xs"
           label={track.locked ? 'Unlock track' : 'Lock track'}
-          className={cn('opacity-0 transition-opacity group-hover/track:opacity-100', track.locked && 'text-warn opacity-100')}
+          className={cn(track.locked && 'text-warn')}
           onClick={() => update({ locked: !track.locked })}
         >
           {track.locked ? <Lock /> : <LockOpen />}
         </IconButton>
         <Menu>
           <MenuTrigger asChild>
-            <IconButton size="xs" label="Track options" className="opacity-0 transition-opacity group-hover/track:opacity-100 data-[state=open]:opacity-100">
+            <IconButton size="xs" label="Track options">
               <Ellipsis />
             </IconButton>
           </MenuTrigger>
