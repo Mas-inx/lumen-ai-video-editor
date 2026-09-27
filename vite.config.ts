@@ -56,8 +56,8 @@ export default defineConfig(({ mode }) => {
         electron({
           main: {
             entry: 'electron/main.ts',
-            // The MCP and AI SDKs load from node_modules at runtime rather than being bundled.
-            vite: { build: { rolldownOptions: { external: [/^@modelcontextprotocol\/sdk/, /^ai$/, /^@ai-sdk\//, /^@openrouter\/ai-sdk-provider/] } } },
+            // The MCP and AI SDKs and the updater load from node_modules at runtime rather than being bundled.
+            vite: { build: { rolldownOptions: { external: [/^@modelcontextprotocol\/sdk/, /^ai$/, /^@ai-sdk\//, /^@openrouter\/ai-sdk-provider/, /^electron-updater/] } } },
           },
           preload: { input: 'electron/preload.ts' },
         }),

@@ -1,4 +1,5 @@
 import {
+  ArrowDownToLine,
   Check,
   ChevronDown,
   Clock,
@@ -11,6 +12,7 @@ import {
   Keyboard,
   PencilLine,
   Redo2,
+  RefreshCw,
   Save,
   SaveAll,
   Settings2,
@@ -28,6 +30,7 @@ import { JobsIndicator } from '@/features/integrations/JobsIndicator'
 import { useUI } from '@/editor/ui-store'
 import { cn } from '@/lib/cn'
 import { desktop, platform } from '@/lib/platform'
+import { checkForUpdates, installUpdate, useUpdates } from '@/lib/updates'
 import { openProject, refreshRecent, useDirty, useSession } from '@/project/session'
 import { actions } from './actions'
 
@@ -51,6 +54,7 @@ export function TitleBar() {
       <header className={headerClass} style={style}>
         <AppMenu />
         <div className="no-drag ml-auto flex items-center gap-0.5">
+          <UpdatePill />
           <JobsIndicator />
         </div>
       </header>
@@ -76,6 +80,7 @@ export function TitleBar() {
       </button>
 
       <div className="no-drag ml-auto flex items-center gap-0.5">
+        <UpdatePill />
         <JobsIndicator />
         <div className="mx-1.5 h-4 w-px bg-line-2" />
         <IconButton label={undoLabel ? `Undo ${undoLabel}` : 'Undo'} shortcut="mod+z" disabled={!canUndo} onClick={actions.undo} tooltipSide="bottom">
@@ -107,6 +112,7 @@ function AppMenu() {
   const setShortcutsOpen = useUI((s) => s.setShortcutsOpen)
   const setExportOpen = useUI((s) => s.setExportOpen)
   const setAboutOpen = useUI((s) => s.setAboutOpen)
+  const updateReady = useUpdates((s) => s.status === 'ready')
   const home = useSession((s) => s.home)
   const recent = useSession((s) => s.recent)
   return (
@@ -164,12 +170,58 @@ function AppMenu() {
         <MenuItem icon={<Keyboard />} shortcut="?" onSelect={() => setShortcutsOpen(true)}>
           Keyboard shortcuts
         </MenuItem>
+        {updateReady ? (
+          <MenuItem icon={<RefreshCw />} onSelect={() => void installUpdate()}>
+            Restart to update
+          </MenuItem>
+        ) : (
+          <MenuItem icon={<RefreshCw />} disabled={!desktop} onSelect={() => void checkForUpdates()}>
+            Check for updates…
+          </MenuItem>
+        )}
         <MenuItem icon={<Info />} onSelect={() => setAboutOpen(true)}>
           About {APP_NAME}
         </MenuItem>
       </MenuContent>
     </Menu>
   )
+}
+
+/** A downloaded update waiting for a restart — or one on its way. */
+function UpdatePill() {
+  const status = useUpdates((s) => s.status)
+  const version = useUpdates((s) => s.version)
+  const progress = useUpdates((s) => s.progress)
+  const setAboutOpen = useUI((s) => s.setAboutOpen)
+  if (status === 'ready') {
+    return (
+      <Tip content={`Lumen ${version} is downloaded — restart to install it`} side="bottom">
+        <button
+          type="button"
+          onClick={() => void installUpdate()}
+          className="mr-1 flex h-7 items-center gap-1.5 rounded-lg bg-accent/[0.14] px-2.5 text-xs font-medium text-accent-2 outline-none transition-colors hover:bg-accent/[0.22] focus-visible:ring-2 focus-visible:ring-accent/60"
+        >
+          <RefreshCw className="size-3.5" />
+          Restart to update
+        </button>
+      </Tip>
+    )
+  }
+  if (status === 'downloading') {
+    return (
+      <Tip content={`Downloading Lumen ${version} — it installs when you restart`} side="bottom">
+        <button
+          type="button"
+          onClick={() => setAboutOpen(true)}
+          className="mr-1 flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs text-fg-3 tabular-nums outline-none transition-colors hover:bg-white/[0.05] hover:text-fg focus-visible:ring-2 focus-visible:ring-accent/60"
+        >
+          <ArrowDownToLine className="size-3.5" />
+          {Math.round((progress ?? 0) * 100)}%
+        </button>
+      </Tip>
+    )
+  }
+  return null
 }
 
 function ProjectName() {

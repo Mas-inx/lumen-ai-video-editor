@@ -48,6 +48,27 @@ export interface ExportHandle {
   path: string
 }
 
+/**
+ * Updates from the GitHub Releases page.
+ * unsupported — a development build (only the installed app updates itself).
+ */
+export type UpdateStatus = 'unsupported' | 'idle' | 'checking' | 'up-to-date' | 'downloading' | 'ready' | 'error'
+
+export interface UpdateState {
+  status: UpdateStatus
+  /** The version running now. */
+  current: string
+  /** The newer version found (while it downloads, and once it's ready to install). */
+  version?: string
+  /** Download progress, 0..1. */
+  progress?: number
+  /** The release's notes, as plain text. */
+  notes?: string
+  error?: string
+  /** When the last check finished (ms). */
+  checkedAt?: number
+}
+
 export const APP_IPC = {
   pickMedia: 'lumen:files:pick-media',
   registerMedia: 'lumen:files:register',
@@ -78,9 +99,14 @@ export const APP_IPC = {
 
   captureWindow: 'lumen:app:capture-window',
 
+  updateState: 'lumen:update:state',
+  updateCheck: 'lumen:update:check',
+  updateInstall: 'lumen:update:install',
+
   /** main → renderer */
   openRequest: 'lumen:project:open-request',
   saveBeforeClose: 'lumen:project:save-before-close',
+  updateEvent: 'lumen:update:event',
 } as const
 
 /** What the preload exposes as `window.lumen.app`. */
@@ -138,5 +164,13 @@ export interface AppAPI {
   window: {
     /** A JPEG (base64) of the editor window as the user sees it, at most `maxWidth` wide. */
     capture(maxWidth: number): Promise<string>
+  }
+  updates: {
+    state(): Promise<UpdateState>
+    /** Checks the Releases page now (a newer version then downloads in the background). */
+    check(): Promise<UpdateState>
+    /** Restarts into the downloaded version. False when there's nothing ready to install. */
+    install(): Promise<boolean>
+    onState(cb: (state: UpdateState) => void): () => void
   }
 }

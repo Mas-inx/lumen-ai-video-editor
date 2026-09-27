@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { AgentEvent } from '../shared/ai'
-import { APP_IPC, type AppAPI } from '../shared/app'
+import { APP_IPC, type AppAPI, type UpdateState } from '../shared/app'
 import { IPC, type BridgeRequest, type BridgeState, type IntegrationsAPI, type Job, type McpServerState } from '../shared/integrations'
 
 // The only surface the renderer sees: typed methods, never raw ipcRenderer.
@@ -124,6 +124,12 @@ const appApi: AppAPI = {
   },
   window: {
     capture: (maxWidth) => invoke(APP_IPC.captureWindow, maxWidth),
+  },
+  updates: {
+    state: () => invoke(APP_IPC.updateState),
+    check: () => invoke(APP_IPC.updateCheck),
+    install: () => invoke(APP_IPC.updateInstall),
+    onState: (cb) => subscribe<UpdateState>(APP_IPC.updateEvent, cb),
   },
 }
 

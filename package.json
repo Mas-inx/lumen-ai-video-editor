@@ -73,6 +73,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@openrouter/ai-sdk-provider": "^3.1.0",
     "ai": "^7.0.111",
+    "electron-updater": "^6.8.9",
     "gsap": "^3.15.0"
   },
   "devDependencies": {
@@ -138,6 +139,14 @@
       "!**/{test,tests,__tests__,docs,example,examples}/**"
     ],
     "asar": true,
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Mas-inx",
+        "repo": "lumen-ai-video-editor",
+        "releaseType": "release"
+      }
+    ],
     "electronDist": "node_modules/electron/dist",
     "electronLanguages": [
       "en-US"

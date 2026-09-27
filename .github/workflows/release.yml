@@ -61,5 +61,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $assets = @(Get-ChildItem release -Filter *.exe) + @(Get-ChildItem release -Filter *.blockmap) + @(Get-Item release/SHA256SUMS.txt)
+          # latest.yml is what installed copies of Lumen read to find and verify the update;
+          # the blockmap lets them download only what changed.
+          $assets = @(Get-ChildItem release -Filter *.exe) + @(Get-ChildItem release -Filter *.blockmap) + @(Get-Item release/latest.yml) + @(Get-Item release/SHA256SUMS.txt)
           gh release create "${{ github.ref_name }}" $assets.FullName --title "Lumen ${{ github.ref_name }}" --notes-file release-notes.md --verify-tag

@@ -152,6 +152,8 @@ From 480p to 4K in your project's shape, 24–60 fps, with **hardware encoding**
 
 Windows 10 or 11, 64-bit. The installer lets you install just for yourself (no admin needed) or for everyone, and associates `.lumen` project files.
 
+Lumen keeps itself up to date: it checks the Releases page, downloads a new version in the background and installs it when you restart (or choose **Check for updates** in the Lumen menu).
+
 > [!NOTE]
 > The installer isn't code-signed yet, so Windows SmartScreen may say *“Windows protected your PC”*. Choose **More info → Run anyway**. Every release lists SHA-256 checksums.
 
@@ -203,7 +205,7 @@ npm run dev      # the app, with hot reload
 Ideas the project is heading towards — contributions welcome:
 
 - [ ] macOS and Linux builds
-- [ ] Code-signed installer and automatic updates
+- [ ] Code-signed installer
 - [ ] Exporting a marked range, and render queues
 - [ ] Streaming audio for hour-long recordings
 - [ ] More languages for the interface

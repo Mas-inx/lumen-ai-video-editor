@@ -3,6 +3,7 @@ import { APP_IPC, type MediaFolder } from '../shared/app'
 import { abortExport, beginExport, finishExport, writeExport } from './export'
 import { openPath, pickMedia, register, relink, reveal, saveMedia, urlForPath } from './files'
 import { closeNow, confirmDiscard, forgetRecent, openProject, readRecovery, recentProjects, saveProject, saveProjectAs, setProjectState, writeRecovery } from './project'
+import { checkForUpdates, installUpdate, updateState } from './updater'
 
 const FOLDERS: MediaFolder[] = ['snapshots', 'recordings', 'sfx', 'generated']
 
@@ -72,4 +73,8 @@ export function registerAppIpc(isTrustedUrl: (url: string) => boolean, getStartu
     const scaled = image.getSize().width > width ? image.resize({ width, quality: 'good' }) : image
     return scaled.toJPEG(82).toString('base64')
   })
+
+  handle(APP_IPC.updateState, () => updateState())
+  handle(APP_IPC.updateCheck, () => checkForUpdates())
+  handle(APP_IPC.updateInstall, () => installUpdate())
 }

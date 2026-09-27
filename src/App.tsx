@@ -21,6 +21,7 @@ import { Timeline } from '@/features/timeline/Timeline'
 import { startAi } from '@/integrations/ai'
 import { startBridgeClient } from '@/integrations/bridge'
 import { startIntegrations } from '@/integrations/store'
+import { startUpdates } from '@/lib/updates'
 
 export function App() {
   useGlobalShortcuts()
@@ -31,6 +32,7 @@ export function App() {
     startIntegrations()
     startBridgeClient()
     startAi()
+    startUpdates()
   }, [])
   const home = useSession((s) => s.home)
 

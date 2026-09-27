@@ -11,6 +11,7 @@ import { disconnectAll } from './integrations/mcp'
 import { MEDIA_SCHEME } from './integrations/paths'
 import { initBridge, stopBridge } from './integrations/server'
 import { guardClose, projectFromArgv } from './project'
+import { initUpdater } from './updater'
 
 const isMac = process.platform === 'darwin'
 const devServerUrl = process.env.VITE_DEV_SERVER_URL
@@ -142,6 +143,7 @@ void app.whenReady().then(() => {
     return file
   })
   createWindow()
+  initUpdater(() => mainWindow)
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
