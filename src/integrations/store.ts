@@ -245,7 +245,8 @@ export function clearFinishedJobs() {
 export function generatorTools(servers: Record<string, McpServerState>) {
   const out: { serverId: string; server: string; tool: McpServerState['tools'][number] }[] = []
   for (const s of Object.values(servers)) {
-    if (s.status !== 'connected') continue
+    // the studio's tools drive a game (render_export, create_project…); Copilot runs them, not the Generate panel
+    if (s.status !== 'connected' || s.config.preset === 'gs-cinematic-studio') continue
     for (const tool of s.tools) {
       const text = `${tool.name} ${tool.title ?? ''} ${tool.description ?? ''}`.toLowerCase()
       if (/generat|create|render|text.?to|image|video|animate|upscale|speech|voice|music/.test(text)) out.push({ serverId: s.config.id, server: s.config.name, tool })

@@ -121,6 +121,7 @@ One-click suggestions on the timeline, and tools for every AI:
 - **Images and video** from your OpenAI key (GPT Image) or Gemini key (Gemini image models, Veo video), with model lists fetched live — new models show up without an update.
 - **Voiceovers, sound effects and music** with ElevenLabs.
 - Anything from an **MCP server** — Higgsfield, Runway, Replicate, fal.ai or your own.
+- **GTA V cinematics** from a FiveM game with **GS Cinematic Studio**: the Copilot stages the scene, directs the cameras, renders it in the game and drops the clip on your timeline.
 
 ### Effects, transitions and looks
 
@@ -153,7 +154,7 @@ From 480p to 4K in your timeline's shape, 24–60 fps, with **hardware encoding*
   claude mcp add --transport http lumen http://127.0.0.1:47910/mcp --header "Authorization: Bearer <token from Lumen>"
   ```
 
-- **Lumen is an MCP client.** Add any server by URL or command; generator tools show up as models in the Generate panel.
+- **Lumen is an MCP client.** Add any server by URL or command. Its tools become Copilot tools (Claude Code and Codex get them too), and generator tools also show up as models in the Generate panel.
 
 ## Download
 

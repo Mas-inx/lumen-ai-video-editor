@@ -4,7 +4,7 @@
  * the UI dispatches), eyes and ears on the project (tools/vision, tools/inspect),
  * editor control (tools/control), plus the Blender / HyperFrames / media integrations.
  */
-import type { BridgeToolResult, Job } from '@shared/integrations'
+import type { BridgeToolResult, Job, McpServerState } from '@shared/integrations'
 import { commands, toolDefinitions, type CommandName } from '@/editor/commands'
 import { clipEnd, projectDuration } from '@/editor/ops'
 import { placeAsset } from '@/editor/placement'
@@ -26,7 +26,7 @@ import { CONTROL_TOOLS } from './tools/control'
 import { emitToolImages } from './tools/events'
 import { FOOTAGE_TOOLS } from './tools/footage'
 import { INSPECT_TOOLS } from './tools/inspect'
-import { bool, num, obj, str, WithImages, type AgentTool } from './tools/kit'
+import { bool, num, obj, str, withImages, WithImages, type AgentTool, type ToolImage } from './tools/kit'
 import { VISION_TOOLS } from './tools/vision'
 
 const PLACE = bool('Put the finished clip on the timeline at the playhead (default true).')
@@ -619,10 +619,64 @@ function editorTools(): AgentTool[] {
   })
 }
 
+// ─── Connected MCP servers ───────────────────────────────────────────────
+
+/** Tool name for a server's tool: `<server>__<tool>`, in the characters every model provider accepts. */
+export function mcpToolName(serverId: string, tool: string) {
+  return `${serverId}__${tool}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64)
+}
+
+const parse = (text: string): unknown => {
+  const t = text.trim()
+  if (!t.startsWith('{') && !t.startsWith('[')) return text
+  try {
+    return JSON.parse(t)
+  } catch {
+    return text
+  }
+}
+
+function serverTools(s: McpServerState): AgentTool[] {
+  const server = s.config.name
+  return s.tools.map((tool) => ({
+    name: mcpToolName(s.config.id, tool.name),
+    description: `[${server}] ${tool.title ? `${tool.title}: ` : ''}${tool.description ?? tool.name}`.slice(0, 1024),
+    inputSchema: tool.inputSchema?.type === 'object' ? tool.inputSchema : { type: 'object', properties: {} },
+    run: async (args) => {
+      if (!api) throw new Error('MCP tools need the desktop app.')
+      if (tool.annotations?.destructiveHint) {
+        const ok = await requestApproval({ title: `Let the AI run “${tool.title ?? tool.name}” on ${server}?`, detail: `${tool.description ?? ''}\n\nIt can’t be undone.`, code: JSON.stringify(args, null, 2), requester: 'An AI agent' })
+        if (!ok) throw new Error('The user declined.')
+      }
+      const r = await api.mcp.callForAgent(s.config.id, tool.name, args)
+      if (r.isError) throw new Error(r.text.join('\n') || `${server} reported an error.`)
+      const body = r.structured ?? (r.text.length === 1 ? parse(r.text[0]) : r.text.map(parse))
+      const json = r.links.length ? { result: body, links: r.links } : body
+      const images = r.images.filter((i): i is ToolImage => i.mimeType === 'image/jpeg' || i.mimeType === 'image/png')
+      return images.length ? withImages(json, images) : json
+    },
+  }))
+}
+
+const mcpCache = new WeakMap<object, AgentTool[]>()
+
+/** Tools of the connected MCP servers the user lets agents use (e.g. GS Cinematic Studio in a FiveM game). */
+function mcpAgentTools(servers: Record<string, McpServerState>): AgentTool[] {
+  let tools = mcpCache.get(servers)
+  if (!tools) {
+    tools = Object.values(servers)
+      .filter((s) => s.status === 'connected' && s.config.agentTools !== false)
+      .flatMap(serverTools)
+    mcpCache.set(servers, tools)
+  }
+  return tools
+}
+
 let cache: AgentTool[] | null = null
-export function agentTools(): AgentTool[] {
+export function agentTools(servers: Record<string, McpServerState> = useIntegrations.getState().servers): AgentTool[] {
   cache ??= [...INTEGRATION_TOOLS, ...VISION_TOOLS, ...INSPECT_TOOLS, ...CONTROL_TOOLS, ...FOOTAGE_TOOLS, ...editorTools()]
-  return cache
+  const mcp = mcpAgentTools(servers)
+  return mcp.length ? [...cache, ...mcp] : cache
 }
 
 export async function runAgentTool(name: string, args: Record<string, unknown>): Promise<BridgeToolResult> {

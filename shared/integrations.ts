@@ -164,6 +164,8 @@ export interface McpServerConfig {
   /** Catalog entry this server was added from. */
   preset?: string
   description?: string
+  /** Copilot and agents may call this server's tools (default on). */
+  agentTools?: boolean
 }
 
 export type McpStatus = 'disconnected' | 'connecting' | 'needs-auth' | 'connected' | 'error'
@@ -173,6 +175,17 @@ export interface McpTool {
   title?: string
   description?: string
   inputSchema: Record<string, unknown>
+  /** The server's hints: read-only tools change nothing, destructive ones can't be undone. */
+  annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean }
+}
+
+/** What a tool said, for an AI agent: text and pictures as-is (nothing saved or imported). */
+export interface McpAgentResult {
+  isError: boolean
+  text: string[]
+  images: { data: string; mimeType: string }[]
+  links: McpLink[]
+  structured?: unknown
 }
 
 export interface McpServerState {
@@ -217,6 +230,7 @@ export const IPC = {
   mcpDisconnect: 'lumen:mcp:disconnect',
   mcpSignOut: 'lumen:mcp:sign-out',
   mcpCall: 'lumen:mcp:call',
+  mcpCallForAgent: 'lumen:mcp:call-for-agent',
   mediaImportUrl: 'lumen:media:import-url',
   mediaReveal: 'lumen:media:reveal',
   jobsList: 'lumen:jobs:list',
@@ -275,6 +289,8 @@ export interface IntegrationsAPI {
     signOut(id: string): Promise<McpServerState>
     /** Starts a tool call; resolves with the running job — progress and the result arrive as job events. */
     call(serverId: string, tool: string, args: Record<string, unknown>): Promise<Job>
+    /** Calls a tool for an AI agent and resolves with what it said (no job, nothing imported). */
+    callForAgent(serverId: string, tool: string, args: Record<string, unknown>): Promise<McpAgentResult>
   }
   media: {
     /** Downloads remote media into Lumen's library folder. */
@@ -384,13 +400,27 @@ export interface BridgeState {
   log: BridgeLogEntry[]
 }
 
+/** This computer or the local network (a game server in the next room): plain http is allowed there. */
+export function isPrivateHost(hostname: string) {
+  if (['localhost', '127.0.0.1', '[::1]'].includes(hostname) || hostname.endsWith('.local') || hostname.endsWith('.localhost')) return true
+  const m = /^(\d+)\.(\d+)\.\d+\.\d+$/.exec(hostname)
+  if (!m) return false
+  const [a, b] = [Number(m[1]), Number(m[2])]
+  // 10/8, 172.16/12, 192.168/16, 100.64/10 (Tailscale and other carrier-grade NAT VPNs)
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127)
+}
+
 // ─── MCP catalog ─────────────────────────────────────────────────────────
 
 export interface McpCatalogEntry extends Omit<McpServerConfig, 'enabled'> {
   tagline: string
   /** What the user needs before connecting. */
   requirement?: string
-  docs: string
+  docs?: string
+  /** The address differs per install (a game server): the user edits `url`, with this hint. */
+  urlHint?: string
+  /** Shown under the key field. */
+  keyHint?: string
   auth: 'oauth' | 'none' | 'local' | 'key'
   /** For `key` auth: the header the key goes in, e.g. Authorization with a "Bearer " prefix. */
   keyHeader?: string
@@ -446,6 +476,22 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
     keyHeader: 'Authorization',
     keyPrefix: 'Bearer ',
     keyUrl: 'https://fal.ai/dashboard/keys',
+  },
+  {
+    id: 'gs-cinematic-studio',
+    preset: 'gs-cinematic-studio',
+    name: 'GS Cinematic Studio',
+    transport: 'http',
+    url: 'http://127.0.0.1:30120/gs-cinematic-studio/mcp',
+    tagline: 'Direct GTA V cinematics in a FiveM game — stage scenes, AI Director, cameras, renders straight into your edit',
+    requirement:
+      'The gs-cinematic-studio resource (1.1.0 or later) on your FiveM server with a gcs_mcp_token set in its server.cfg, and a director in the game who has run /studio_remote on — their game does the filming.',
+    urlHint:
+      'Your FiveM server: http://<address>:<port>/gs-cinematic-studio/mcp. Plain http works on this computer or your local network; over the internet use the server’s https address (e.g. its users.cfx.re link).',
+    keyHint: 'The gcs_mcp_token value from the server’s server.cfg.',
+    auth: 'key',
+    keyHeader: 'Authorization',
+    keyPrefix: 'Bearer ',
   },
   {
     id: 'blender-mcp',

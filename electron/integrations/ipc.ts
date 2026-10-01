@@ -3,7 +3,7 @@ import { IPC, type BlenderRenderRequest, type ImageGenRequest, type McpServerCon
 import { detectBlender, renderBlender, runLive, setBlenderPath } from './blender'
 import { renderMotion } from './hyperframes'
 import { cancelJob, listJobs } from './jobs'
-import { connectServer, disconnectServer, listServers, removeServer, saveServer, signOut, startToolCall } from './mcp'
+import { callToolForAgent, connectServer, disconnectServer, listServers, removeServer, saveServer, signOut, startToolCall } from './mcp'
 import { elevenLabsState, listVoices, music, setElevenLabsKey, soundEffect, speak, transcribe } from './elevenlabs'
 import { importUrl, reveal } from './media'
 import { bridgeState, regenerateToken, startBridge, stopBridge } from './server'
@@ -41,6 +41,7 @@ export function registerIntegrationIpc(isTrustedUrl: (url: string) => boolean) {
   handle(IPC.mcpDisconnect, (id: string) => disconnectServer(String(id)))
   handle(IPC.mcpSignOut, (id: string) => signOut(String(id)))
   handle(IPC.mcpCall, async (id: string, tool: string, args: Record<string, unknown>) => (await startToolCall(String(id), String(tool), args && typeof args === 'object' ? args : {})).job)
+  handle(IPC.mcpCallForAgent, (id: string, tool: string, args: Record<string, unknown>) => callToolForAgent(String(id), String(tool), args && typeof args === 'object' ? args : {}))
 
   handle(IPC.mediaImportUrl, (url: string, name?: string, provenance?: Provenance) => importUrl(String(url), name, provenance ?? { integration: 'web', tool: 'download' }))
   handle(IPC.mediaReveal, (url: string) => reveal(String(url)))

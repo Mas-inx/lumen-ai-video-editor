@@ -173,6 +173,12 @@ function ServerGlyph({ config }: { config: Pick<McpServerConfig, 'id' | 'name' |
         <Terminal />
       </IconTile>
     )
+  if (config.preset === 'gs-cinematic-studio')
+    return (
+      <IconTile tone="mcp" size="sm">
+        <Clapperboard />
+      </IconTile>
+    )
   return <IconTile tone="mcp" size="sm">{config.transport === 'http' ? <Server /> : <Terminal />}</IconTile>
 }
 
@@ -397,9 +403,16 @@ function ServerPane({ server, onRemoved }: { server: McpServerState; onRemoved: 
           </div>
         }
       />
-      <div className="mb-5 rounded-lg bg-black/25 px-3 py-2 font-mono text-2xs break-all text-fg-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.05)]">
+      <div className="mb-3 rounded-lg bg-black/25 px-3 py-2 font-mono text-2xs break-all text-fg-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.05)]">
         {config.transport === 'http' ? config.url : [config.command, ...(config.args ?? [])].join(' ')}
       </div>
+      <label className="mb-5 flex cursor-pointer items-center gap-3 rounded-lg px-1 py-1.5">
+        <Switch checked={config.agentTools !== false} disabled={busy} onChange={(on) => void act(() => saveServer({ ...config, agentTools: on }))()} aria-label="Copilot can use these tools" />
+        <span className="text-sm text-fg-2">
+          Copilot and your agents can use these tools
+          <span className="block text-2xs text-fg-4">Tools that can’t be undone always ask you first.</span>
+        </span>
+      </label>
 
       {status === 'needs-auth' && (
         <Card className="mb-5 flex items-center gap-3">
@@ -415,7 +428,9 @@ function ServerPane({ server, onRemoved }: { server: McpServerState; onRemoved: 
         <ToolList server={server} onPick={setTool} />
       ) : (
         status !== 'needs-auth' && (
-          <p className="text-sm leading-relaxed text-fg-3">Connect to see what {config.name} can do. Its tools show up here, in the Generate panel and for Copilot.</p>
+          <p className="text-sm leading-relaxed text-fg-3">
+            Connect to see what {config.name} can do. Its tools show up here, in the Generate panel{config.agentTools !== false ? ' and for Copilot' : ''}.
+          </p>
         )
       )}
 
@@ -461,16 +476,25 @@ function ServerGlyphLarge({ config }: { config: Pick<McpServerConfig, 'transport
         <Terminal />
       </IconTile>
     )
+  if (config.preset === 'gs-cinematic-studio')
+    return (
+      <IconTile tone="mcp">
+        <Clapperboard />
+      </IconTile>
+    )
   return <IconTile tone="mcp">{config.transport === 'http' ? <Server /> : <Terminal />}</IconTile>
 }
 
 function CatalogPane({ entry, onAdded }: { entry: McpCatalogEntry; onAdded: (id: string) => void }) {
   const [busy, setBusy] = useState(false)
   const [key, setKey] = useState('')
+  const [address, setAddress] = useState(entry.url ?? '')
+  const urlOk = !entry.urlHint || /^https?:\/\/[^\s/]+/.test(address.trim())
   const add = async () => {
     setBusy(true)
     try {
-      const { id, name, transport, url, command, args, preset } = entry
+      const { id, name, transport, command, args, preset } = entry
+      const url = entry.urlHint ? address.trim() : entry.url
       const headers = entry.auth === 'key' && entry.keyHeader ? { [entry.keyHeader]: `${entry.keyPrefix ?? ''}${key.trim()}` } : undefined
       await saveServer({ id, name, transport, url, command, args, preset, headers, enabled: true, description: entry.tagline })
       onAdded(entry.id)
@@ -487,7 +511,7 @@ function CatalogPane({ entry, onAdded }: { entry: McpCatalogEntry; onAdded: (id:
       <Card>
         <dl className="grid grid-cols-[110px_1fr] gap-x-4 gap-y-2.5 text-sm">
           <dt className="text-fg-4">Connection</dt>
-          <dd className="font-mono text-xs break-all text-fg-2">{entry.transport === 'http' ? entry.url : [entry.command, ...(entry.args ?? [])].join(' ')}</dd>
+          <dd className="font-mono text-xs break-all text-fg-2">{entry.transport === 'http' ? (entry.urlHint ? address || entry.url : entry.url) : [entry.command, ...(entry.args ?? [])].join(' ')}</dd>
           <dt className="text-fg-4">Sign-in</dt>
           <dd className="text-fg-2">
             {entry.auth === 'oauth'
@@ -506,23 +530,34 @@ function CatalogPane({ entry, onAdded }: { entry: McpCatalogEntry; onAdded: (id:
           )}
         </dl>
       </Card>
+      {entry.urlHint && (
+        <div className="mt-4">
+          <Input value={address} onChange={(e) => setAddress(e.target.value)} placeholder={entry.url} className="font-mono text-xs" spellCheck={false} />
+          <p className="mt-1.5 text-2xs leading-relaxed text-fg-4">{entry.urlHint}</p>
+        </div>
+      )}
       {entry.auth === 'key' && (
-        <div className="mt-4 flex items-center gap-2">
-          <Input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="API key" className="font-mono text-xs" autoComplete="off" />
-          {entry.keyUrl && (
-            <a href={entry.keyUrl} target="_blank" rel="noreferrer" className="shrink-0 text-xs text-accent-2 hover:underline">
-              Get a key ↗
-            </a>
-          )}
+        <div className="mt-4">
+          <div className="flex items-center gap-2">
+            <Input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={entry.keyHint ? 'Token' : 'API key'} className="font-mono text-xs" autoComplete="off" />
+            {entry.keyUrl && (
+              <a href={entry.keyUrl} target="_blank" rel="noreferrer" className="shrink-0 text-xs text-accent-2 hover:underline">
+                Get a key ↗
+              </a>
+            )}
+          </div>
+          {entry.keyHint && <p className="mt-1.5 text-2xs leading-relaxed text-fg-4">{entry.keyHint}</p>}
         </div>
       )}
       <div className="mt-6 flex items-center gap-3">
-        <Button variant="primary" size="lg" disabled={busy || (entry.auth === 'key' && !key.trim())} onClick={add}>
+        <Button variant="primary" size="lg" disabled={busy || !urlOk || (entry.auth === 'key' && !key.trim())} onClick={add}>
           {busy ? <LoaderCircle className="animate-spin" /> : <Plug />} Connect {entry.name}
         </Button>
-        <a href={entry.docs} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-fg-3 hover:text-fg">
-          Learn more <ExternalLink className="size-3" />
-        </a>
+        {entry.docs && (
+          <a href={entry.docs} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-fg-3 hover:text-fg">
+            Learn more <ExternalLink className="size-3" />
+          </a>
+        )}
       </div>
     </div>
   )

@@ -9,7 +9,7 @@ import { agentTools } from '@/integrations/agent-tools'
 import { useEditor } from '@/editor/store'
 import { useUI } from '@/editor/ui-store'
 import { signInLocal, useAi } from '@/integrations/ai'
-import { openIntegrations } from '@/integrations/store'
+import { openIntegrations, useIntegrations } from '@/integrations/store'
 import { cn } from '@/lib/cn'
 import { pickAndImport } from '@/project/media-import'
 import { assetThumb } from '@/features/assets/shared'
@@ -50,7 +50,8 @@ export function CopilotPanel() {
 }
 
 function StatusBar() {
-  const tools = useMemo(() => agentTools(), [])
+  const servers = useIntegrations((s) => s.servers)
+  const tools = useMemo(() => agentTools(servers), [servers])
   const clear = useCopilot((s) => s.clear)
   const hasMessages = useCopilot((s) => s.messages.length > 0)
   return (

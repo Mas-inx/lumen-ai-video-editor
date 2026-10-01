@@ -31,6 +31,7 @@ const integrations: IntegrationsAPI = {
     disconnect: (id) => invoke(IPC.mcpDisconnect, id),
     signOut: (id) => invoke(IPC.mcpSignOut, id),
     call: (serverId, tool, args) => invoke(IPC.mcpCall, serverId, tool, args),
+    callForAgent: (serverId, tool, args) => invoke(IPC.mcpCallForAgent, serverId, tool, args),
   },
   media: {
     importUrl: (url, name, provenance) => invoke(IPC.mediaImportUrl, url, name, provenance),

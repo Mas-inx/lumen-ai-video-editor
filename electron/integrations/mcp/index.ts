@@ -5,7 +5,7 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
-import { IPC, type Job, type McpServerConfig, type McpServerState, type McpTool } from '../../../shared/integrations'
+import { IPC, isPrivateHost, type Job, type McpAgentResult, type McpLink, type McpServerConfig, type McpServerState, type McpTool } from '../../../shared/integrations'
 import { broadcast, createJob, failJob, finishJob, getJob, isCancelled, setCanceller, updateJob } from '../jobs'
 import { readJson, writeJson } from '../paths'
 import { getSecret, setSecret } from '../secrets'
@@ -103,7 +103,9 @@ export async function saveServer(config: McpServerConfig): Promise<McpServerStat
   }
   const existing = entries.get(config.id)
   if (existing) {
-    const changed = JSON.stringify(existing.config) !== JSON.stringify(config)
+    // switching agent access or the description needs no reconnect
+    const connection = (c: McpServerConfig) => JSON.stringify({ ...c, agentTools: undefined, description: undefined })
+    const changed = connection(existing.config) !== connection(config)
     existing.config = config
     if (changed && existing.client) await disconnectServer(config.id)
   } else {
@@ -129,8 +131,8 @@ function validate(config: McpServerConfig) {
   if (!/^[\w-]{1,64}$/.test(config.id)) throw new Error('Server ids may only use letters, numbers, - and _.')
   if (config.transport === 'http') {
     const url = new URL(config.url ?? '')
-    const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
-    if (url.protocol !== 'https:' && !(url.protocol === 'http:' && local)) throw new Error('Remote MCP servers must use https://')
+    if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isPrivateHost(url.hostname)))
+      throw new Error('Remote MCP servers must use https:// (plain http only on this computer or your local network)')
   } else if (!config.command?.trim()) {
     throw new Error('A local MCP server needs a command to run.')
   }
@@ -191,7 +193,14 @@ async function listTools(client: Client): Promise<McpTool[]> {
   let cursor: string | undefined
   do {
     const page = await client.listTools(cursor ? { cursor } : undefined)
-    for (const t of page.tools) tools.push({ name: t.name, title: t.title ?? t.annotations?.title, description: t.description, inputSchema: t.inputSchema as Record<string, unknown> })
+    for (const t of page.tools)
+      tools.push({
+        name: t.name,
+        title: t.title ?? t.annotations?.title,
+        description: t.description,
+        inputSchema: t.inputSchema as Record<string, unknown>,
+        annotations: t.annotations ? { readOnlyHint: t.annotations.readOnlyHint, destructiveHint: t.annotations.destructiveHint } : undefined,
+      })
     cursor = page.nextCursor
   } while (cursor && tools.length < 500)
   return tools
@@ -302,6 +311,38 @@ async function runToolCall(jobId: string, client: Client, e: Entry, tool: string
 /** Calls a tool and waits for the result (used by Lumen's own agents). */
 export async function callTool(serverId: string, tool: string, args: Record<string, unknown>) {
   return (await startToolCall(serverId, tool, args)).done
+}
+
+const AGENT_IMAGE = /^image\/(png|jpeg|webp|gif)$/
+
+/**
+ * Calls a tool for an AI agent (Copilot, Claude Code, Codex): the answer goes back to the
+ * model as-is — text, pictures it can look at, links — with nothing saved or imported.
+ */
+export async function callToolForAgent(serverId: string, tool: string, args: Record<string, unknown>): Promise<McpAgentResult> {
+  const e = entry(serverId)
+  if (!e.client) await connectServer(serverId)
+  if (!e.client) throw new Error(e.error ?? `${e.config.name} isn’t connected.`)
+  const result = (await e.client.callTool({ name: tool, arguments: args }, undefined, { timeout: 20 * 60_000, resetTimeoutOnProgress: true })) as Record<string, unknown>
+  const text: string[] = []
+  const images: McpAgentResult['images'] = []
+  const links: McpLink[] = []
+  const content = Array.isArray(result.content) ? (result.content as Record<string, unknown>[]) : []
+  for (const item of content) {
+    if (item.type === 'text' && typeof item.text === 'string') text.push(item.text)
+    else if (item.type === 'image' && typeof item.data === 'string' && typeof item.mimeType === 'string' && AGENT_IMAGE.test(item.mimeType)) {
+      // a model looks at a few pictures per answer; huge ones would only cost tokens
+      if (images.length < 6 && item.data.length < 8_000_000) images.push({ data: item.data, mimeType: item.mimeType })
+    } else if (item.type === 'resource_link' && typeof item.uri === 'string') {
+      links.push({ url: item.uri, mime: typeof item.mimeType === 'string' ? item.mimeType : undefined, name: typeof item.name === 'string' ? item.name : undefined })
+    } else if (item.type === 'resource' && item.resource && typeof item.resource === 'object') {
+      const r = item.resource as { uri?: string; text?: string; mimeType?: string }
+      if (typeof r.text === 'string') text.push(r.text)
+      if (typeof r.uri === 'string') links.push({ url: r.uri, mime: r.mimeType })
+    }
+  }
+  if (!content.length && result.toolResult !== undefined) text.push(typeof result.toolResult === 'string' ? result.toolResult : JSON.stringify(result.toolResult))
+  return { isError: result.isError === true, text, images, links, structured: result.structuredContent }
 }
 
 function summary(r: ReturnType<typeof convertResult>) {

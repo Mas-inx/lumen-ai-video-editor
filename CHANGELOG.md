@@ -4,6 +4,19 @@ Every notable change to Lumen, newest first. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-10-01
+
+Copilot meets your MCP servers.
+
+### Added
+
+- **Copilot uses your MCP servers.** The tools of every connected MCP server are now Copilot tools, and Claude Code and Codex get them too. Each server has a switch for this, on by default. Tools a server marks as destructive ask you first. The integrations screen already promised this; now it's true.
+- **GS Cinematic Studio** in the MCP catalogue: direct GTA V cinematics in a FiveM game from the Copilot. You can stage scenes, run the AI Director and Auto-Direct, place cameras, take screenshots and render video, and rendered clips import straight onto the timeline. Connect with the server's address and its `gcs_mcp_token`.
+
+### Changed
+
+- Plain `http://` MCP servers are allowed on your local network (10.x, 172.16–31.x, 192.168.x, Tailscale 100.64/10, `.local`), not only on this computer. Anything on the internet still needs https.
+
 ## [1.1.0] — 2026-09-28
 
 The pro update: 27 features that good editors have, and the first version that updates itself.
