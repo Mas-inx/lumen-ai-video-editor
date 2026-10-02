@@ -9,7 +9,9 @@ import { current, isDraft } from 'immer'
 import { z } from 'zod'
 import { uid } from '@/lib/id'
 import { createClip, createTrack, DEFAULT_BUS, DEFAULT_COMPRESSOR, DEFAULT_EQ, DEFAULT_LIMITER, IDENTITY_CURVES, NEUTRAL_WHEELS, TRACK_HEIGHTS } from './defaults'
+import { EASING_NAMES, type Easing } from './easing'
 import { ANIMATABLE, evalKeyframes } from './keyframes'
+import { MOTION_PRESETS, mergeKeyframes, presetKeyframes, PRESET_IDS } from './motion-presets'
 import { EFFECTS } from './presets'
 import {
   clipEnd,
@@ -71,11 +73,15 @@ const blend = z.enum(['normal', 'screen', 'multiply', 'overlay', 'soft-light', '
 const animPreset = z.enum(['none', 'fade', 'rise', 'drop', 'pop', 'zoom', 'blur', 'wipe', 'typewriter', 'spin3d', 'flip3d'])
 const transitionKind = z.enum(['dissolve', 'dip', 'flash', 'slide', 'push', 'zoom', 'wipe', 'blur', 'cube', 'flip', 'door', 'swing', 'page', 'warp', 'shatter', 'spin'])
 const effectKind = z.enum(['blur', 'glow', 'vignette', 'grain', 'mono', 'shake', 'pulse', 'leak', 'rgb', 'sharpen', 'chromaKey', 'lumaKey', 'tilt3d', 'curve3d', 'wave3d', 'cube3d', 'mirror3d'])
-const fontId = z.enum(['sans', 'display', 'serif', 'mono', 'hand'])
+const fontId = z.enum(['sans', 'display', 'serif', 'mono', 'hand', 'fraunces', 'archivo', 'syne', 'space-grotesk'])
 /** A built-in font, or `custom:<id>` for one imported into the project (ids in get_project → fonts). */
 const fontRef = z.union([fontId, z.templateLiteral(['custom:', z.string().min(1)])])
 const effectParams = z.record(z.string(), z.union([z.number(), z.string()]))
-const easing = z.enum(['linear', 'ease', 'ease-in', 'ease-out', 'hold'])
+const easing = z
+  .union([z.enum(EASING_NAMES), z.string().regex(/^cubic-bezier\(\s*-?[\d.]+\s*,\s*-?[\d.]+\s*,\s*-?[\d.]+\s*,\s*-?[\d.]+\s*\)$/)])
+  .describe(
+    'Curve to the next keyframe: linear, ease, ease-in, ease-out, hold, or sine/quad/cubic/quart/expo/circ/back -in, -out or -in-out, elastic-out, bounce-out, or "cubic-bezier(x1, y1, x2, y2)". Entrances read best with an -out curve, exits with -in, camera moves with sine-in-out.',
+  ) as unknown as z.ZodType<Easing>
 const animatable = z.enum(['x', 'y', 'scale', 'rotation', 'opacity', 'volume', 'rotateX', 'rotateY', 'z', 'speed'])
 const markerColor = z.enum(['lime', 'violet', 'pink', 'amber', 'emerald', 'sky'])
 const pct = z.number().min(-100).max(100)
@@ -85,7 +91,7 @@ const attribute = z.enum(['transform', 'crop', 'color', 'effects', 'audio', 'spe
 
 /** Values the schemas accept, for tools that list what's available. */
 export const BLEND_MODES = blend.options
-export const EASINGS = easing.options
+export const EASINGS: readonly string[] = EASING_NAMES
 export const ATTRIBUTES = attribute.options
 export type EditMode = z.infer<typeof editMode>
 export type Attribute = z.infer<typeof attribute>
@@ -230,6 +236,7 @@ const textStyle = z.object({
 })
 
 const animSpec = z.object({ preset: animPreset, duration: z.number().int().min(1).max(600) })
+const subjectMatte = z.object({ assetId: z.string().min(1), from: z.number().min(0), invert: z.boolean().optional() })
 const transition = z.object({ kind: transitionKind, duration: z.number().int().min(2).max(300) })
 
 export const clipPatch = z
@@ -250,6 +257,8 @@ export const clipPatch = z
     angle: id,
     follow: trackPath.nullable(),
     stabilize: stabilization.partial().nullable(),
+    /** A subject matte (make one with cut_out_subject); null removes it. */
+    matte: subjectMatte.nullable(),
   })
   .partial()
 
@@ -287,6 +296,7 @@ export const clipSnapshot = z.object({
   angle: id.optional(),
   follow: trackPath.optional(),
   stabilize: stabilization.optional(),
+  matte: subjectMatte.optional(),
 })
 
 export type ClipSnapshot = z.infer<typeof clipSnapshot>
@@ -335,6 +345,9 @@ const asset = z.object({
   favorite: z.boolean().optional(),
   tags: z.array(z.string()).optional(),
   proxy: z.object({ path: z.string(), url: z.string(), width: z.number(), height: z.number() }).optional(),
+  matteOf: z
+    .object({ assetId: z.string(), subject: z.enum(['person', 'any']), from: z.number(), to: z.number(), box: z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() }).optional() })
+    .optional(),
   addedAt: z.number(),
 })
 
@@ -390,8 +403,14 @@ function plainSequence(p: Project, id: string): Sequence {
 }
 
 function applyPatch(p: Project, clip: Clip, patch: ClipPatch) {
-  const { transform, color, audio, text, animation, speed, crop, masks, angle, follow, stabilize, ...flat } = patch
+  const { transform, color, audio, text, animation, speed, crop, masks, angle, follow, stabilize, matte, ...flat } = patch
   Object.assign(clip, flat)
+  if (matte === null) delete clip.matte
+  else if (matte) {
+    const m = p.assets[matte.assetId]
+    if (!m?.matteOf) throw new CommandError('That isn’t a subject matte — make one with cut_out_subject')
+    clip.matte = matte
+  }
   if (angle !== undefined) {
     const seq = clip.sequenceId ? p.sequences?.[clip.sequenceId] : undefined
     if (!seq?.multicam) throw new CommandError(`“${clip.name}” isn’t a multicam clip`)
@@ -1097,6 +1116,52 @@ export const commands = {
     },
   }),
 
+  'keyframe.move': command({
+    description: 'Move the keyframes at one clip-relative frame to another — of every animated property, or just `prop`. A keyframe already at the target is replaced.',
+    input: z.object({ clipId: id, from: frame, to: frame, prop: animatable.optional() }),
+    title: () => 'Move keyframe',
+    run(p, i) {
+      const clip = getClip(p, i.clipId)
+      assertEditable(p, clip)
+      if (i.to >= clip.duration) throw new CommandError('That’s past the end of the clip')
+      if (i.from === i.to) return
+      let moved = false
+      for (const prop of i.prop ? [i.prop] : ANIMATABLE) {
+        const kfs = clip.keyframes[prop]
+        const k = kfs?.find((x) => x.frame === i.from)
+        if (!kfs || !k) continue
+        clip.keyframes[prop] = [...kfs.filter((x) => x !== k && x.frame !== i.to), { ...k, frame: i.to }].sort((a, b) => a.frame - b.frame)
+        moved = true
+        if (prop === 'speed') fitToMedia(p, clip)
+      }
+      if (!moved) throw new CommandError(`There’s no keyframe at frame ${i.from}`)
+    },
+  }),
+
+  'clip.animate': command({
+    description:
+      'Animate a clip with a motion preset, baked into keyframes you can then edit. Camera moves over the clip (from `at`, for `duration` frames, default the whole clip): ken-burns, ken-burns-out, push-in, pull-out, pan-left, pan-right, tilt-up, tilt-down, drift. Entrances at the start: slide-in-left/right/up/down, pop-in, fade-in, zoom-in, drop-in, spin-in. Exits at the end: slide-out-left/right/up/down, pop-out, fade-out, zoom-out. Emphasis hitting at frame `at`: punch (a quick punch-in — land it on a beat), pulse, shake, wobble. Frames are clip-relative. intensity 0.1–3 scales the move (default 1); easing overrides the preset’s curve.',
+    input: z.object({
+      clipId: id,
+      preset: z.enum(PRESET_IDS),
+      at: frame.optional(),
+      duration: z.number().int().min(1).optional(),
+      intensity: z.number().min(0.1).max(3).optional(),
+      easing: easing.optional(),
+    }),
+    title: (i) => `Animate: ${MOTION_PRESETS.find((p) => p.id === i.preset)?.name ?? i.preset}`,
+    run(p, i) {
+      const clip = getClip(p, i.clipId)
+      assertEditable(p, clip)
+      if (clip.kind === 'audio') throw new CommandError('Audio clips have no picture to animate')
+      const snapshot = isDraft(clip) ? current(clip) : clip
+      const { keys, range } = presetKeyframes(snapshot, i.preset, p.settings, { at: i.at, duration: i.duration, intensity: i.intensity, easing: i.easing })
+      for (const [prop, list] of Object.entries(keys) as [AnimatableProp, NonNullable<(typeof keys)[AnimatableProp]>][]) {
+        clip.keyframes[prop] = mergeKeyframes(clip.keyframes[prop], list, range)
+      }
+    },
+  }),
+
   // Tracks
   'track.add': command({
     description: 'Add a video or audio track. Video tracks go on top by default, audio tracks at the bottom. Returns the id.',
@@ -1330,6 +1395,7 @@ export const commands = {
           fps: z.number(),
           source: assetSource,
           proxy: z.object({ path: z.string(), url: z.string(), width: z.number(), height: z.number() }).nullable(),
+          beats: z.object({ bpm: z.number(), times: z.array(z.number()), downbeats: z.array(z.number()), confidence: z.number() }),
         })
         .partial(),
     }),
@@ -1350,9 +1416,14 @@ export const commands = {
     title: (i) => `Remove ${plural(i.ids.length, 'media item')}`,
     run(p, i) {
       const ids = new Set(i.ids)
+      // A media item's subject mattes go with it.
+      for (const a of Object.values(p.assets)) if (a.matteOf && ids.has(a.matteOf.assetId)) ids.add(a.id)
       for (const c of Object.values(p.clips)) if (c.assetId && ids.has(c.assetId)) delete p.clips[c.id]
       // …and from the timelines that aren't open.
       for (const seq of Object.values(p.sequences ?? {})) for (const c of Object.values(seq.clips)) if (c.assetId && ids.has(c.assetId)) delete seq.clips[c.id]
+      // Clips cut out with a removed matte show whole again.
+      for (const c of Object.values(p.clips)) if (c.matte && ids.has(c.matte.assetId)) delete c.matte
+      for (const seq of Object.values(p.sequences ?? {})) for (const c of Object.values(seq.clips)) if (c.matte && ids.has(c.matte.assetId)) delete c.matte
       for (const assetId of ids) delete p.assets[assetId]
     },
   }),

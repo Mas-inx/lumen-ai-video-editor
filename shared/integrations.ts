@@ -4,6 +4,7 @@
  * Type-only apart from the IPC channel names, so both sides can import it.
  */
 import type { AgentEvent, AgentRunRequest, LocalAgentId, LocalAgentState, ModelInfo, ProviderId, ProviderState } from './ai'
+import type { SkillDoc, SkillInfo, SkillSource } from './skills'
 
 // ─── Generated media ─────────────────────────────────────────────────────
 
@@ -129,7 +130,7 @@ export interface BlenderLiveResult {
 
 // ─── HyperFrames (HTML motion graphics) ──────────────────────────────────
 
-export type MotionTemplate = 'lower-third' | 'kinetic' | 'counter' | 'title-card' | 'custom'
+export type MotionTemplate = 'lower-third' | 'kinetic' | 'counter' | 'title-card' | 'quote' | 'chapter' | 'custom'
 
 export interface MotionRenderRequest {
   template: MotionTemplate
@@ -257,6 +258,19 @@ export const IPC = {
   aiRun: 'lumen:ai:run',
   aiStop: 'lumen:ai:stop',
   aiForget: 'lumen:ai:forget',
+  aiChatsLoad: 'lumen:ai:chats-load',
+  webSearch: 'lumen:web:search',
+  webRead: 'lumen:web:read',
+  webScreenshot: 'lumen:web:screenshot',
+  webPreview: 'lumen:web:preview',
+  skillsList: 'lumen:skills:list',
+  skillsRead: 'lumen:skills:read',
+  skillsReadFile: 'lumen:skills:read-file',
+  skillsSave: 'lumen:skills:save',
+  skillsDelete: 'lumen:skills:delete',
+  skillsImport: 'lumen:skills:import',
+  skillsOpenFolder: 'lumen:skills:open-folder',
+  aiChatsSave: 'lumen:ai:chats-save',
   aiTranscribe: 'lumen:ai:transcribe',
   aiMediaModels: 'lumen:ai:media-models',
   aiGenerateImage: 'lumen:ai:generate-image',
@@ -327,6 +341,9 @@ export interface IntegrationsAPI {
     stop(runId: string): Promise<void>
     /** Drops a conversation's history / agent session. */
     forget(conversationId: string): Promise<void>
+    /** A project's Copilot chats, as last saved. */
+    loadChats(projectId: string): Promise<unknown[]>
+    saveChats(projectId: string, chats: unknown[]): Promise<void>
     onEvent(cb: (event: AgentEvent) => void): () => void
     /** Speech-to-text with the user's OpenAI key (16 kHz mono WAV in, timed phrases out). */
     transcribe(wav: Uint8Array, language?: string): Promise<TranscriptSegment[]>
@@ -335,13 +352,32 @@ export interface IntegrationsAPI {
     generateImage(req: ImageGenRequest): Promise<Job>
     generateVideo(req: VideoGenRequest): Promise<Job>
   }
+  /** Skills on disk: yours (userData/skills) and Claude Code's (~/.claude/skills). */
+  skills: {
+    list(): Promise<SkillInfo[]>
+    read(source: SkillSource, folder: string): Promise<SkillDoc>
+    readFile(source: SkillSource, folder: string, path: string): Promise<string>
+    /** Creates or updates one of your skills (renaming moves it). */
+    save(input: { folder?: string; name: string; description: string; body: string }): Promise<SkillInfo>
+    delete(folder: string): Promise<void>
+    /** Pick a folder with a SKILL.md and copy it into your skills. Null if cancelled. */
+    import(): Promise<SkillInfo | null>
+    openFolder(): Promise<void>
+  }
+  /** The web, for the Copilot: search, read pages, screenshot them, preview links. */
+  web: {
+    search(query: string, max?: number): Promise<WebSearchResult[]>
+    read(url: string, maxChars?: number): Promise<WebPage>
+    screenshot(url: string, opts?: { width?: number; height?: number; fullPage?: boolean }): Promise<WebShot>
+    preview(url: string): Promise<WebPreview>
+  }
   /** Lumen's own MCP server, for external agents. */
   bridge: {
     state(): Promise<BridgeState>
     setEnabled(on: boolean): Promise<BridgeState>
     regenerateToken(): Promise<BridgeState>
     /** The editor answers agents' requests (listing and running its tools). */
-    serve(handler: (req: BridgeRequest) => Promise<BridgeTool[] | BridgeToolResult>): () => void
+    serve(handler: (req: BridgeRequest) => Promise<BridgeTool[] | BridgeToolResult | string>): () => void
     onState(cb: (state: BridgeState) => void): () => void
   }
   onJob(cb: (job: Job) => void): () => void
@@ -353,7 +389,7 @@ export interface IntegrationsAPI {
 /** main → editor: an agent listed or called a tool. */
 export interface BridgeRequest {
   id: string
-  method: 'tools' | 'call'
+  method: 'tools' | 'call' | 'instructions'
   tool?: string
   args?: Record<string, unknown>
 }
@@ -401,6 +437,46 @@ export interface BridgeState {
 }
 
 /** This computer or the local network (a game server in the next room): plain http is allowed there. */
+// ─── The web (for the Copilot) ───────────────────────────────────────────
+
+export interface WebSearchResult {
+  title: string
+  url: string
+  snippet: string
+}
+
+export interface WebPage {
+  url: string
+  title: string
+  description?: string
+  site?: string
+  /** The readable text (article or main part), cut at the length asked for. */
+  text: string
+  truncated?: boolean
+  links: { text: string; url: string }[]
+  images: string[]
+  /** The page's lead picture (JPEG, base64), when it has one. */
+  image?: string
+}
+
+export interface WebPreview {
+  url: string
+  title: string
+  description?: string
+  site?: string
+  /** The picture's URL. */
+  image?: string
+}
+
+export interface WebShot {
+  url: string
+  title: string
+  width: number
+  height: number
+  /** JPEG, base64. */
+  image: string
+}
+
 export function isPrivateHost(hostname: string) {
   if (['localhost', '127.0.0.1', '[::1]'].includes(hostname) || hostname.endsWith('.local') || hostname.endsWith('.localhost')) return true
   const m = /^(\d+)\.(\d+)\.\d+\.\d+$/.exec(hostname)

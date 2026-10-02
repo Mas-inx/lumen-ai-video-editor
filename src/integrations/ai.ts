@@ -157,10 +157,10 @@ export function targetLabel(t: CopilotTarget | null): { title: string; subtitle:
   }
   if (t.kind === 'local') {
     if (!t.model) return { title: LOCAL_AGENT_NAMES[t.agent], subtitle: 'your account' }
-    return { title: targetModel(t)?.name ?? t.model, subtitle: LOCAL_AGENT_NAMES[t.agent] }
+    return { title: targetModel(t)?.name || t.model, subtitle: LOCAL_AGENT_NAMES[t.agent] }
   }
   const spec = PROVIDERS.find((p) => p.id === t.provider)
-  return { title: targetModel(t)?.name ?? t.model, subtitle: spec?.name ?? t.provider }
+  return { title: targetModel(t)?.name || t.model, subtitle: spec?.name ?? t.provider }
 }
 
 /** What Lumen knows about the target's model (its name, effort levels…), when listed. */

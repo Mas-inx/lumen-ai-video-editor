@@ -2,13 +2,17 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import { ContextMenu } from 'radix-ui'
 import { Trash } from 'lucide-react'
 import { projectDuration } from '@/editor/ops'
-import { playback, usePlayback } from '@/editor/playback'
+import { onPlayhead, playback, usePlayback } from '@/editor/playback'
 import { dispatch, useEditor } from '@/editor/store'
+import { useUI } from '@/editor/ui-store'
+import { useRenders } from '@/engine/render-cache'
 import type { Marker } from '@/editor/types'
 import { formatDuration, parseTimecode, formatTimecode } from '@/lib/time'
 import { Tip } from '@/components/ui/tooltip'
 import { useLayout } from './layout'
 import { HEADER_W, RULER_H } from './model'
+import { paintRenderBar, RENDER_BAR_H } from './render-bar'
+import { useViewport } from './viewport'
 
 export const MARKER_COLORS: Record<Marker['color'], string> = {
   lime: '#d6ee00',
@@ -30,11 +34,17 @@ function label(sec: number, major: number, fps: number) {
   return f === 0 ? `${m}:${pad(s)}` : `${pad(f)}f`
 }
 
-export function Ruler({ width, laneViewport, scrollLeft }: { width: number; laneViewport: number; scrollLeft: number }) {
+export function Ruler({ width, laneViewport }: { width: number; laneViewport: number }) {
   const { pps, fps } = useLayout()
+  const scrollLeft = useViewport((s) => s.scrollLeft)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const markers = useEditor((s) => s.project.markers)
   const end = useEditor((s) => projectDuration(s.project))
+  // The render bar follows what's on the timeline, what's rendered and the render resolution.
+  const project = useEditor((s) => s.project)
+  const renders = useRenders((s) => s.version)
+  const rendering = useRenders((s) => s.job?.current ?? null)
+  const renderRes = useUI((s) => s.renderRes)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -69,13 +79,14 @@ export function Ruler({ width, laneViewport, scrollLeft }: { width: number; lane
       const mid = !isMajor && Math.abs((t * 2) / major - Math.round((t * 2) / major)) < 1e-4
       ctx.fillStyle = isMajor ? 'rgba(255,255,255,0.34)' : mid ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.11)'
       const h = isMajor ? 10 : mid ? 7 : 4
-      ctx.fillRect(x - 0.5, RULER_H - h, 1, h)
+      ctx.fillRect(x - 0.5, RULER_H - RENDER_BAR_H - h, 1, h)
       if (isMajor) {
         ctx.fillStyle = '#7d7d88'
         ctx.fillText(label(t, major, fps), x + 5, 13)
       }
     }
-  }, [pps, fps, laneViewport, scrollLeft, end])
+    paintRenderBar(ctx, project, { pps, scrollLeft, width: laneViewport, y: RULER_H - RENDER_BAR_H, rendering })
+  }, [pps, fps, laneViewport, scrollLeft, end, project, renders, rendering, renderRes])
 
   return (
     <div data-ruler className="relative shrink-0 border-b border-line bg-surface" style={{ width, height: RULER_H }}>
@@ -192,9 +203,17 @@ function RangeBand() {
 
 function PlayheadHandle() {
   const { pps, fps } = useLayout()
-  const frame = usePlayback((s) => s.frame)
+  const ref = useRef<HTMLDivElement>(null)
+  // Moves by writing its transform as the playhead moves: no re-render on every playback frame.
+  useEffect(
+    () =>
+      onPlayhead((f) => {
+        if (ref.current) ref.current.style.transform = `translateX(calc(${(f / fps) * pps}px - 50%))`
+      }),
+    [pps, fps],
+  )
   return (
-    <div data-playhead className="absolute top-0 z-20 -translate-x-1/2 cursor-ew-resize px-1" style={{ left: (frame / fps) * pps }}>
+    <div ref={ref} data-playhead className="absolute top-0 left-0 z-20 cursor-ew-resize px-1 will-change-transform">
       <svg width="13" height="18" viewBox="0 0 13 18" className="drop-shadow-[0_2px_4px_rgb(0_0_0/0.6)]" aria-hidden>
         <path d="M2 1.5h9a1.5 1.5 0 0 1 1.5 1.5v8.2a1.5 1.5 0 0 1-.52 1.14L7.1 16.5a1 1 0 0 1-1.2 0l-4.88-4.16A1.5 1.5 0 0 1 .5 11.2V3A1.5 1.5 0 0 1 2 1.5Z" fill="#fff" />
       </svg>
@@ -205,10 +224,19 @@ function PlayheadHandle() {
 
 /** The timecode readout in the ruler's corner — click to type a time and jump. */
 export function TimecodeCell() {
-  const frame = usePlayback((s) => s.frame)
   const fps = useEditor((s) => s.project.settings.fps)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
+  const readout = useRef<HTMLSpanElement>(null)
+  useEffect(
+    () =>
+      editing
+        ? undefined
+        : onPlayhead((f) => {
+            if (readout.current) readout.current.textContent = formatTimecode(f, fps)
+          }),
+    [fps, editing],
+  )
 
   const commit = () => {
     const f = parseTimecode(draft, fps)
@@ -235,11 +263,11 @@ export function TimecodeCell() {
       ) : (
         <button
           type="button"
-          onClick={() => (setDraft(formatTimecode(frame, fps)), setEditing(true))}
+          onClick={() => (setDraft(formatTimecode(usePlayback.getState().frame, fps)), setEditing(true))}
           className="flex items-baseline gap-2 rounded px-1 font-mono text-[13px] font-medium tracking-tight text-fg tabular outline-none hover:bg-white/[0.05]"
           title="Click to jump to a timecode"
         >
-          {formatTimecode(frame, fps)}
+          <span ref={readout} />
           <span className="font-sans text-2xs font-medium text-fg-4">{fps} fps</span>
         </button>
       )}

@@ -6,6 +6,7 @@ import { abortExport, beginExport, beginFile, finishExport, forgetPicked, openPi
 import { mediaRoot } from './integrations/paths'
 import { listVersions } from './versions'
 import { openPath, pickMedia, register, relink, reveal, saveMedia, urlForPath } from './files'
+import { listRenders, removeRenders, renderUsage, writeRender } from './render-cache'
 import { closeNow, confirmDiscard, forgetRecent, openProject, openVersion, readRecovery, recentProjects, saveProject, saveProjectAs, setProjectState, snapshotVersion, writeRecovery } from './project'
 import { checkForUpdates, installUpdate, updateState } from './updater'
 
@@ -45,6 +46,12 @@ export function registerAppIpc(isTrustedUrl: (url: string) => boolean, getStartu
     if (!name) throw new Error('Bad proxy name')
     return beginFile(path.join(mediaRoot(), 'proxies', `${name}.mp4`))
   })
+  handle(APP_IPC.renderWrite, (_win, projectId: unknown, key: unknown, data: unknown) => writeRender(str(projectId), str(key), data as Uint8Array))
+  handle(APP_IPC.renderList, (_win, projectId: unknown) => listRenders(str(projectId)))
+  handle(APP_IPC.renderRemove, (_win, projectId: unknown, keys: unknown) =>
+    removeRenders(str(projectId), Array.isArray(keys) ? keys.filter((k): k is string => typeof k === 'string') : null),
+  )
+  handle(APP_IPC.renderUsage, () => renderUsage())
 
   handle(APP_IPC.projectOpen, (win, file?: unknown) => openProject(win, typeof file === 'string' && file ? file : undefined))
   handle(APP_IPC.projectSave, (_win, file: unknown, text: unknown) => saveProject(str(file), str(text)))

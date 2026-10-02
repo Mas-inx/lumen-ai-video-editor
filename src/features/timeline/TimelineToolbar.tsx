@@ -11,6 +11,7 @@ import { formatDuration } from '@/lib/time'
 import { suggestFor, type Suggestion } from '@/editor/smart'
 import { useCopilot } from '@/features/copilot/store'
 import { actions } from '@/features/shell/actions'
+import { RenderMenu } from './RenderMenu'
 import { TimelineSwitcher } from './TimelineSwitcher'
 
 export function TimelineToolbar() {
@@ -66,6 +67,9 @@ export function TimelineToolbar() {
       <div className="flex min-w-0 flex-1 justify-center px-3">
         <CopilotHint />
       </div>
+
+      <RenderMenu />
+      <div className="mx-1 h-4 w-px bg-line-2" />
 
       <IconButton label="Zoom out" shortcut="-" onClick={() => actions.zoom(1 / 1.35)}>
         <ZoomOut />
@@ -146,6 +150,7 @@ function CopilotHint() {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: -4, scale: 0.97 }}
           transition={{ type: 'spring', stiffness: 420, damping: 32 }}
+          data-busy={running || undefined}
           className="ring-ai flex h-7 min-w-0 items-center gap-2 rounded-full bg-white/[0.035] pr-1 pl-2.5 text-xs"
         >
           <AiSparkle className="size-3.5 shrink-0" />

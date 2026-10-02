@@ -141,6 +141,10 @@ export const APP_IPC = {
   projectSnapshot: 'lumen:project:snapshot',
   projectCollect: 'lumen:project:collect',
   proxyBegin: 'lumen:files:proxy-begin',
+  renderWrite: 'lumen:renders:write',
+  renderList: 'lumen:renders:list',
+  renderRemove: 'lumen:renders:remove',
+  renderUsage: 'lumen:renders:usage',
   confirmDiscard: 'lumen:project:confirm-discard',
   closeWindow: 'lumen:app:close-window',
 
@@ -168,6 +172,19 @@ export const APP_IPC = {
   collectProgress: 'lumen:project:collect-progress',
 } as const
 
+/** A rendered preview of a stretch of a project's timeline. */
+export interface RenderFile {
+  key: string
+  url: string
+}
+
+export interface RenderCacheUsage {
+  bytes: number
+  files: number
+  /** Older renders are deleted past this size. */
+  cap: number
+}
+
 /** What the preload exposes as `window.lumen.app`. */
 export interface AppAPI {
   files: {
@@ -187,6 +204,15 @@ export interface AppAPI {
     urlForPath(path: string): Promise<MediaFileInfo | null>
     /** Opens a proxy file in Lumen's media folder for streamed writes (then export.write / finish / abort). */
     beginProxy(key: string): Promise<ExportHandle>
+  }
+  /** Render previews: rendered stretches of a project's timeline, kept on disk. */
+  renders: {
+    /** Stores one rendered chunk; returns the URL it plays from. */
+    write(projectId: string, key: string, data: Uint8Array): Promise<string>
+    list(projectId: string): Promise<RenderFile[]>
+    /** Deletes some of a project's renders, or all of them with `keys` null. */
+    remove(projectId: string, keys: string[] | null): Promise<void>
+    usage(): Promise<RenderCacheUsage>
   }
   project: {
     /** Opens a project file — with a dialog when no path is given. Null if cancelled. */

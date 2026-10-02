@@ -3,12 +3,15 @@ import type { Asset } from '@/editor/types'
 import { filmstripFrame, getFilmstrip, onFilmstrip, type Filmstrip } from '@/engine/decode'
 import { cn } from '@/lib/cn'
 
-/** Thumbnails across a video file (decoded in the background on first use). */
+const stripKey = (asset: Asset | undefined) => (asset?.kind === 'video' && asset.source.type === 'file' ? `${asset.id}|${asset.source.url}` : null)
+
+/** Thumbnails across a video file (decoded in the background on first use). Re-renders only as this file's thumbnails arrive. */
 export function useFilmstrip(asset: Asset | undefined, enabled = true): Filmstrip | null {
   const [, setTick] = useState(0)
-  useEffect(() => onFilmstrip(() => setTick((t) => t + 1)), [])
-  if (!enabled || !asset || asset.kind !== 'video' || asset.source.type !== 'file' || asset.source.missing || !asset.duration) return null
-  return getFilmstrip(`${asset.id}|${asset.source.url}`, asset.source.url, asset.duration)
+  const key = stripKey(asset)
+  useEffect(() => (key ? onFilmstrip((k) => k === key && setTick((t) => t + 1)) : undefined), [key])
+  if (!enabled || !asset || !key || asset.source.type !== 'file' || asset.source.missing || !asset.duration) return null
+  return getFilmstrip(key, asset.source.url, asset.duration)
 }
 
 export function stripFrame(strip: Filmstrip | null, t: number) {

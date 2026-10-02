@@ -50,6 +50,9 @@ import { formatDuration } from '@/lib/time'
 import { ColorSwatches, KeyframeButton, PropSlider, usePropValue, ValueSlider } from './controls'
 import { SpeedRamp } from './SpeedRamp'
 import { KeyParams } from './KeyParams'
+import { CurveIcon, EasingMenu, MotionPresetsSection } from './MotionPresets'
+import { easingLabel } from '@/editor/easing'
+import { playback } from '@/editor/playback'
 import { CurvesSection, HslSection, LutSection, WheelsSection } from './GradeSections'
 import { FontPicker } from './FontPicker'
 import { fontCss } from '@/engine/fonts'
@@ -436,17 +439,41 @@ export function AnimateSection({ clip, fps }: { clip: Clip; fps: number }) {
           <Picker dir="out" />
         </div>
       </Section>
+      {clip.kind !== 'audio' && <MotionPresetsSection clip={clip} />}
       <Section title="Keyframes" icon={<Diamond />}>
         {animated.length ? (
-          <div className="space-y-1">
+          <div className="space-y-2.5">
             {animated.map((p) => (
-              <div key={p} className="flex h-8 items-center gap-2 rounded-md px-1 text-sm">
-                <Diamond className="size-3 fill-accent-2 text-accent-2" />
-                <span className="flex-1 text-fg-2 capitalize">{p}</span>
-                <span className="text-xs text-fg-4 tabular">{clip.keyframes[p]!.length} keys</span>
-                <IconButton size="xs" label={`Clear ${p} animation`} onClick={() => dispatch('keyframe.clear', { clipId: clip.id, prop: p })}>
-                  <X />
-                </IconButton>
+              <div key={p}>
+                <div className="flex h-7 items-center gap-2 px-1 text-sm">
+                  <Diamond className="size-3 fill-accent-2 text-accent-2" />
+                  <span className="flex-1 text-fg-2 capitalize">{p}</span>
+                  <span className="text-xs text-fg-4 tabular">{clip.keyframes[p]!.length} keys</span>
+                  <IconButton size="xs" label={`Clear ${p} animation`} onClick={() => dispatch('keyframe.clear', { clipId: clip.id, prop: p })}>
+                    <X />
+                  </IconButton>
+                </div>
+                {/* Each key: when it is, and the curve to the next one. */}
+                <div className="space-y-0.5 pl-6">
+                  {clip.keyframes[p]!.map((k, i, all) => (
+                    <div key={k.frame} className="flex h-7 items-center gap-2 text-xs">
+                      <button type="button" onClick={() => playback.seek(clip.start + k.frame)} className="w-14 shrink-0 text-left font-mono text-fg-3 tabular hover:text-fg" title="Go to this keyframe">
+                        {formatDuration(k.frame, fps)}
+                      </button>
+                      <span className="w-14 shrink-0 truncate text-fg-4 tabular">{Math.round(k.value * 100) / 100}</span>
+                      {i < all.length - 1 ? (
+                        <EasingMenu value={k.easing} onChange={(e) => e && dispatch('keyframe.set', { clipId: clip.id, prop: p, frame: k.frame, value: k.value, easing: e })}>
+                          <button type="button" className="flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 text-fg-3 hover:bg-white/[0.06] hover:text-fg" title="The curve to the next keyframe">
+                            <CurveIcon easing={k.easing} className="size-4" />
+                            <span className="truncate">{easingLabel(k.easing)}</span>
+                          </button>
+                        </EasingMenu>
+                      ) : (
+                        <span className="flex-1 px-1.5 text-fg-4">end</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             ))}
           </div>

@@ -26,8 +26,12 @@ import { CONTROL_TOOLS } from './tools/control'
 import { emitToolImages } from './tools/events'
 import { FOOTAGE_TOOLS } from './tools/footage'
 import { INSPECT_TOOLS } from './tools/inspect'
-import { bool, num, obj, str, withImages, WithImages, type AgentTool, type ToolImage } from './tools/kit'
+import { bool, num, obj, oneOf, str, withImages, WithImages, type AgentTool, type ToolImage } from './tools/kit'
 import { VISION_TOOLS } from './tools/vision'
+import { BEAT_TOOLS } from './tools/beats'
+import { SKILL_TOOLS } from './tools/skills'
+import { SUBJECT_TOOLS } from './tools/subject'
+import { WEB_TOOLS } from './tools/web'
 
 const PLACE = bool('Put the finished clip on the timeline at the playhead (default true).')
 const WAIT = num('Seconds to wait for the render before returning (default 90, max 600). If it is still running, poll get_job.', { minimum: 0, maximum: 600 })
@@ -335,13 +339,21 @@ const INTEGRATION_TOOLS: AgentTool[] = [
   },
   {
     name: 'render_motion_graphic',
-    description:
-      'Render a HyperFrames motion graphic from a template and add it to the project (transparent). Templates and params — lower-third: { name, title, accent, accent2, align: "left"|"right", font }; title-card: { title, subtitle, eyebrow, accent, color, font: "sans"|"display"|"serif" }; kinetic: { text, style: "punch"|"stack", accent, color, font } (wrap words in *stars* to highlight); counter: { value, prefix, suffix, decimals, label, accent, accent2 }.',
+    description: [
+      'Render a crafted HyperFrames motion graphic from a template and add it to the project (a transparent overlay). Templates and params:',
+      '- lower-third: { name, title, style: "editorial" (hairline rule, serif name — default) | "block" (solid colour blocks) | "minimal", align: "left"|"right", accent, font }',
+      '- title-card: { title (a "|" breaks lines on meaning; *word* sets one word in italic accent), subtitle, eyebrow, style: "editorial" (default) | "poster" (huge uppercase, cut in word by word), accent, color, font, bpm }',
+      '- kinetic: { text (*word* highlights), style: "punch" (one word at a time) | "stack" | "stretch" (variable-width type opening up), accent, color, font, bpm }',
+      '- counter: { value, prefix, suffix, decimals, label, accent, font }',
+      '- quote: { text, author, accent, font }',
+      '- chapter: { number, title, accent, font }',
+      'Fonts: editorial (Fraunces), serif (Instrument Serif), display (Bricolage Grotesque), art (Syne), wide (Archivo), tech (Space Grotesk), sans (Geist), mono. Accent: pick from the footage or brand, not a default. bpm (the music’s tempo, from analyze_audio or detect_beats) lands changes on the beat. Leave duration out: it grows with the words so there’s time to read.',
+    ].join('\n'),
     inputSchema: obj(
       {
-        template: str('Template', { enum: ['lower-third', 'title-card', 'kinetic', 'counter'] }),
+        template: str('Template', { enum: ['lower-third', 'title-card', 'kinetic', 'counter', 'quote', 'chapter'] }),
         params: { type: 'object', description: 'Template parameters (see description)', additionalProperties: true },
-        duration_seconds: num('Clip length (defaults: lower third 5, others 4)', { minimum: 1, maximum: 30 }),
+        duration_seconds: num('Clip length (default: long enough to read it)', { minimum: 1, maximum: 30 }),
         place: PLACE,
         at_seconds: AT,
         wait_seconds: WAIT,
@@ -470,16 +482,20 @@ const INTEGRATION_TOOLS: AgentTool[] = [
   {
     name: 'add_captions',
     description:
-      'Caption all the speech on the timeline: transcribes any speech media that has no transcript yet, then lays timed captions on a Captions track (replacing earlier captions).',
+      'Caption all the speech on the timeline: transcribes any speech media that has no transcript yet, then lays timed captions on a Captions track (replacing earlier captions). Styles: clean (classic subtitles), bold (big outlined caps, a few words at a time, popping in — short-form), word (one big word at a time, key words in the accent colour), boxed (solid boxes that rise in).',
     inputSchema: obj({
-      max_words: num('Words per caption (default 6)', { minimum: 1, maximum: 16 }),
-      size: num('Text size in project pixels (default: 4.5% of the frame)', { minimum: 12, maximum: 400 }),
+      style: oneOf('Look and motion (default clean)', ['clean', 'bold', 'word', 'boxed']),
+      accent: str('Hex colour for key words (word style), e.g. #ffd84a'),
+      max_words: num('Words per caption (default from the style)', { minimum: 1, maximum: 16 }),
+      size: num('Text size in project pixels (default from the style)', { minimum: 12, maximum: 400 }),
       uppercase: bool('ALL CAPS captions'),
     }),
     run: async (a) => {
       const pending = untranscribed(getProject())
       if (pending.length && !(await ensureTranscripts(pending))) throw new Error('Transcription failed, so there’s nothing to caption yet.')
-      const r = addCaptions({ maxWords: typeof a.max_words === 'number' ? a.max_words : undefined, size: typeof a.size === 'number' ? a.size : undefined, uppercase: Boolean(a.uppercase) })
+      const style = (['clean', 'bold', 'word', 'boxed'] as const).find((s) => s === a.style)
+      const accent = typeof a.accent === 'string' && /^#[0-9a-f]{3,8}$/i.test(a.accent) ? a.accent : undefined
+      const r = addCaptions({ style, accent, maxWords: typeof a.max_words === 'number' ? a.max_words : undefined, size: typeof a.size === 'number' ? a.size : undefined, uppercase: a.uppercase === undefined ? undefined : Boolean(a.uppercase) })
       if (!r.added) throw new Error('No speech found on the timeline to caption.')
       return { captions_added: r.added, track_id: r.trackId }
     },
@@ -674,7 +690,7 @@ function mcpAgentTools(servers: Record<string, McpServerState>): AgentTool[] {
 
 let cache: AgentTool[] | null = null
 export function agentTools(servers: Record<string, McpServerState> = useIntegrations.getState().servers): AgentTool[] {
-  cache ??= [...INTEGRATION_TOOLS, ...VISION_TOOLS, ...INSPECT_TOOLS, ...CONTROL_TOOLS, ...FOOTAGE_TOOLS, ...editorTools()]
+  cache ??= [...INTEGRATION_TOOLS, ...VISION_TOOLS, ...INSPECT_TOOLS, ...CONTROL_TOOLS, ...FOOTAGE_TOOLS, ...WEB_TOOLS, ...SKILL_TOOLS, ...BEAT_TOOLS, ...SUBJECT_TOOLS, ...editorTools()]
   const mcp = mcpAgentTools(servers)
   return mcp.length ? [...cache, ...mcp] : cache
 }

@@ -14,6 +14,12 @@ import type { Track } from './types'
 
 interface PlaybackState {
   frame: number
+  /**
+   * The playhead as panels that only matter while paused see it (keyframe
+   * buttons, look previews): it holds still during playback, so they don't
+   * re-render on every frame.
+   */
+  pausedFrame: number
   playing: boolean
   /** 1 = realtime; negative plays backwards; 2/4/8 = J/L shuttle */
   rate: number
@@ -24,6 +30,7 @@ interface PlaybackState {
 
 export const usePlayback = create<PlaybackState>(() => ({
   frame: 0,
+  pausedFrame: 0,
   playing: false,
   rate: 1,
   loop: false,
@@ -80,19 +87,31 @@ function tick(now: number) {
       audioEngine.stop()
       anchorAudio = null
       inToOut = false
-      usePlayback.setState({ frame: range ? Math.max(range.in, end - 1) : end, playing: false, rate: 1 })
+      const stopAt = range ? Math.max(range.in, end - 1) : end
+      usePlayback.setState({ frame: stopAt, pausedFrame: stopAt, playing: false, rate: 1 })
       return
     }
     anchor(restart, rate)
     f = restart
   } else if (rate < 0 && f <= 0) {
     raf = 0
-    usePlayback.setState({ frame: 0, playing: false, rate: 1 })
+    usePlayback.setState({ frame: 0, pausedFrame: 0, playing: false, rate: 1 })
     return
   }
   const frame = Math.floor(f)
   if (frame !== usePlayback.getState().frame) usePlayback.setState({ frame })
   raf = requestAnimationFrame(tick)
+}
+
+/**
+ * Calls `fn` with the playhead now and whenever it moves — for UI that follows
+ * it (playhead lines, timecodes) by writing to the DOM instead of re-rendering.
+ */
+export function onPlayhead(fn: (frame: number) => void) {
+  fn(usePlayback.getState().frame)
+  return usePlayback.subscribe((s, prev) => {
+    if (s.frame !== prev.frame) fn(s.frame)
+  })
 }
 
 export const playback = {
@@ -120,7 +139,7 @@ export const playback = {
     inToOut = false
     anchorAudio = null
     audioEngine.stop()
-    usePlayback.setState({ playing: false, rate: 1 })
+    usePlayback.setState((s) => ({ playing: false, rate: 1, pausedFrame: s.frame }))
   },
   toggle() {
     if (usePlayback.getState().playing) playback.pause()
@@ -134,7 +153,7 @@ export const playback = {
       anchorFrame = f
       anchorTime = performance.now()
     }
-    usePlayback.setState({ frame: f })
+    usePlayback.setState(playing ? { frame: f } : { frame: f, pausedFrame: f })
   },
   step(delta: number) {
     playback.pause()

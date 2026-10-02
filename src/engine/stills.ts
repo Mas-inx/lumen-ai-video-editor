@@ -14,17 +14,18 @@ export class FrameFeeder {
   private readers = new Map<string, VideoReader>()
   private ready = new Map<string, CanvasImageSource | null>()
   constructor(
-    private project: Project,
+    /** The project frames are prepared for (may change between frames: readers carry over). */
+    public project: Project,
     private width: number,
     private height: number,
   ) {}
 
   async prepare(frame: number) {
     this.ready.clear()
-    for (const { clip, local, view, key } of mediaDrawnAt(this.project, frame)) {
+    for (const { clip, local, view, key, offset } of mediaDrawnAt(this.project, frame)) {
       const asset = clip.assetId ? view.assets[clip.assetId] : undefined
       if (!asset || asset.source.missing) continue
-      const t = clipSourceTime(clip, local, view.settings.fps)
+      const t = clipSourceTime(clip, local, view.settings.fps) - (offset ?? 0)
       if (asset.source.type === 'file' && asset.kind === 'video') {
         this.ready.set(key, await this.reader(key, asset.source.url).frameAt(Math.max(0, t)))
       } else if (asset.source.type === 'file' && asset.kind === 'image') {
@@ -36,10 +37,12 @@ export class FrameFeeder {
   }
 
   private reader(key: string, url: string) {
-    let r = this.readers.get(key)
+    const id = `${key}
+${url}`
+    let r = this.readers.get(id)
     if (!r) {
       r = new VideoReader(url, this.width, this.height)
-      this.readers.set(key, r)
+      this.readers.set(id, r)
     }
     return r
   }

@@ -11,6 +11,7 @@ import { DEFAULT_BUS } from '@/editor/defaults'
 import { dispatch, useEditor } from '@/editor/store'
 import type { BusMix, Track } from '@/editor/types'
 import { audioEngine } from '@/engine/audio-engine'
+import { onMeterFrame } from '@/engine/meter-clock'
 import { cn } from '@/lib/cn'
 import { ChannelEditor } from './ChannelEditor'
 import { FADER_MARKS, faderDb, faderPos, formatDb, meterPos } from './scales'
@@ -239,16 +240,13 @@ function Meter({ target }: { target: Target }) {
   useEffect(() => {
     const bars = [barL, barR]
     const holds = [holdL, holdR]
-    let raf = 0
-    let last = performance.now()
     const shown = [-Infinity, -Infinity]
     const hold = [
       { db: -Infinity, at: 0 },
       { db: -Infinity, at: 0 },
     ]
-    const tick = (now: number) => {
-      const dt = (now - last) / 1000
-      last = now
+    // The shared meter clock runs only while sound plays (and while the meters fall back).
+    return onMeterFrame((now, dt) => {
       const lv = audioEngine.levels(target) ?? [-Infinity, -Infinity]
       for (let i = 0; i < 2; i++) {
         // Instant attack, a 24 dB/s fall.
@@ -264,10 +262,7 @@ function Meter({ target }: { target: Target }) {
         }
         if (lv[i] > -0.1 && clip.current) clip.current.dataset.on = 'true'
       }
-      raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
+    })
   }, [target])
 
   return (

@@ -26,6 +26,7 @@ export const SHORTCUTS: Shortcut[] = [
   { id: 'back-second', label: 'Back one second', group: 'Playback', keys: ['shift+left'], run: () => actions.stepSeconds(-1) },
   { id: 'fwd-second', label: 'Forward one second', group: 'Playback', keys: ['shift+right'], run: () => actions.stepSeconds(1) },
   { id: 'play-in-out', label: 'Play in to out', group: 'Playback', keys: ['shift+space'], run: actions.playInToOut },
+  { id: 'render', label: 'Render previews in to out (or the whole timeline)', group: 'Playback', keys: ['enter'], run: actions.renderPreviews },
   { id: 'go-in', label: 'Go to in point', group: 'Playback', keys: ['shift+i'], run: actions.goToIn },
   { id: 'go-out', label: 'Go to out point', group: 'Playback', keys: ['shift+o'], run: actions.goToOut },
   { id: 'prev-edit', label: 'Previous edit point', group: 'Playback', keys: ['up'], run: () => actions.jumpEdit(-1) },

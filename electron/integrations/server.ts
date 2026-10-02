@@ -5,7 +5,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { IPC, type BridgeLogEntry, type BridgeState, type BridgeToolResult } from '../../shared/integrations'
-import { askEditor, editorTools, editorWindow, initEditorRpc } from './editor-rpc'
+import { askEditor, editorInstructions, editorTools, editorWindow, initEditorRpc } from './editor-rpc'
 import { readJson, writeJson } from './paths'
 
 /**
@@ -31,7 +31,8 @@ const INSTRUCTIONS = `Lumen is a desktop video editor. You are editing the user'
 - list_catalog lists the valid ids for effects, transitions, looks and presets. batch_edit applies several commands as one all-or-nothing undo step.
 - Edits are regular undoable actions, visible in the user's History.
 - Blender and HyperFrames renders take a while: they return a job id; the finished clip lands in the project's media automatically. Use get_job to wait, then place_asset to put it on the timeline.
-- Scripts that run code in Blender need the user's approval in Lumen.`
+- Scripts that run code in Blender need the user's approval in Lumen.
+- Lumen has skills — know-how for doing particular work well (motion design, Blender, grading, sound, short-form edits…). When a task matches one, call use_skill first and follow it; list_skills shows them, and tools name the skills that apply to them.`
 
 let server: http.Server | null = null
 /** Started for the Copilot's local agents only — not the user's "on" switch. */
@@ -61,8 +62,8 @@ function emit() {
   editorWindow()?.webContents.send(IPC.bridgeEvent, bridgeState())
 }
 
-function buildServer() {
-  const mcp = new Server({ name: 'lumen', title: 'Lumen video editor', version: app.getVersion() }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS })
+function buildServer(skills = '') {
+  const mcp = new Server({ name: 'lumen', title: 'Lumen video editor', version: app.getVersion() }, { capabilities: { tools: {} }, instructions: skills ? `${INSTRUCTIONS}\n\n${skills}` : INSTRUCTIONS })
   mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: await editorTools() }))
   mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     const tool = req.params.name
@@ -124,7 +125,11 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse, po
   } catch {
     return json(400, { error: 'Invalid JSON' })
   }
-  const mcp = buildServer()
+  // A client connecting gets the skills that are on now in the server's instructions.
+  const messages = Array.isArray(body) ? body : [body]
+  const connecting = messages.some((m) => (m as { method?: unknown } | null)?.method === 'initialize')
+  const skills = connecting ? await editorInstructions().catch(() => '') : ''
+  const mcp = buildServer(skills)
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
   res.on('close', () => {
     void transport.close()

@@ -5,6 +5,11 @@
 @import "@fontsource/instrument-serif/400-italic.css";
 @import "@fontsource-variable/bricolage-grotesque";
 @import "@fontsource-variable/caveat";
+@import "@fontsource-variable/fraunces/standard.css";
+@import "@fontsource-variable/fraunces/standard-italic.css";
+@import "@fontsource-variable/archivo/standard.css";
+@import "@fontsource-variable/syne";
+@import "@fontsource-variable/space-grotesk";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -267,7 +272,9 @@
   color: transparent;
 }
 
-/* Animated gradient hairline used around AI surfaces */
+/* Gradient hairline around AI surfaces. It only moves while the surface is in use
+   (focused, or marked busy): an always-running background animation repaints the
+   window on every display frame, which slow computers feel everywhere. */
 @utility ring-ai {
   position: relative;
   &::before {
@@ -284,11 +291,15 @@
       var(--color-ai-1)
     );
     background-size: 300% 100%;
-    animation: shimmer 6s linear infinite;
+    background-position: 50% 0;
     mask:
       linear-gradient(#000 0 0) content-box exclude,
       linear-gradient(#000 0 0);
     pointer-events: none;
+  }
+  &:focus-within::before,
+  &[data-busy]::before {
+    animation: shimmer 6s linear infinite;
   }
 }
 

@@ -5,25 +5,35 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Button } from '@/components/ui/button'
 import { adjacentBefore, clipEnd } from '@/editor/ops'
 import { TRANSITIONS } from '@/editor/presets'
-import { dispatch, useEditor } from '@/editor/store'
+import { dispatch, getProject, useEditor } from '@/editor/store'
 import type { Clip, Project, Track, TransitionKind } from '@/editor/types'
 import { cn } from '@/lib/cn'
 import { formatDuration } from '@/lib/time'
 import { ClipView } from './ClipView'
 import { useLayout } from './layout'
 import { CLIP_COLOR, useDrag } from './model'
+import { useLaneWindow } from './viewport'
 
-function clipIdsOn(project: Project, trackId: string) {
+/** The clips of a track that overlap frames [f0, f1), in timeline order. */
+function clipIdsIn(project: Project, trackId: string, f0: number, f1: number) {
   return Object.values(project.clips)
-    .filter((c) => c.trackId === trackId)
+    .filter((c) => c.trackId === trackId && c.start < f1 && clipEnd(c) > f0)
     .sort((a, b) => a.start - b.start)
     .map((c) => c.id)
 }
 
 export function TrackLane({ track, width }: { track: Track; width: number }) {
-  const clipIds = useEditor(useShallow((s) => clipIdsOn(s.project, track.id)))
-  const ghost = useDrag((s) => (s.dropGhost?.trackId === track.id ? s.dropGhost : null))
   const { pps, fps } = useLayout()
+  // Only clips near the screen are mounted: a timeline of thousands of clips costs what a screenful does.
+  const [x0, x1] = useLaneWindow()
+  const f0 = (x0 / pps) * fps
+  const f1 = (x1 / pps) * fps
+  const visible = useEditor(useShallow((s) => clipIdsIn(s.project, track.id, f0, f1)))
+  // Clips being dragged, trimmed or making room stay mounted even if they started off screen.
+  const moving = useDrag(useShallow((s) => Object.keys(s.previews)))
+  const extra = moving.filter((id) => !visible.includes(id) && getProject().clips[id]?.trackId === track.id)
+  const clipIds = extra.length ? [...visible, ...extra] : visible
+  const ghost = useDrag((s) => (s.dropGhost?.trackId === track.id ? s.dropGhost : null))
 
   return (
     <div

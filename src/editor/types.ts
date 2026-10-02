@@ -76,6 +76,17 @@ export interface Asset {
   tags?: string[]
   /** A small copy of a heavy video that the preview plays instead (exports always use the original). */
   proxy?: { path: string; url: string; width: number; height: number }
+  /** The music's beat grid, once detected (source seconds). */
+  beats?: { bpm: number; times: number[]; downbeats: number[]; confidence: number }
+  /** A subject matte made from another media item (kept with the project, not listed in the Media panel). */
+  matteOf?: {
+    assetId: string
+    subject: 'person' | 'any'
+    from: number
+    to: number
+    /** Where the subject usually is (0..1 of the frame; the median over the stretch). */
+    box?: { x: number; y: number; w: number; h: number }
+  }
   addedAt: number
 }
 
@@ -233,7 +244,7 @@ export interface Crop {
   radius: number
 }
 
-export type FontId = 'sans' | 'display' | 'serif' | 'mono' | 'hand'
+export type FontId = 'sans' | 'display' | 'serif' | 'mono' | 'hand' | 'fraunces' | 'archivo' | 'syne' | 'space-grotesk'
 
 /** A built-in font id, or `custom:<id>` for a font in the project. */
 export type FontRef = FontId | `custom:${string}`
@@ -405,7 +416,9 @@ export type BlendMode =
 /** `speed` keyframes make a speed ramp: the clip's footage plays at a changing rate. */
 export type AnimatableProp = 'x' | 'y' | 'scale' | 'rotation' | 'opacity' | 'volume' | 'rotateX' | 'rotateY' | 'z' | 'speed'
 
-export type Easing = 'linear' | 'ease' | 'ease-in' | 'ease-out' | 'hold'
+/** The curve from a keyframe to the next: a named curve or "cubic-bezier(x1, y1, x2, y2)" (see easing.ts). */
+export type { Easing } from './easing'
+import type { Easing } from './easing'
 
 export interface Keyframe {
   /** Relative to the clip start. */
@@ -452,6 +465,18 @@ export interface Clip {
   follow?: TrackPath
   /** Camera shake measured in the footage and smoothed away. */
   stabilize?: Stabilization
+  /** Cut down to the subject (or, inverted, to everything but it) by an AI matte. */
+  matte?: SubjectMatte
+}
+
+/** An AI matte applied to a clip: a video of the subject's shape (white = subject). */
+export interface SubjectMatte {
+  /** The matte media. */
+  assetId: string
+  /** Source seconds the matte starts at (it covers the stretch it was made for). */
+  from: number
+  /** Keep everything except the subject. */
+  invert?: boolean
 }
 
 export interface ProjectLut {

@@ -39,11 +39,18 @@ function isTyping(target: EventTarget | null) {
   return el.isContentEditable || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT'
 }
 
+/** Enter on a focused button (or link, tab, menu item…) presses it rather than running a shortcut. */
+function pressable(target: EventTarget | null) {
+  const el = target as HTMLElement | null
+  return Boolean(el?.closest?.('button, a[href], summary, [role="button"], [role="menuitem"], [role="option"], [role="tab"], [role="checkbox"], [role="switch"]'))
+}
+
 export function useGlobalShortcuts() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.isComposing) return
       const typing = isTyping(e.target)
+      if (keyName(e) === 'enter' && pressable(e.target)) return
       const { paletteOpen, exportOpen, shortcutsOpen } = useUI.getState()
       const modal = paletteOpen || exportOpen || shortcutsOpen || document.querySelector('[role="menu"],[role="dialog"]')
 

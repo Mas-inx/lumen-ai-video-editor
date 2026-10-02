@@ -17,6 +17,7 @@ shared/
   app.ts            files, projects, export, window capture, updates — main ↔ editor contract
   integrations.ts   integrations contract (types + IPC channel names)
   ai.ts             Copilot brains, effort scale, agent events, instructions
+  skills.ts         SKILL.md parsing (the same format as Claude's skills)
 src/
   editor/           the document and its rules (framework-free, unit-tested)
     types.ts          project model — integer frames at the project's fps
@@ -27,7 +28,10 @@ src/
     timing.ts         clip time → source time: speed, speed ramps (integrated), reverse, freeze frames
     sequences.ts      timelines: switching, views of stored timelines, loops, nesting and breaking apart
     motion.ts         tracked paths (what follows a point) and stabilization corrections, read at render time
-    subtitles.ts      SRT / WebVTT parsing and writing, captions laid on the timeline
+    subtitles.ts      SRT / WebVTT parsing and writing, captions laid on the timeline in four styles
+    easing.ts         28 named easing curves and cubic-bezier, for keyframes and presets
+    motion-presets.ts camera moves, entrances, exits and emphasis, baked into keyframes
+    beat-grid.ts      a music clip's beats on the timeline, through its trims and speed
     color-math.ts     tone curves (monotone cubic), colour wheels, HSL bands
     lut.ts            .cube LUT parsing (3D and 1D, custom domains)
     clipboard.ts      copy / paste of clips and their media, across projects
@@ -51,12 +55,21 @@ src/
     scenes.ts         shot changes: frame-to-frame HSV change against its neighbours
     sync.ts           multicam sync: onset envelopes cross-correlated by FFT, refined at 1 kHz
     tracker.ts        template tracking (NCC on a two-level pyramid) and camera-motion measurement
+    beats.ts          tempo, beats and downbeats: spectral flux, autocorrelation, dynamic programming
+    render-cache.ts   render previews: chunk keys from what's on screen, rendering, background rendering
+    render-player.ts  plays rendered chunks back, frame-exact, decoding ahead
+    upscale.ts        contrast-adaptive sharpening when a lower resolution is scaled up
+    preview-res.ts    the preview's resolution, stepping down while playing when it has to
+    matte-gl.ts       subject mattes applied as alpha on the GPU
   project/          session (new/open/save/recover, versions, collect), import, proxies, transcription, Whisper worker,
-                    subtitle files, and the footage tools wired to the editor (analysis-actions.ts)
+                    subtitle files, and the footage tools wired to the editor (analysis-actions.ts); subject
+                    mattes (segment.ts + its worker) and text behind subject (subject.ts); beat analysis (beats.ts)
   integrations/     AI brains, Blender / HyperFrames / MCP clients
     agent-tools.ts    the tool registry every AI uses
+    skills.ts         built-in skills (skills/*.md) and which tools point at them
     tools/            vision.ts (see) · inspect.ts (hear and read) · control.ts (act) · footage.ts (timelines,
-                      subtitles, scenes, multicam, stabilizing, tracking, render queue) · kit.ts
+                      subtitles, scenes, multicam, stabilizing, tracking, render queue) · web.ts · skills.ts ·
+                      subject.ts · beats.ts · kit.ts
   features/         UI: home, timeline, preview, media and generate panels, inspector,
                     Copilot, integrations hub, command palette, export
 electron/
@@ -68,9 +81,11 @@ electron/
   export.ts         streamed export (and proxy) writes, image-sequence folders, destinations picked
                     now and written later (the render queue), subtitle files beside exports
   updater.ts        updates from GitHub Releases (electron-updater)
+  render-cache.ts   rendered preview chunks on disk, per project, capped at 8 GB
+  offscreen.ts      offscreen windows that render exact pixels at any display scaling
   app-ipc.ts        file / project / export / window-capture / update IPC for the editor page only
-  integrations/     Blender, HyperFrames, MCP host, Lumen's MCP server, media generation
-    ai/               AI providers and OpenCode routing, effort, local agents, the Copilot's tool loop
+  integrations/     Blender, HyperFrames, MCP host, Lumen's MCP server, media generation, skills, the web
+    ai/               AI providers and OpenCode routing, effort, local agents, the Copilot's tool loop, chats
 ```
 
 ## The media engine
@@ -82,6 +97,13 @@ electron/
   - Loudness normalization measures the mix first, then renders it with the gain and a limiter.
 - **Stills** for the AI reuse the export's frame feeder, drawn without disturbing the live preview. Exports swap in their frame-exact frames only while each of their frames is drawn (`withVideoFrames`), so the preview keeps playing live while the render queue works.
 - **Transparent exports** draw with a cleared background instead of the timeline colour: a folder of numbered PNGs, or WebM whose alpha Mediabunny encodes as a second VP9 stream.
+
+## Render previews
+
+- **Chunks.** The timeline is cut into 2-second chunks. Each chunk's key hashes everything that decides its pixels: the app version, the render size and settings, and every visible layer's clips with their media and nested timelines. Same key, same picture, so a chunk is reused until something on screen there changes, and undo brings renders back.
+- **Rendering** replays the export's frame-exact compositor and encodes H.264 with WebCodecs. The main process writes each chunk to `userData/media/render-cache/<project id>/`, keeping at most 8 GB and dropping the oldest first.
+- **Playback.** Inside a rendered chunk, the preview shows the chunk's frames (decoded ahead with Mediabunny) instead of compositing. Chunks rendered below full size are scaled up with contrast-adaptive sharpening in WebGL.
+- **The bar** under the ruler marks chunks that may not play in real time (yellow) and rendered ones (green). While the editor is idle, heavy chunks render in the background, and any edit or playback stops that at once.
 
 ## Timelines and nesting
 
@@ -100,6 +122,11 @@ Scene detection, multicam sync, tracking and stabilization decode media with Med
 - **Scenes:** each frame (96 px wide) is compared with the last in hue, saturation and brightness; a cut is a jump several times its neighbours' average and above a floor, kept a minimum shot apart.
 - **Multicam:** every recording's sound becomes an onset envelope (rises in loudness, 100 per second); FFT cross-correlation against the reference finds the offset, refined within ±30 ms at 1 kHz.
 - **Tracking:** a patch is matched frame to frame by normalized cross-correlation, coarse at half size then refined to a fraction of a pixel, following its speed and slowly updating its template. Results map through the footage's placement (fit, transform, stabilization) into what follows: `clip.follow` or `mask.follow`, offsets applied at render time.
+- **Beats:** onsets are spectral flux at about 11 kHz. The tempo comes from their autocorrelation, leaning towards 120 BPM. Beats are tracked by dynamic programming (Ellis), and downbeats are found from low-frequency flux. The grid is stored on the media, drawn on the waveform, and used as snap targets.
+- **Subject mattes:** transformers.js runs background removal in a worker: MODNet for people, or BiRefNet lite for any subject on WebGPU.
+  - Frames are 768 px wide and steadied frame to frame.
+  - The matte is saved as a grayscale H.264 video (a PNG for a still): a hidden media item linked to its footage, and removed with it.
+  - The compositor turns it into alpha on the GPU, the same way in preview and export.
 - **Stabilization:** a grid of blocks is matched between consecutive frames; the camera's shift and turn are fitted from the blocks that agree (things moving on their own are dropped) and summed into a path. At render time the path is smoothed (Gaussian, `smooth` seconds) and the difference is taken out of the picture, zoomed to hide the edges.
 
 ## AI
@@ -115,12 +142,32 @@ Scene detection, multicam sync, tracking and stabilization decode media with Med
 
 **Pictures.** Tools return `withImages(json, images)`. Over MCP they become `image` content blocks. In the AI SDK loop, Claude receives them inside the tool result; other providers get them as a follow-up user message injected before the next step (older pictures are replaced with a note to keep requests small). If a model rejects image input, Lumen remembers it and continues the run from its completed steps without re-running tools. Conversation history keeps every step's tool calls and results, minus the pictures.
 
+**Chats.** Each project keeps its chats in `userData/copilot/chats/<project id>.json`. Beside them are each chat's model history and its Claude Code or Codex session, so a chat continues where it left off, even after a restart.
+
+**Thinking** streams as it arrives:
+
+- the AI SDK's reasoning parts: Claude's thinking, OpenAI's reasoning summaries and Gemini's thoughts, which are asked for;
+- Claude Code's thinking blocks;
+- Codex's reasoning items.
+
+**Skills** are SKILL.md files with a name and description in their frontmatter.
+
+- **Where they come from:** built in, the user's own (`userData/skills`), and Claude Code's (`~/.claude/skills`, read-only, off by default).
+- **How agents find them:** their index goes into the Copilot's instructions and into the MCP server's `initialize` instructions. Tool descriptions name the skill to load, and `use_skill` returns its body.
+
+**The web.**
+
+- **Pages** are fetched by the main process. It follows redirects itself and checks every hop's address after DNS, refusing private, loopback and link-local ones.
+- **Search** uses DuckDuckGo's HTML results.
+- **Screenshots** render offscreen in a separate session that blocks requests to private addresses.
+
 **Transcription** runs Whisper on the device (transformers.js + ONNX Runtime Web in a worker, WebGPU or WASM; the model downloads once through the main process and is cached), or through OpenAI or ElevenLabs.
 
 ## Integrations
 
 - **Blender.** Lumen finds Blender, writes a JSON spec and runs `blender -b --factory-startup -P runner.py`. The runner builds the scene — 3D titles with Lumen's fonts, a studio world for real metal reflections, baked keyframes so motion blur works; looping abstract backgrounds; or agent-written `bpy` (which needs the user's approval) — renders EEVEE to a PNG sequence and streams progress. With the BlenderMCP add-on, agents can also drive an open Blender (port 9876).
 - **HyperFrames.** Compositions are HTML + GSAP. Lumen loads them in a hidden, sandboxed, transparent Chromium window with the HyperFrames runtime injected, seeks each frame with the runtime's `renderSeek` and captures PNGs — no FFmpeg or headless-Chrome download.
+  - **Display scaling:** Windows clamps a window to the work area in DIPs. So for a scale k, the window is sized at 1/k with a device scale factor of k and a zoom of 1/k. That gives exact, centred pixels at any display scaling.
 - **MCP host.** Any MCP server by URL (Streamable HTTP, SSE fallback) or command (stdio). One-click catalog: Higgsfield, Runway and Replicate (OAuth), fal.ai (API key), Blender MCP. OAuth runs in the browser with a loopback redirect; tokens and header keys are encrypted with the OS keychain. Tools get forms generated from their JSON Schema; image and audio results land in the project.
 - **Lumen's MCP server.** A Streamable HTTP endpoint on `127.0.0.1:47910/mcp`, token-protected, refusing browser origins, forwarding every request to the editor page, which runs it through the same command system.
 - **ElevenLabs.** Voiceovers (character timings become a transcript), Scribe transcription, sound effects and music through the REST API.

@@ -2,7 +2,8 @@ import { dynamicTool, isStepCount, jsonSchema, streamText, type ModelMessage, ty
 import { COPILOT_INSTRUCTIONS, type AgentErrorCode, type AgentEvent, type AgentEventBody, type AgentRunRequest } from '../../../shared/ai'
 import { IPC, type BridgeTool } from '../../../shared/integrations'
 import { callEditorTool, editorTools, editorWindow } from '../editor-rpc'
-import { effortSettings } from './effort'
+import { deleteHistory, readHistory, writeHistory } from './chats'
+import { effortSettings, geminiEfforts, openaiEfforts, type ModelApi } from './effort'
 import { forgetLocalSession, runLocal, stopLocal } from './local-agents'
 import { languageModel, MissingKeyError } from './providers'
 
@@ -36,7 +37,37 @@ export function stopAgentRun(runId: string) {
 
 export function forgetConversation(conversationId: string) {
   histories.delete(conversationId)
+  deleteHistory(conversationId)
   forgetLocalSession(conversationId)
+}
+
+/** What a conversation remembers: this session's turns, or those saved before a restart. */
+function historyOf(conversationId: string) {
+  let h = histories.get(conversationId)
+  if (!h) {
+    h = readHistory(conversationId) ?? []
+    histories.set(conversationId, h)
+  }
+  return h
+}
+
+/**
+ * Asks reasoning models to show their thinking: OpenAI sends summaries of it
+ * and Gemini its thoughts only when asked (Claude's thinking streams as is).
+ */
+function thinkingOptions(api: ModelApi, modelId: string): Record<string, Record<string, unknown>> {
+  if (api === 'openai' && openaiEfforts(modelId).length) return { openai: { reasoningSummary: 'auto' } }
+  if (api === 'google' && geminiEfforts(modelId).length) return { google: { thinkingConfig: { includeThoughts: true } } }
+  return {}
+}
+
+type ProviderOptions = NonNullable<Parameters<typeof streamText>[0]['providerOptions']>
+
+/** Merges provider options one provider deep (effort settings and thinking display both live there). */
+function mergeOptions(...all: (Record<string, Record<string, unknown>> | undefined)[]) {
+  const out: Record<string, Record<string, unknown>> = {}
+  for (const opts of all) for (const [provider, values] of Object.entries(opts ?? {})) out[provider] = { ...out[provider], ...values }
+  return out
 }
 
 /** Zod's JSON Schema output carries a $schema key some providers reject. */
@@ -212,7 +243,7 @@ async function runModel(req: AgentRunRequest) {
     const pictures = new Map<string, Picture[]>()
     const tools = buildTools(await editorTools(), pictures, () => ({ native, vision }))
 
-    const stored = histories.get(req.conversationId) ?? []
+    const stored = historyOf(req.conversationId)
     const history = native ? stripReasoning(stored) : stored
     const user: ModelMessage = { role: 'user', content: req.context ? `${req.context}\n\n${req.prompt}` : req.prompt }
     // Steps already completed, carried into a retry so no tool runs twice.
@@ -229,13 +260,15 @@ async function runModel(req: AgentRunRequest) {
 
     for (;;) {
       try {
+        const effortOpts = effortSettings(api, effort)
         const result = streamText({
           model,
-          system: COPILOT_INSTRUCTIONS,
+          system: req.instructions ? `${COPILOT_INSTRUCTIONS}\n\n${req.instructions}` : COPILOT_INSTRUCTIONS,
           messages: [...history, user, ...carried],
           tools,
           headers,
-          ...effortSettings(api, effort),
+          ...effortOpts,
+          providerOptions: mergeOptions(effortOpts.providerOptions, thinkingOptions(api, modelId)) as ProviderOptions,
           stopWhen: isStepCount(MAX_STEPS),
           abortSignal: controller.signal,
           prepareStep: ({ messages, responseMessages }) => {
@@ -252,6 +285,9 @@ async function runModel(req: AgentRunRequest) {
               emit({ type: 'text', delta: afterTool && wroteText ? `\n\n${part.text}` : part.text })
               wroteText = true
               afterTool = false
+              break
+            case 'reasoning-delta':
+              if (part.text) emit({ type: 'reasoning', delta: part.text })
               break
             case 'tool-call':
               afterTool = true
@@ -272,7 +308,9 @@ async function runModel(req: AgentRunRequest) {
         }
         // Every step's messages — tool calls and results included — so later turns remember what was looked up.
         const steps = (await result.responseMessages) as ModelMessage[]
-        histories.set(req.conversationId, trim(forHistory([...stored, user, ...carried, ...steps])))
+        const next = trim(forHistory([...stored, user, ...carried, ...steps]))
+        histories.set(req.conversationId, next)
+        writeHistory(req.conversationId, next)
         emit({ type: 'done', usage })
         return
       } catch (err) {

@@ -19,7 +19,7 @@ Lumen is a desktop video editor where the AI isn't a chatbot bolted onto a timel
 [![CI](https://img.shields.io/github/actions/workflow/status/Mas-inx/lumen-ai-video-editor/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/Mas-inx/lumen-ai-video-editor/actions/workflows/ci.yml)
 ![License: MIT](https://img.shields.io/badge/license-MIT-d6ee00?style=flat-square)
 ![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-2b2c26?style=flat-square)
-![108 AI tools](https://img.shields.io/badge/AI%20tools-108-d6ee00?style=flat-square)
+![119 AI tools](https://img.shields.io/badge/AI%20tools-119-d6ee00?style=flat-square)
 ![MCP server and client](https://img.shields.io/badge/MCP-server%20%2B%20client-2b2c26?style=flat-square)
 ![Electron 44](https://img.shields.io/badge/Electron-44-2b2c26?style=flat-square&logo=electron)
 ![React 19](https://img.shields.io/badge/React-19-2b2c26?style=flat-square&logo=react)
@@ -58,14 +58,23 @@ It's an open-source alternative to editors like CapCut, Filmora and Descript —
 <img src="docs/screenshots/timeline.jpg" alt="Lumen's multi-track timeline: captions, a closing 3D title, overlay renders (3D title, lower third, kinetic type), three Blender backgrounds on the magnetic main track, narration and a ducked music bed, with markers on the ruler" />
 
 - **Magnetic main track** that keeps your story edge to edge, with free tracks above and below for B-roll, overlays, titles, captions, voice, music and sound effects.
-- Split, trim, ripple, slide into gaps, snapping, markers, speed and reverse, and **keyframes with easing** on every property.
+- Split, trim, ripple, slide into gaps, snapping, markers, speed and reverse, and **keyframes** on every property:
+  - 28 easing curves per keyframe, or your own cubic-bezier;
+  - one-click **motion presets** baked into keyframes: Ken Burns, push-ins, pans, pops, slides, and a punch that lands on the beat;
+  - keyframes you drag right on the timeline.
+- **Render previews** like Premiere and Filmora:
+  - a bar under the ruler shows what may stutter and what's rendered;
+  - `Enter` renders in to out, or Lumen renders heavy stretches while you're idle;
+  - render at Full, 1/2, 1/4 or 1/8 resolution, sharpened back up on playback.
+- **Smooth on modest computers.** Nothing redraws while idle, filmstrips and waveforms are painted once and reused, and the preview drops resolution when it has to.
 - **Pro editing tools:** roll, slip and slide; ripple trim and insert or overwrite on any track; in and out points to play, lift, extract or export a stretch; copy, cut, paste and *paste attributes*; crop with rounded corners; freeze frames and **speed ramps**; detached sound for J- and L-cuts; groups; and solo and reorder for tracks.
 - **2D and 3D transitions** (cube, flip, door, page curl, shatter…), effects, **colour looks and grading**, and extruded **3D titles** rendered live.
 - **Real colour grading** on the GPU: tone curves, lift / gamma / gain wheels, HSL by colour range, imported **.cube LUTs**, and **scopes** (waveform, RGB parade, vectorscope, histogram) beside the program monitor.
 - **Compositing:** chroma and luma keys with an eyedropper and spill suppression; feathered rectangle and ellipse **masks** you drag on the canvas (on adjustment layers too, to grade just part of the frame); outlined titles in **any font** — imported, or picked from those installed on your computer, and embedded in the project.
+- **Text behind subject:** on-device AI cuts the person (or, with a GPU, any subject) out of a shot. Slip a title between them and the background, remove the background, or remove the person. One click, one undo step, frame-exact on export.
 - **Sound that drives the picture:** a Web Audio mix with per-clip volume, fades and keyframes, *Studio voice* clean-up, on-device noise reduction and 15 built-in sound effects.
 - **A real mixer:** a channel per track and a master bus, each with a fader, pan, a draggable EQ curve, a compressor and a limiter, with live meters. Transitions crossfade the sound too, and exports can be **loudness-normalized** to −14 LUFS for YouTube and Spotify, −16 for Apple, or broadcast's −23 and −24.
-- Import **MP4, MOV, WebM, MKV, MP3, WAV, FLAC, PNG, JPEG, WebP, GIF** and more — by dialog, folder or drag and drop. Files stay where they are; missing ones can be relinked.
+- Import **MP4, MOV, WebM, MKV, MP3, WAV, FLAC, PNG, JPEG, WebP, GIF** and more — by dialog, folder or drag and drop. Files stay where they are; missing ones can be relinked. Select many at once (`Ctrl`/`Shift`-click or drag a box) to add, transcribe or remove them together.
 - `.lumen` **project files** that survive moving folders between drives, crash recovery, and undo for everything. `Ctrl+K` reaches every command.
 - **Built for long, heavy projects:** **proxies** for 4K footage (made automatically in the background; exports always use the originals), hour-long recordings that **stream** instead of filling memory, **version history** (every save, plus a snapshot every ten minutes while you edit, restorable any time) and **Collect project** to gather a project and all its media into one folder.
 - **Multiple timelines and nesting:** as many timelines per project as you like — another cut, or a vertical copy reframed in one click — and **nest** any clips into a timeline of their own to grade, speed up or cut them as one piece (double-click to step inside; picture and sound both play through).
@@ -88,6 +97,8 @@ Ask in plain words — or talk to it. The Copilot plans, uses Lumen's tools, and
 | “Is the music too loud under my voice?” | measures loudness per track in LUFS and ducks the music under speech |
 | “Make a vertical version for Reels” | reframes the canvas and every layer to 9:16 |
 | “Find where I talk about the mountains” | searches inside transcripts and jumps there |
+| “Put the title behind me” | cuts you out of the shot on your computer and slips the title between you and the background |
+| “Cut the B-roll to the music” | finds the beat and lays the clips out on it |
 
 You see every step, including the frames it looked at, and **Undo all** reverts a whole answer.
 
@@ -101,13 +112,20 @@ What the AI sees when it watches your edit — one call to `get_contact_sheet`:
 
 **Brains:** your own **Claude Code** or **Codex** (Lumen runs them headless, with only Lumen's tools), or a model with your key: **Anthropic, OpenAI, Google Gemini, OpenRouter, OpenCode Zen, OpenCode Go, Ollama, LM Studio** or any OpenAI-compatible endpoint. Pick the model and the **effort** — how hard it thinks, from Low to Max (Ultra on Codex) — for every one of them, Claude Code's Fable, Opus, Sonnet and Haiku and Codex's own model list included. Keys are encrypted by Windows (DPAPI) and never leave the app's main process.
 
+- **Chats per project.** Start new chats, switch between them, and pick up where you left off after a restart.
+- **See its thinking** as it streams, then expand it any time.
+- **Copy** any message or code block.
+- **The web:** it can search, read pages, and look at a page as a screenshot, and links in its replies show previews.
+- **Skills:** craft guides it loads before the work, for short-form editing, motion design, grading, sound, Blender and generation prompts. Add your own in the SKILL.md format. Claude Code, Codex and any agent on Lumen's MCP server use them too.
+
 ### Smart edits
 
 One-click suggestions on the timeline, and tools for every AI:
 
 - **Transcribe** on the device with Whisper (GPU via WebGPU, or CPU), or with OpenAI or ElevenLabs.
 - **Remove pauses** — the whole timeline closes up around each cut, so captions, B-roll and markers stay in sync while music plays on; with several speakers it only cuts where everyone is quiet.
-- **Captions** from the transcript, on their own track — or import **SRT / WebVTT** files (drop them on the timeline), and export the captions as SRT or WebVTT, on their own or next to the video.
+- **Captions** from the transcript, on their own track, in four styles: *Clean*, *Bold*, *Word by word* (key words in an accent colour) and *Boxed*. You can also import **SRT / WebVTT** files (drop them on the timeline), and export the captions as SRT or WebVTT, on their own or next to the video.
+- **Find the beat** of a song: the tempo, beats and bars show on its waveform, cuts snap to them, and selected clips can be laid out on the beat.
 - **Duck music** under speech with volume keyframes.
 - **Reframe** between landscape, vertical, square and portrait.
 - **Hear the mix** — loudness in LUFS against the −14 streaming target, peaks, clipping and silences.
@@ -117,7 +135,7 @@ One-click suggestions on the timeline, and tools for every AI:
 <img src="docs/screenshots/generate.jpg" alt="Lumen's Generate panel with motion graphic templates — lower third, title card, kinetic type and stat counter" />
 
 - **Blender** — real extruded 3D titles, looping abstract backgrounds and AI-written scenes, rendered in the background and dropped into your media.
-- **HyperFrames** motion graphics — lower thirds, title cards, kinetic type, stat counters or any HTML + GSAP composition — rendered inside Lumen.
+- **HyperFrames** motion graphics, rendered inside Lumen and pixel-exact at any display scaling. Choose a lower third, title card, kinetic type, stat counter, pull quote or chapter marker, or any HTML + GSAP composition. They're designed to look made, not generated: considered type, easing that differs per element, and holds long enough to read.
 - **Images and video** from your OpenAI key (GPT Image) or Gemini key (Gemini image models, Veo video), with model lists fetched live — new models show up without an update.
 - **Voiceovers, sound effects and music** with ElevenLabs.
 - Anything from an **MCP server** — Higgsfield, Runway, Replicate, fal.ai or your own.

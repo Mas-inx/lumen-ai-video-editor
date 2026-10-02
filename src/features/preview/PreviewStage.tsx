@@ -11,8 +11,12 @@ import { dispatch, getProject, useEditor } from '@/editor/store'
 import type { Clip, Crop, Mask } from '@/editor/types'
 import { useUI, type TrackEdit } from '@/editor/ui-store'
 import { AnalysisCancelled, trackMotion, withProgress } from '@/project/analysis-actions'
-import { renderFrame, type ClipBounds } from '@/engine/compositor'
+import { primeVideos, renderFrame, restVideos, type ClipBounds } from '@/engine/compositor'
 import { onMediaReady } from '@/engine/media'
+import { previewScale, recordPlaybackDraw, resetAutoRes, useAutoRes } from '@/engine/preview-res'
+import { useRenders } from '@/engine/render-cache'
+import { closeReaders, renderedFrame } from '@/engine/render-player'
+import { drawUpscaled } from '@/engine/upscale'
 import { useElementSize } from '@/lib/hooks'
 import { cn } from '@/lib/cn'
 
@@ -20,8 +24,6 @@ import { cn } from '@/lib/cn'
 export const useBounds = create<{ bounds: Map<string, ClipBounds> }>(() => ({ bounds: new Map() }))
 /** Always-fresh bounds from the last draw, for hit-testing without re-renders. */
 const latestBounds = { current: new Map<string, ClipBounds>() }
-
-const quality = { full: 1, half: 0.5 }
 
 const frameListeners = new Set<(canvas: HTMLCanvasElement) => void>()
 
@@ -31,7 +33,16 @@ export function onPreviewFrame(fn: (canvas: HTMLCanvasElement) => void) {
   return () => void frameListeners.delete(fn)
 }
 
-export function PreviewStage({ q = 'full' }: { q?: keyof typeof quality }) {
+/** Draws below full resolution go here first, then get scaled up onto the viewer. */
+let lowRes: HTMLCanvasElement | null = null
+
+// Scrubbing (the paused playhead moving in quick steps) draws at the playback
+// resolution so it keeps up, and sharpens to the paused resolution once it rests.
+let lastSeekAt = -Infinity
+let scrubbing = false
+let sharpen: ReturnType<typeof setTimeout> | undefined
+
+export function PreviewStage() {
   const stageRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const { width: sw, height: sh } = useElementSize(stageRef)
@@ -52,15 +63,51 @@ export function PreviewStage({ q = 'full' }: { q?: keyof typeof quality }) {
   useLayoutEffect(() => {
     const canvas = canvasRef.current
     if (!canvas || !fw || !fh) return
-    const dpr = Math.min(2, window.devicePixelRatio || 1) * quality[q]
+    const dpr = Math.min(2, window.devicePixelRatio || 1)
     canvas.width = Math.max(1, Math.round(fw * dpr))
     canvas.height = Math.max(1, Math.round(fh * dpr))
     const ctx = canvas.getContext('2d', { alpha: false })!
+    let lastFrame = -1
     const draw = () => {
       raf.current = 0
       if (!needsRender.current) return
       needsRender.current = false
-      const { bounds } = renderFrame(ctx, getProject(), usePlayback.getState().frame)
+      const { frame, playing } = usePlayback.getState()
+      const ui = useUI.getState()
+      const project = getProject()
+      // Rendered stretches play from their files: no compositing at all.
+      const rendered = playing ? renderedFrame(project, frame) : closeReaders()
+      if (rendered) {
+        const { sample } = rendered
+        drawUpscaled(ctx, sample.toCanvasImageSource(), sample.displayWidth, sample.displayHeight, ui.upscale)
+        // The live players rest meanwhile, and get rolling just before live drawing takes over again.
+        if (rendered.endingSoon) primeVideos(project, frame)
+        else restVideos()
+        lastFrame = frame
+        for (const fn of frameListeners) fn(canvas)
+        return
+      }
+      const scale = previewScale(ui.playbackRes, ui.pausedRes, playing || scrubbing)
+      const t0 = performance.now()
+      let bounds: Map<string, ClipBounds>
+      if (scale >= 0.999) ({ bounds } = renderFrame(ctx, project, frame))
+      else {
+        // Render small, then scale it up onto the viewer.
+        lowRes ??= document.createElement('canvas')
+        const w = Math.max(2, Math.round(canvas.width * scale))
+        const h = Math.max(2, Math.round(canvas.height * scale))
+        if (lowRes.width !== w || lowRes.height !== h) {
+          lowRes.width = w
+          lowRes.height = h
+        }
+        ;({ bounds } = renderFrame(lowRes.getContext('2d', { alpha: false })!, project, frame))
+        drawUpscaled(ctx, lowRes, w, h, ui.upscale)
+      }
+      if (playing) {
+        const fps = project.settings.fps
+        recordPlaybackDraw(performance.now() - t0, lastFrame >= 0 ? frame - lastFrame - 1 : 0, 1000 / fps)
+      }
+      lastFrame = playing ? frame : -1
       latestBounds.current = bounds
       for (const fn of frameListeners) fn(canvas)
       const prev = useBounds.getState().bounds
@@ -76,14 +123,36 @@ export function PreviewStage({ q = 'full' }: { q?: keyof typeof quality }) {
       cancelAnimationFrame(raf.current)
       raf.current = 0
     }
-  }, [fw, fh, q])
+  }, [fw, fh])
 
   useEffect(() => {
     const req = () => requestRender.current()
     const unsubs = [
-      usePlayback.subscribe((s, p) => s.frame !== p.frame && req()),
+      // Stopping redraws too: paused frames render at the paused resolution.
+      usePlayback.subscribe((s, p) => {
+        if (s.frame !== p.frame && !s.playing && !p.playing) {
+          const now = performance.now()
+          scrubbing = now - lastSeekAt < 150
+          lastSeekAt = now
+          clearTimeout(sharpen)
+          if (scrubbing)
+            sharpen = setTimeout(() => {
+              scrubbing = false
+              req()
+            }, 160)
+        }
+        if (s.frame !== p.frame || s.playing !== p.playing) req()
+      }),
       useEditor.subscribe((s, p) => s.project !== p.project && req()),
-      useUI.subscribe((s, p) => (s.selection !== p.selection || s.useProxies !== p.useProxies) && req()),
+      useUI.subscribe(
+        (s, p) =>
+          (s.selection !== p.selection || s.useProxies !== p.useProxies || s.playbackRes !== p.playbackRes || s.pausedRes !== p.pausedRes || s.upscale !== p.upscale || s.usePreviews !== p.usePreviews) &&
+          req(),
+      ),
+      useRenders.subscribe((s, p) => s.files !== p.files && req()),
+      useAutoRes.subscribe(req),
+      // Auto learns per project: a new one starts at full resolution again.
+      useEditor.subscribe((s, p) => s.project.id !== p.project.id && resetAutoRes()),
       onMediaReady(req),
     ]
     // Canvas text needs the web fonts actually loaded before the first draw;
@@ -92,6 +161,7 @@ export function PreviewStage({ q = 'full' }: { q?: keyof typeof quality }) {
     document.fonts.addEventListener('loadingdone', req)
     return () => {
       unsubs.forEach((u) => u())
+      clearTimeout(sharpen)
       document.fonts.removeEventListener('loadingdone', req)
     }
   }, [])
@@ -438,7 +508,8 @@ type Handle = 'move' | 'nw' | 'ne' | 'sw' | 'se' | 'rotate'
 function Gizmo({ scale }: { scale: number }) {
   const selection = useUI((s) => s.selection)
   const playing = usePlayback((s) => s.playing)
-  const frame = usePlayback((s) => s.frame)
+  // The gizmos hide while playing, so they follow the playhead only while paused (no re-render per frame).
+  const frame = usePlayback((s) => s.pausedFrame)
   const bounds = useBounds((s) => s.bounds)
   const clipId = selection.length === 1 ? selection[0] : null
   const clip = useEditor((s) => (clipId ? s.project.clips[clipId] : undefined))

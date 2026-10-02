@@ -85,6 +85,9 @@ const cleared = new Set<string>()
 function onJob(job: Job) {
   if (cleared.has(job.id)) return
   const prev = useIntegrations.getState().jobs[job.id]
+  // The reply to the request that started a job comes after the job's own
+  // events: a job that ended at once must not go back to "running".
+  if (prev && prev.status !== 'running' && job.status === 'running') return
   useIntegrations.setState((s) => ({ jobs: { ...s.jobs, [job.id]: job } }))
   if (job.status === 'done' && job.assets?.length && !useIntegrations.getState().imported[job.id]) void importJob(job)
   if (job.status === 'done' && job.transcript && transcribing.has(job.id)) attachTranscript(job.id, job.transcript)

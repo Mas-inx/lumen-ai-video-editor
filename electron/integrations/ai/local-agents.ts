@@ -6,6 +6,7 @@ import readline from 'node:readline'
 import { COPILOT_INSTRUCTIONS, isEffort, type AgentEvent, type AgentRunRequest, type Effort, type LocalAgentId, type LocalAgentState, type ModelInfo } from '../../../shared/ai'
 import { ensureDir, userDir } from '../paths'
 import { bridgeEndpoint } from '../server'
+import { loadSessions, saveSessions } from './chats'
 
 /**
  * The user's own Claude Code and Codex installs as Copilot brains.
@@ -248,12 +249,21 @@ export async function signInLocal(id: LocalAgentId): Promise<LocalAgentState> {
 
 // ─── Runs ────────────────────────────────────────────────────────────────
 
-const sessions = new Map<string, string>()
+// Each chat's Claude Code session / Codex thread, kept across restarts so a chat carries on where it left off.
+const sessions = loadSessions()
 const children = new Map<string, ChildProcess>()
 const stopped = new Set<string>()
 
+function remember(key: string, session: string) {
+  if (sessions.get(key) === session) return
+  sessions.delete(key)
+  sessions.set(key, session)
+  saveSessions(sessions)
+}
+
 export const forgetLocalSession = (conversationId: string) => {
   for (const key of [...sessions.keys()]) if (key.endsWith(`:${conversationId}`)) sessions.delete(key)
+  saveSessions(sessions)
 }
 
 export function stopLocal(runId: string) {
@@ -327,7 +337,7 @@ async function runClaude(req: AgentRunRequest, bin: string, url: string, token: 
   const config = path.join(dir, 'claude-mcp.json')
   fs.writeFileSync(config, JSON.stringify({ mcpServers: { lumen: { type: 'http', url, headers: { Authorization: `Bearer ${token}` } } } }), { mode: 0o600 })
   const instructions = path.join(dir, 'copilot-instructions.md')
-  fs.writeFileSync(instructions, `${COPILOT_INSTRUCTIONS}\n- The Lumen tools are the MCP server named "lumen".`)
+  fs.writeFileSync(instructions, `${COPILOT_INSTRUCTIONS}\n- The Lumen tools are the MCP server named "lumen".${req.instructions ? `\n\n${req.instructions}` : ''}`)
   const key = `claude-code:${req.conversationId}`
   const session = sessions.get(key)
   const args = [
@@ -357,6 +367,7 @@ async function runClaude(req: AgentRunRequest, bin: string, url: string, token: 
 
   let finished = false
   let streamedText = false
+  let streamedThinking = false
   let afterTool = false
   const text = (delta: string) => {
     if (!delta) return
@@ -372,19 +383,24 @@ async function runClaude(req: AgentRunRequest, bin: string, url: string, token: 
     } catch {
       continue
     }
-    if (msg.session_id) sessions.set(key, msg.session_id)
+    if (msg.session_id) remember(key, msg.session_id)
     if (msg.type === 'system' && msg.subtype === 'init') {
       const lumen = (msg.mcp_servers as { name: string; status: string }[] | undefined)?.find((s) => s.name === 'lumen')
       if (lumen && lumen.status !== 'connected') emit({ runId: req.runId, type: 'status', message: `Lumen tools: ${lumen.status}` })
     } else if (msg.type === 'stream_event') {
       const ev = msg.event
       if (ev?.type === 'content_block_delta' && ev.delta?.type === 'text_delta') text(ev.delta.text)
+      else if (ev?.type === 'content_block_delta' && ev.delta?.type === 'thinking_delta' && ev.delta.thinking) {
+        streamedThinking = true
+        emit({ runId: req.runId, type: 'reasoning', delta: String(ev.delta.thinking) })
+      }
     } else if (msg.type === 'assistant') {
       for (const block of msg.message?.content ?? []) {
         if (block.type === 'tool_use') {
           afterTool = true
           emit({ runId: req.runId, type: 'tool-start', callId: block.id, tool: String(block.name).replace(/^mcp__lumen__/, ''), input: block.input })
         } else if (block.type === 'text' && !streamedText) text(block.text)
+        else if (block.type === 'thinking' && !streamedThinking && block.thinking) emit({ runId: req.runId, type: 'reasoning', delta: `${String(block.thinking)}\n\n` })
       }
     } else if (msg.type === 'user') {
       for (const block of msg.message?.content ?? []) {
@@ -431,7 +447,7 @@ async function runCodex(req: AgentRunRequest, bin: string, url: string, token: s
     : ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'read-only', '-C', workspace, ...mcp, ...turn, '-']
   const { child, stderr, exited } = start(req, bin, args, { LUMEN_MCP_TOKEN: token }, workspace)
   // Codex has no system-prompt flag in exec mode: brief it at the start of a thread.
-  child.stdin!.end(thread ? prompt : `${COPILOT_INSTRUCTIONS}\n- The Lumen tools are the MCP server named "lumen".\n\n${prompt}`)
+  child.stdin!.end(thread ? prompt : `${COPILOT_INSTRUCTIONS}\n- The Lumen tools are the MCP server named "lumen".${req.instructions ? `\n\n${req.instructions}` : ''}\n\n${prompt}`)
   emit({ runId: req.runId, type: 'status', message: 'Codex is working…' })
 
   let finished = false
@@ -444,11 +460,12 @@ async function runCodex(req: AgentRunRequest, bin: string, url: string, token: s
     } catch {
       continue
     }
-    if (ev.type === 'thread.started' && ev.thread_id) sessions.set(key, ev.thread_id)
+    if (ev.type === 'thread.started' && ev.thread_id) remember(key, ev.thread_id)
     else if (ev.type === 'item.started' || ev.type === 'item.completed') {
       const item = ev.item ?? {}
       const done = ev.type === 'item.completed'
-      if (item.type === 'agent_message' && done && item.text) {
+      if (item.type === 'reasoning' && done && item.text) emit({ runId: req.runId, type: 'reasoning', delta: `${String(item.text)}\n\n` })
+      else if (item.type === 'agent_message' && done && item.text) {
         emit({ runId: req.runId, type: 'text', delta: wroteText || afterTool ? `\n\n${item.text}` : item.text })
         wroteText = true
         afterTool = false

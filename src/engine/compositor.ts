@@ -19,6 +19,7 @@ import { gpuGrade, needsGpuGrade } from './gl-grade'
 import { usePlayback } from '@/editor/playback'
 import { useUI } from '@/editor/ui-store'
 import { grainCanvas } from './grain'
+import { applyMatte } from './matte-gl'
 import { beginVideoFrame, endVideoFrame, getImage, isExporting, sequenceFrame, sourceSize, videoFrame } from './media'
 import { renderLayer3D } from './three/layer'
 import { createStage, frameStage, scratchCanvas as scratchLayer, type Stage } from './three/stage'
@@ -624,6 +625,8 @@ function renderMediaLayer(project: Project, clip: Clip, local: number, W: number
     else if (img) rect = drawContain(lctx, img, W, H, stab)
   }
 
+  if (clip.matte) applySubjectMatte(lctx, project, clip, local, W, H, t, stab)
+
   const full = rect
   let shape: Path2D | null = null
   if (clip.crop) {
@@ -678,6 +681,47 @@ function renderMediaLayer(project: Project, clip: Clip, local: number, W: number
     lctx.restore()
   }
   return { canvas: layerCanvas, rect, full, graded }
+}
+
+/** Players and decoders of a clip's subject matte go by the clip's key plus this. */
+const MATTE_KEY = '#matte'
+
+/**
+ * Cuts a layer down to the clip's subject (or, inverted, everything but it):
+ * the matte frame is drawn exactly like the picture — same fit, same
+ * stabilization — and its brightness becomes the layer's alpha.
+ */
+function applySubjectMatte(lctx: CanvasRenderingContext2D, project: Project, clip: Clip, local: number, W: number, H: number, t: number, stab?: Correction) {
+  const m = clip.matte!
+  const asset = project.assets[m.assetId]
+  let frame: CanvasImageSource | null = null
+  if (asset && asset.source.type === 'file' && !asset.source.missing) {
+    if (asset.kind === 'image') {
+      const img = getImage(asset.source.url)
+      if (img instanceof HTMLImageElement) frame = img
+    } else frame = videoFrame(renderKey(clip, keyPrefix) + MATTE_KEY, asset.source.url, Math.max(0, t - m.from), usePlayback.getState().playing, playRate(clip, local))
+  }
+  if (!frame) {
+    // The matte is still loading: show nothing of a cut-out rather than the whole picture over what's behind it.
+    if (!m.invert) lctx.clearRect(0, 0, W, H)
+    return
+  }
+  const mc = scratch('matte', W, H)
+  const mctx = mc.getContext('2d')!
+  resetCtx(mctx)
+  mctx.fillStyle = '#000'
+  mctx.fillRect(0, 0, W, H)
+  drawContain(mctx, frame, W, H, stab)
+  if (!applyMatte(lctx.canvas, mc, m.invert)) {
+    // No WebGL: a hard-edged cut from the matte's brightness, on the CPU.
+    const layer = lctx.getImageData(0, 0, W, H)
+    const matte = mctx.getImageData(0, 0, W, H).data
+    for (let i = 0; i < layer.data.length; i += 4) {
+      const k = (m.invert ? 255 - matte[i] : matte[i]) / 255
+      layer.data[i + 3] = Math.round(layer.data[i + 3] * k)
+    }
+    lctx.putImageData(layer, 0, 0)
+  }
 }
 
 /**
@@ -982,6 +1026,8 @@ export interface DrawnMedia {
   view: Project
   /** Its player / decoder key. */
   key: string
+  /** Seconds to take off the clip's source time (a subject matte starts where it was made from). */
+  offset?: number
 }
 
 /**
@@ -1005,8 +1051,33 @@ export function mediaDrawnAt(project: Project, frame: number, prefix = '', level
         const nf = clipSourceTime(c, l, project.settings.fps) * view.settings.fps
         const angle = view.sequence?.multicam ? angleTrackOf(view, c) : undefined
         out.push(...mediaDrawnAt(view, nf, `${prefix}${c.id}>`, level + 1, angle))
-      } else out.push({ clip: c, local: l, view: project, key: renderKey(c, prefix) })
+      } else {
+        out.push({ clip: c, local: l, view: project, key: renderKey(c, prefix) })
+        if (c.matte) out.push({ clip: { ...c, assetId: c.matte.assetId }, local: l, view: project, key: renderKey(c, prefix) + MATTE_KEY, offset: c.matte.from })
+      }
     }
   }
   return out
+}
+
+/**
+ * Keeps the live players of the video drawn at `frame` in step without drawing
+ * anything: while rendered previews play, just before live drawing takes over.
+ */
+export function primeVideos(project: Project, frame: number) {
+  beginVideoFrame()
+  const playing = usePlayback.getState().playing
+  for (const { clip, local, view, key, offset } of mediaDrawnAt(project, frame)) {
+    const asset = clip.assetId ? view.assets[clip.assetId] : undefined
+    if (!asset || asset.source.missing || asset.source.type !== 'file' || asset.kind !== 'video') continue
+    const url = asset.proxy && useUI.getState().useProxies ? asset.proxy.url : asset.source.url
+    videoFrame(key, url, Math.max(0, clipSourceTime(clip, local, view.settings.fps) - (offset ?? 0)), playing, playRate(clip, local))
+  }
+  endVideoFrame()
+}
+
+/** Pauses every live video player (rendered previews are showing instead). */
+export function restVideos() {
+  beginVideoFrame()
+  endVideoFrame()
 }

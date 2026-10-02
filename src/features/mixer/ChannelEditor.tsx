@@ -12,6 +12,7 @@ import { DEFAULT_BUS, DEFAULT_COMPRESSOR, DEFAULT_EQ, DEFAULT_LIMITER } from '@/
 import { dispatch, useEditor } from '@/editor/store'
 import type { CompressorSettings, EqSettings, LimiterSettings } from '@/editor/types'
 import { audioEngine } from '@/engine/audio-engine'
+import { onMeterFrame } from '@/engine/meter-clock'
 import { eqResponse, logFrequencies } from '@/engine/eq-response'
 import { cn } from '@/lib/cn'
 import { clamp } from '@/lib/math'
@@ -196,18 +197,16 @@ function Processor({
 function Reduction({ target, which }: { target: Target; which: 'compressor' | 'limiter' }) {
   const bar = useRef<HTMLSpanElement>(null)
   const label = useRef<HTMLSpanElement>(null)
-  useEffect(() => {
-    let raf = 0
-    const tick = () => {
-      const r = audioEngine.reduction(target)?.[which] ?? 0
-      const db = Math.min(0, r)
-      if (bar.current) bar.current.style.width = `${Math.min(100, (-db / 20) * 100)}%`
-      if (label.current) label.current.textContent = db < -0.05 ? `${db.toFixed(1)} dB` : ''
-      raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-  }, [target, which])
+  useEffect(
+    () =>
+      onMeterFrame(() => {
+        const r = audioEngine.reduction(target)?.[which] ?? 0
+        const db = Math.min(0, r)
+        if (bar.current) bar.current.style.width = `${Math.min(100, (-db / 20) * 100)}%`
+        if (label.current) label.current.textContent = db < -0.05 ? `${db.toFixed(1)} dB` : ''
+      }),
+    [target, which],
+  )
   return (
     <span className="flex items-center gap-1.5" title="Gain reduction">
       <span className="relative h-1.5 w-16 overflow-hidden rounded-full bg-black/50">

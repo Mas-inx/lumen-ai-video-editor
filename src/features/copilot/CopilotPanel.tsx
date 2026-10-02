@@ -1,6 +1,6 @@
-import { ArrowUp, AudioLines, Check, CircleAlert, CircleX, Image as ImageIcon, LoaderCircle, Mic, Paperclip, PlugZap, RotateCcw, Square, Trash, Upload, Video, X } from 'lucide-react'
+import { ArrowUp, AudioLines, Brain, Check, ChevronRight, CircleAlert, CircleX, History, Image as ImageIcon, LoaderCircle, Mic, Paperclip, Pencil, PlugZap, Plus, RotateCcw, Square, Trash, Upload, Video, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
-import { Fragment, useEffect, useMemo, useRef, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { create } from 'zustand'
 import { AiSparkle } from '@/components/brand'
 import { IconButton } from '@/components/ui/button'
@@ -15,7 +15,28 @@ import { pickAndImport } from '@/project/media-import'
 import { assetThumb } from '@/features/assets/shared'
 import { BrainPicker } from './BrainPicker'
 import { EffortPicker } from './EffortPicker'
-import { attach, canUndoAll, detach, sendPrompt, stopCopilot, undoMessage, useAttachments, useCopilot, type Message, type ToolCall } from './store'
+import type { WebPreview } from '@shared/integrations'
+import { api } from '@/integrations/store'
+import { CopyButton, linksIn, Markdown } from './Markdown'
+import {
+  attach,
+  canUndoAll,
+  chatTitle,
+  deleteChat,
+  detach,
+  mergeChats,
+  newChat,
+  openChat,
+  renameChat,
+  sendPrompt,
+  stopCopilot,
+  undoMessage,
+  useAttachments,
+  useCopilot,
+  type Chat,
+  type Message,
+  type ToolCall,
+} from './store'
 import { STARTERS } from './suggestions'
 import { useVoiceInput } from './voice'
 
@@ -25,7 +46,9 @@ export function CopilotPanel() {
 
   // Stick to the bottom as replies stream in.
   const last = messages[messages.length - 1]
-  const streamKey = last ? `${last.id}:${last.shown}:${last.outroShown}:${last.outro?.length}:${last.calls?.map((c) => `${c.status}${c.images?.length ?? ''}`).join()}:${last.phase}:${last.status}` : ''
+  const streamKey = last
+    ? `${last.id}:${last.shown}:${last.outroShown}:${last.outro?.length}:${last.reasoning?.length}:${last.calls?.map((c) => `${c.status}${c.images?.length ?? ''}`).join()}:${last.phase}:${last.status}`
+    : ''
   useEffect(() => {
     const el = scrollRef.current
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
@@ -52,8 +75,8 @@ export function CopilotPanel() {
 function StatusBar() {
   const servers = useIntegrations((s) => s.servers)
   const tools = useMemo(() => agentTools(servers), [servers])
-  const clear = useCopilot((s) => s.clear)
   const hasMessages = useCopilot((s) => s.messages.length > 0)
+  const busy = useCopilot((s) => s.busy)
   return (
     <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line px-4 text-2xs">
       <BrainPicker />
@@ -80,11 +103,129 @@ function StatusBar() {
           </div>
         </PopoverContent>
       </Popover>
-      {hasMessages && (
-        <IconButton size="xs" label="Clear conversation" onClick={clear}>
-          <Trash />
+      <ChatsMenu />
+      <IconButton size="xs" label={busy ? 'Wait for the reply (or stop it) to start a new chat' : 'New chat'} disabled={busy || !hasMessages} onClick={newChat}>
+        <Plus />
+      </IconButton>
+    </div>
+  )
+}
+
+function ago(ms: number) {
+  const s = Math.max(0, (Date.now() - ms) / 1000)
+  if (s < 60) return 'just now'
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`
+  if (s < 86400 * 7) return `${Math.floor(s / 86400)} d ago`
+  return new Date(ms).toLocaleDateString()
+}
+
+/** This project's chats: open one, rename it, delete it. */
+function ChatsMenu() {
+  const [open, setOpen] = useState(false)
+  const busy = useCopilot((s) => s.busy)
+  const current = useCopilot((s) => s.conversationId)
+  const stored = useCopilot((s) => s.chats)
+  const messages = useCopilot((s) => s.messages)
+  const chats = open ? mergeChats(stored, messages, current) : []
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <IconButton size="xs" label="This project’s chats">
+          <History />
         </IconButton>
-      )}
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 p-0">
+        <div className="flex items-center border-b border-line px-3.5 py-2.5">
+          <div className="text-sm font-semibold text-fg">Chats</div>
+          <span className="ml-1.5 text-2xs text-fg-4">in this project</span>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              newChat()
+              setOpen(false)
+            }}
+            className="ml-auto flex items-center gap-1 rounded-md px-1.5 py-1 text-2xs font-medium text-fg-3 hover:bg-white/[0.06] hover:text-fg disabled:opacity-40"
+          >
+            <Plus className="size-3" /> New chat
+          </button>
+        </div>
+        <div className="max-h-80 overflow-y-auto p-1.5">
+          {chats.length === 0 && <div className="px-2 py-6 text-center text-xs text-fg-4">No chats yet — ask Copilot something.</div>}
+          {chats.map((c) => (
+            <ChatRow
+              key={c.id}
+              chat={c}
+              active={c.id === current}
+              disabled={busy}
+              onOpen={() => {
+                openChat(c.id)
+                setOpen(false)
+              }}
+            />
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function ChatRow({ chat, active, disabled, onOpen }: { chat: Chat; active: boolean; disabled: boolean; onOpen: () => void }) {
+  const [editing, setEditing] = useState(false)
+  const [name, setName] = useState('')
+  const turns = chat.messages.filter((m) => m.role === 'user').length
+  if (editing)
+    return (
+      <form
+        className="px-1 py-1"
+        onSubmit={(e) => {
+          e.preventDefault()
+          renameChat(chat.id, name)
+          setEditing(false)
+        }}
+      >
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onBlur={() => setEditing(false)}
+          onKeyDown={(e) => {
+            e.stopPropagation()
+            if (e.key === 'Escape') setEditing(false)
+          }}
+          className="h-8 w-full rounded-md bg-white/[0.06] px-2 text-xs text-fg outline-none ring-1 ring-accent/50"
+        />
+      </form>
+    )
+  return (
+    <div className={cn('group/chat flex items-center gap-1 rounded-lg px-2 py-1.5 hover:bg-white/[0.05]', active && 'bg-white/[0.06]')}>
+      <button type="button" disabled={disabled && !active} onClick={onOpen} className="min-w-0 flex-1 text-left disabled:opacity-50">
+        <div className={cn('truncate text-xs', active ? 'font-medium text-fg' : 'text-fg-2')}>{chatTitle(chat)}</div>
+        <div className="text-[10.5px] text-fg-4">
+          {ago(chat.updatedAt)} · {turns} {turns === 1 ? 'request' : 'requests'}
+        </div>
+      </button>
+      <button
+        type="button"
+        aria-label="Rename chat"
+        onClick={() => {
+          setName(chatTitle(chat))
+          setEditing(true)
+        }}
+        className="grid size-6 shrink-0 place-items-center rounded-md text-fg-4 opacity-0 transition-opacity group-hover/chat:opacity-100 hover:bg-white/[0.08] hover:text-fg-2"
+      >
+        <Pencil className="size-3" />
+      </button>
+      <button
+        type="button"
+        aria-label="Delete chat"
+        disabled={disabled && active}
+        onClick={() => deleteChat(chat.id)}
+        className="grid size-6 shrink-0 place-items-center rounded-md text-fg-4 opacity-0 transition-opacity group-hover/chat:opacity-100 hover:bg-white/[0.08] hover:text-danger disabled:opacity-0"
+      >
+        <Trash className="size-3" />
+      </button>
     </div>
   )
 }
@@ -100,6 +241,7 @@ function Welcome() {
       </div>
       <h3 className="text-center text-xl font-semibold tracking-tight text-fg">What should we make?</h3>
       <p className="mx-auto mt-1.5 max-w-[250px] text-center text-sm leading-relaxed text-fg-3">Copilot edits your timeline directly. Every change is visible, and undoable in one step.</p>
+      <RecentChats />
       <div className="mt-6 grid grid-cols-2 gap-2">
         {STARTERS.map((s, i) => (
           <motion.button
@@ -120,9 +262,37 @@ function Welcome() {
   )
 }
 
+/** Earlier chats in this project, to pick one back up. */
+function RecentChats() {
+  const stored = useCopilot((s) => s.chats)
+  const messages = useCopilot((s) => s.messages)
+  const current = useCopilot((s) => s.conversationId)
+  const chats = mergeChats(stored, messages, current).slice(0, 3)
+  if (!chats.length) return null
+  return (
+    <div className="mt-6">
+      <div className="mb-1.5 px-1 text-2xs font-semibold tracking-wider text-fg-4 uppercase">Carry on</div>
+      <div className="space-y-1">
+        {chats.map((c) => (
+          <button
+            key={c.id}
+            type="button"
+            onClick={() => openChat(c.id)}
+            className="flex w-full items-center gap-2 rounded-lg bg-white/[0.03] px-3 py-2 text-left shadow-[inset_0_0_0_1px_rgb(255_255_255/0.05)] transition-colors hover:bg-white/[0.06]"
+          >
+            <History className="size-3.5 shrink-0 text-fg-4" />
+            <span className="min-w-0 flex-1 truncate text-xs text-fg-2">{chatTitle(c)}</span>
+            <span className="shrink-0 text-[10.5px] text-fg-4">{ago(c.updatedAt)}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function UserBubble({ message }: { message: Message }) {
   return (
-    <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col items-end gap-1.5">
+    <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="group/user flex flex-col items-end gap-1.5">
       {message.context && message.context.length > 0 && (
         <div className="flex flex-wrap justify-end gap-1">
           {message.context.map((c) => (
@@ -132,29 +302,49 @@ function UserBubble({ message }: { message: Message }) {
           ))}
         </div>
       )}
-      <div className="max-w-[88%] rounded-2xl rounded-br-md bg-white/[0.075] px-3.5 py-2 text-sm leading-relaxed text-fg shadow-[inset_0_0_0_1px_rgb(255_255_255/0.05)]">{message.text}</div>
+      <div className="flex max-w-[88%] items-start gap-1">
+        <CopyButton text={message.text} label="Copy request" className="mt-1 opacity-0 transition-opacity group-hover/user:opacity-100" />
+        <div className="min-w-0 rounded-2xl rounded-br-md bg-white/[0.075] px-3.5 py-2 text-sm leading-relaxed whitespace-pre-wrap text-fg shadow-[inset_0_0_0_1px_rgb(255_255_255/0.05)] [overflow-wrap:anywhere]">
+          {message.text}
+        </div>
+      </div>
     </motion.div>
   )
 }
 
-/** Tiny markdown: **bold** and line breaks / bullets. */
-function RichText({ text }: { text: string }) {
+/** The model's thinking: live while it streams, then folded away under "Thought for 12s". */
+function Thinking({ message: m }: { message: Message }) {
+  const live = Boolean(m.thinkingSince) && m.phase !== 'done'
+  const [open, setOpen] = useState(false)
+  const bodyRef = useRef<HTMLDivElement>(null)
+  // Follow the newest thoughts while they stream.
+  useEffect(() => {
+    const el = bodyRef.current
+    if (el && live) el.scrollTop = el.scrollHeight
+  }, [m.reasoning, live])
+  if (!m.reasoning) return null
+  const secs = Math.max(1, Math.round((m.thoughtMs ?? 0) / 1000))
+  const shown = open || live
   return (
-    <>
-      {text.split('\n').map((line, i) => (
-        <p key={i} className={cn(i > 0 && 'mt-1.5', line.startsWith('•') && 'pl-3 -indent-3')}>
-          {line.split(/(\*\*[^*]+\*\*)/g).map((part, j) =>
-            part.startsWith('**') && part.endsWith('**') ? (
-              <strong key={j} className="font-semibold text-fg">
-                {part.slice(2, -2)}
-              </strong>
-            ) : (
-              <Fragment key={j}>{part}</Fragment>
-            ),
-          )}
-        </p>
-      ))}
-    </>
+    <div className="mb-2">
+      <button type="button" onClick={() => setOpen((o) => !o)} className="flex items-center gap-1.5 text-xs text-fg-3 transition-colors hover:text-fg-2">
+        <Brain className="size-3.5" />
+        {live ? (
+          <span className="animate-shimmer bg-[linear-gradient(90deg,var(--color-fg-4)_30%,var(--color-fg)_50%,var(--color-fg-4)_70%)] bg-[length:200%_100%] bg-clip-text text-transparent">Thinking…</span>
+        ) : (
+          <span>{m.thoughtMs ? `Thought for ${secs}s` : 'Thoughts'}</span>
+        )}
+        <ChevronRight className={cn('size-3 transition-transform', shown && 'rotate-90')} />
+      </button>
+      {shown && (
+        <div className="relative mt-1.5 border-l-2 border-line-2 pl-3">
+          <div ref={bodyRef} className={cn('overflow-y-auto text-xs leading-relaxed text-fg-3', live ? 'max-h-24' : 'max-h-80')}>
+            <Markdown text={m.reasoning} />
+          </div>
+          {!live && <CopyButton text={m.reasoning} label="Copy thinking" className="absolute -top-1 right-0" />}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -169,14 +359,15 @@ function AssistantMessage({ message: m }: { message: Message }) {
       <div className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-lg bg-surface-4 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]">
         <AiSparkle className="size-3.5" />
       </div>
-      <div className="min-w-0 flex-1 text-sm leading-relaxed text-fg-2">
+      <div className="group/reply min-w-0 flex-1 text-sm leading-relaxed text-fg-2">
         {m.agent && <div className="mb-1 text-[10.5px] font-medium tracking-wide text-fg-4">{m.agent}</div>}
-        {m.phase === 'thinking' && (
+        <Thinking message={m} />
+        {m.phase === 'thinking' && !m.reasoning && (
           <span className="animate-shimmer bg-[linear-gradient(90deg,var(--color-fg-4)_30%,var(--color-fg)_50%,var(--color-fg-4)_70%)] bg-[length:200%_100%] bg-clip-text text-transparent">
             {m.status ?? 'Thinking…'}
           </span>
         )}
-        {m.text && <RichText text={m.text.slice(0, m.shown)} />}
+        {m.text && <Markdown text={m.text.slice(0, m.shown)} />}
 
         {m.calls && m.calls.length > 0 && (
           <div className="mt-2.5 overflow-hidden rounded-xl bg-black/20 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)]">
@@ -211,11 +402,19 @@ function AssistantMessage({ message: m }: { message: Message }) {
 
         {m.outro && (
           <div className={cn(m.calls?.length || m.text ? 'mt-2.5' : '')}>
-            <RichText text={m.outro.slice(0, m.outroShown ?? m.outro.length)} />
+            <Markdown text={m.outro.slice(0, m.outroShown ?? m.outro.length)} />
           </div>
         )}
 
         {m.error && <AgentError error={m.error} />}
+
+        {m.phase === 'done' && <LinkPreviews text={[m.text, m.outro].filter(Boolean).join('\n')} />}
+
+        {m.phase === 'done' && (m.text || m.outro) && (
+          <div className="mt-1 -ml-1 flex h-6 items-center opacity-0 transition-opacity group-hover/reply:opacity-100 focus-within:opacity-100">
+            <CopyButton text={() => [m.text, m.outro].filter(Boolean).join('\n\n')} label="Copy reply" />
+          </div>
+        )}
 
         {m.phase === 'done' && m.suggestions && m.suggestions.length > 0 && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-3 flex flex-wrap gap-1.5">
@@ -234,6 +433,51 @@ function AssistantMessage({ message: m }: { message: Message }) {
         )}
       </div>
     </motion.div>
+  )
+}
+
+const previews = new Map<string, Promise<WebPreview | null>>()
+
+function previewOf(url: string) {
+  let p = previews.get(url)
+  if (!p) {
+    p = api ? api.web.preview(url).catch(() => null) : Promise.resolve(null)
+    previews.set(url, p)
+  }
+  return p
+}
+
+/** Cards for the pages a reply links to: title, site, a line of description and the page's picture. */
+function LinkPreviews({ text }: { text: string }) {
+  const urls = useMemo(() => linksIn(text).slice(0, 3), [text])
+  const [cards, setCards] = useState<WebPreview[]>([])
+  useEffect(() => {
+    let alive = true
+    void Promise.all(urls.map(previewOf)).then((list) => alive && setCards(list.filter((p): p is WebPreview => Boolean(p?.title))))
+    return () => {
+      alive = false
+    }
+  }, [urls])
+  if (!cards.length) return null
+  return (
+    <div className="mt-2.5 space-y-1.5">
+      {cards.map((c) => (
+        <a
+          key={c.url}
+          href={c.url}
+          target="_blank"
+          rel="noreferrer noopener"
+          className="flex overflow-hidden rounded-xl bg-white/[0.03] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.07)] transition-colors hover:bg-white/[0.06]"
+        >
+          {c.image && <img src={c.image} alt="" loading="lazy" className="h-[68px] w-[104px] shrink-0 object-cover" onError={(e) => (e.currentTarget.style.display = 'none')} />}
+          <div className="min-w-0 flex-1 px-3 py-2">
+            <div className="truncate text-[10.5px] text-fg-4">{c.site}</div>
+            <div className="truncate text-xs font-medium text-fg">{c.title}</div>
+            {c.description && <div className="line-clamp-1 text-[11px] text-fg-3">{c.description}</div>}
+          </div>
+        </a>
+      ))}
+    </div>
   )
 }
 
@@ -340,6 +584,11 @@ function CallRow({ call, undone }: { call: ToolCall; undone?: boolean }) {
           {call.tool}
           {call.detail && <span className="font-sans"> · {call.detail}</span>}
         </div>
+        {!call.images?.length && call.pictures ? (
+          <div className="mt-1 flex items-center gap-1 text-[10px] text-fg-4">
+            <ImageIcon className="size-3" /> {call.pictures} picture{call.pictures === 1 ? '' : 's'} — not kept after a restart
+          </div>
+        ) : null}
         {call.images && call.images.length > 0 && (
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             {call.images.map((src, i) => (

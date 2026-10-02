@@ -6,7 +6,8 @@ import type { EffectKind, TransitionKind } from '@/editor/types'
  * is kept in memory during a drag because dataTransfer is unreadable in dragover.
  */
 export type DragPayload =
-  | { type: 'asset'; assetId: string }
+  /** `assetIds`: everything dragged, in order (several selected media), when it's more than `assetId`. */
+  | { type: 'asset'; assetId: string; assetIds?: string[] }
   | { type: 'title'; presetId: string }
   | { type: 'effect'; kind: EffectKind }
   | { type: 'transition'; kind: TransitionKind }

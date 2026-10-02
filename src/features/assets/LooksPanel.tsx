@@ -31,7 +31,8 @@ export function LooksPanel() {
   const selection = useUI((s) => s.selection)
   const clip = useEditor((s) => (selection.length ? s.project.clips[selection[0]] : undefined))
   const asset = useEditor((s) => (clip?.assetId ? s.project.assets[clip.assetId] : undefined)) as Asset | undefined
-  const frame = usePlayback((s) => s.frame)
+  // Previews follow the playhead while paused; during playback they hold (ten graded images per frame is a lot).
+  const frame = usePlayback((s) => s.pausedFrame)
   const fps = useEditor((s) => s.project.settings.fps)
   const art = usePreviewArt()
 

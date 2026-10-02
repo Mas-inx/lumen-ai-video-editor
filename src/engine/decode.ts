@@ -126,11 +126,12 @@ export interface Filmstrip {
 }
 
 const filmstrips = new Map<string, Filmstrip>()
-const filmstripListeners = new Set<() => void>()
+const filmstripListeners = new Set<(key: string) => void>()
 const filmstripQueue: { key: string; url: string; duration: number }[] = []
 let filmstripBusy = false
 
-export function onFilmstrip(fn: () => void) {
+/** Called with a filmstrip's key as its thumbnails arrive. */
+export function onFilmstrip(fn: (key: string) => void) {
   filmstripListeners.add(fn)
   return () => void filmstripListeners.delete(fn)
 }
@@ -183,11 +184,11 @@ async function buildFilmstrip(key: string, url: string, duration: number) {
       const now = performance.now()
       if (now - lastNotify > 120) {
         lastNotify = now
-        filmstripListeners.forEach((fn) => fn())
+        filmstripListeners.forEach((fn) => fn(key))
       }
     }
     strip.done = true
-    filmstripListeners.forEach((fn) => fn())
+    filmstripListeners.forEach((fn) => fn(key))
   } finally {
     input.dispose()
   }

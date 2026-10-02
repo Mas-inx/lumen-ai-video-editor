@@ -14,8 +14,43 @@ import { importDropped, pickAndImport } from '@/project/media-import'
 import { openProject, saveProject, saveProjectAs, showHome } from '@/project/session'
 import { openTimeline } from '@/editor/timeline-nav'
 import { AnalysisCancelled, initialTrackBox, scenesInClip, stabilizeClip, withProgress } from '@/project/analysis-actions'
+import { deleteRenders, renderPreviews } from '@/engine/render-cache'
+import { analyzeBeats, beatsOf, cutToBeats } from '@/project/beats'
+import { onSegmentProgress, type MatteProgress, type Subject } from '@/project/segment'
+import { cutOutSubject, textBehindSubject } from '@/project/subject'
+import { addCaptions, untranscribed } from '@/editor/smart'
+import type { CaptionStyle } from '@/editor/subtitles'
+import { ensureTranscripts } from '@/project/transcribe'
 
 const ui = () => useUI.getState()
+
+/**
+ * Runs a subject-matte job with a progress toast (the model's one-time
+ * download included) and a Cancel button.
+ */
+async function withMatteProgress<T>(title: string, run: (opts: { onProgress: (p: MatteProgress) => void; signal: AbortSignal }) => Promise<T>) {
+  const ctl = new AbortController()
+  const id = toast.loading(title, { action: { label: 'Cancel', onClick: () => ctl.abort() }, duration: Infinity })
+  const show = (description: string) => toast.loading(title, { id, description, action: { label: 'Cancel', onClick: () => ctl.abort() }, duration: Infinity })
+  const off = onSegmentProgress((m) => {
+    if (m.type === 'progress' && m.status === 'progress' && m.total) show(`Downloading the model (once) — ${Math.round((m.loaded ?? 0) / 1048576)} of ${Math.round(m.total / 1048576)} MB`)
+    else if (m.type === 'ready') show(`Model ready (${m.device === 'webgpu' ? 'GPU' : 'CPU'})`)
+  })
+  try {
+    const result = await run({
+      signal: ctl.signal,
+      onProgress: (p) => p.total && show(`${Math.round((p.done / p.total) * 100)}% — frame ${p.done} of ${p.total}`),
+    })
+    toast.success(title.replace(/…$/, ''), { id, description: 'Done', action: undefined, duration: 3000 })
+    return result
+  } catch (err) {
+    if (ctl.signal.aborted || (err instanceof Error && err.message === 'Cancelled')) toast('Stopped', { id, description: undefined, action: undefined, duration: 2000 })
+    else toast.error(title.replace(/…$/, ' failed'), { id, description: err instanceof Error ? err.message : String(err), action: undefined, duration: 8000 })
+    return null
+  } finally {
+    off()
+  }
+}
 const frame = () => usePlayback.getState().frame
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
@@ -276,6 +311,92 @@ export const actions = {
 
   playInToOut() {
     playback.playInToOut()
+  },
+
+  /** Text behind the subject: the clip, a title (the selected one, or a new one), and the subject cut out on top. */
+  async textBehindSubject(clipId: string, subject: Subject = 'person') {
+    const sel = ui().selection.map((id) => getProject().clips[id]).filter(Boolean)
+    const title = sel.find((c) => c.kind === 'text')
+    await withMatteProgress('Putting the text behind the subject…', (o) => textBehindSubject(clipId, { ...o, subject, titleId: title?.id }))
+  },
+
+  /** Cuts a clip down to its subject, or (invert) removes the subject. */
+  async cutOutSubject(clipId: string, subject: Subject = 'person', invert = false) {
+    await withMatteProgress(invert ? 'Removing the subject…' : 'Cutting out the subject…', (o) => cutOutSubject(clipId, { ...o, subject, invert }))
+  },
+
+  /** Finds a music clip's beat (tempo, beats and downbeats); its waveform then shows them and cuts snap to them. */
+  async detectBeats(clipId: string) {
+    const clip = getProject().clips[clipId]
+    if (!clip?.assetId) return
+    const id = toast.loading('Listening for the beat…')
+    try {
+      const grid = await analyzeBeats(clip.assetId)
+      toast.success(grid.times.length ? `${Math.round(grid.bpm)} BPM — ${grid.times.length} beats` : 'No steady beat in this one', { id, description: grid.times.length ? 'Cuts now snap to the beat.' : undefined })
+    } catch (err) {
+      toast.error('Couldn’t find the beat', { id, description: err instanceof Error ? err.message : String(err) })
+    }
+  },
+
+  /** Markers on a music clip's downbeats (the first beat of each bar). */
+  async beatMarkers(clipId: string) {
+    const clip = getProject().clips[clipId]
+    if (!clip) return
+    try {
+      const { beats } = await beatsOf(clip)
+      const downs = beats.filter((b) => b.down)
+      useEditor.getState().transaction('Beat markers', 'user', () => {
+        for (const b of downs) dispatch('marker.add', { frame: b.frame, label: 'Bar', color: 'sky' })
+      })
+      toast.success(`Added ${downs.length} markers on the downbeats`)
+    } catch (err) {
+      toast.error('Couldn’t find the beat', { description: err instanceof Error ? err.message : String(err) })
+    }
+  },
+
+  /** Lays the selected clips out one after another on the music's beat. */
+  async cutToBeats(every = 2) {
+    const ids = ui().selection.filter((id) => getProject().clips[id]?.kind !== 'audio')
+    const id = toast.loading('Cutting to the beat…')
+    try {
+      const res = await cutToBeats(ids, { every })
+      toast.success(`Cut ${res.placed.length} clips to the beat (${Math.round(res.bpm)} BPM)`, { id })
+    } catch (err) {
+      toast.error('Couldn’t cut to the beat', { id, description: err instanceof Error ? err.message : String(err) })
+    }
+  },
+
+  /** Captions all the speech on the timeline in a style, transcribing what needs it first. Replaces earlier captions. */
+  async captionSpeech(style: CaptionStyle = 'clean') {
+    const pending = untranscribed(getProject())
+    if (pending.length && !(await ensureTranscripts(pending))) return
+    const r = addCaptions({ style, source: 'user' })
+    if (!r.added) toast('No speech to caption', { description: 'Put a clip of someone talking on the timeline first.' })
+    else toast.success(`Added ${plural(r.added, 'caption')}`, { description: 'They’re titles on the Captions track — edit any of them like a title.' })
+  },
+
+  /** Renders previews in to out, or of the whole timeline when nothing is marked. */
+  renderPreviews() {
+    const p = getProject()
+    if (!p.range) return actions.renderTimeline()
+    void renderPreviews([p.range.in, p.range.out], 'In to out')
+  },
+
+  renderTimeline() {
+    void renderPreviews([0, projectDuration(getProject())], 'The whole timeline')
+  },
+
+  renderSelection() {
+    const clips = ui().selection.map((id) => getProject().clips[id]).filter(Boolean)
+    if (!clips.length) return void toast('Select the clips to render first')
+    void renderPreviews([Math.min(...clips.map((c) => c.start)), Math.max(...clips.map(clipEnd))], 'Selected clips')
+  },
+
+  /** Deletes rendered previews: in to out, or all of this project's. */
+  async deleteRenders(inToOut: boolean) {
+    const r = getProject().range
+    await deleteRenders(inToOut && r ? [r.in, r.out] : undefined)
+    toast.success(inToOut && r ? 'Deleted the renders in to out' : 'Deleted this project’s renders')
   },
 
   setTool(tool: Tool) {

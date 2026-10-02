@@ -5,7 +5,7 @@
 import { clipEnd, clipsOnTrack } from './ops'
 import { TITLE_PRESETS } from './presets'
 import { dispatch, getProject, useEditor } from './store'
-import type { Project } from './types'
+import type { AnimPreset, Project, TextStyle } from './types'
 
 /** A subtitle cue, in seconds. */
 export interface Cue {
@@ -113,15 +113,93 @@ export interface CaptionLine {
 }
 
 /**
+ * How captions look and move. clean: the classic subtitle (a soft box, a fade).
+ * bold: big outlined caps, a few words at a time, popping in — the short-form
+ * look. word: one big word at a time, key words in the accent colour. boxed:
+ * solid boxes that rise in.
+ */
+export type CaptionStyle = 'clean' | 'bold' | 'word' | 'boxed'
+
+export interface CaptionStyleSpec {
+  id: CaptionStyle
+  name: string
+  description: string
+  /** Words per caption. */
+  words: number
+  /** Text size as a fraction of the frame's short side. */
+  size: number
+  /** How far below the centre, as a fraction of the frame's height. */
+  y: number
+  text: Partial<TextStyle>
+  animation: { in: { preset: AnimPreset; duration: number }; out: { preset: AnimPreset; duration: number } }
+}
+
+export const CAPTION_STYLES: CaptionStyleSpec[] = [
+  {
+    id: 'clean',
+    name: 'Clean',
+    description: 'Classic subtitles: a soft box, a gentle fade',
+    words: 6,
+    size: 0.045,
+    y: 0.36,
+    text: { font: 'sans', weight: 500, background: 'rgba(0,0,0,0.55)', shadow: 0, uppercase: false, outline: null },
+    animation: { in: { preset: 'fade', duration: 3 }, out: { preset: 'fade', duration: 3 } },
+  },
+  {
+    id: 'bold',
+    name: 'Bold',
+    description: 'Big outlined caps, a few words at a time',
+    words: 3,
+    size: 0.075,
+    y: 0.24,
+    text: { font: 'display', weight: 800, background: null, shadow: 0.35, uppercase: true, letterSpacing: -0.01, outline: { color: '#000000', width: 0.09 } },
+    animation: { in: { preset: 'pop', duration: 4 }, out: { preset: 'none', duration: 2 } },
+  },
+  {
+    id: 'word',
+    name: 'Word by word',
+    description: 'One big word at a time, key words in colour',
+    words: 1,
+    size: 0.095,
+    y: 0.2,
+    text: { font: 'archivo', weight: 850, background: null, shadow: 0.3, uppercase: true, letterSpacing: -0.02, outline: { color: '#000000', width: 0.08 } },
+    animation: { in: { preset: 'pop', duration: 3 }, out: { preset: 'none', duration: 2 } },
+  },
+  {
+    id: 'boxed',
+    name: 'Boxed',
+    description: 'Solid boxes that rise in',
+    words: 5,
+    size: 0.05,
+    y: 0.33,
+    text: { font: 'sans', weight: 650, background: '#0d0d0b', shadow: 0, uppercase: false, outline: null },
+    animation: { in: { preset: 'rise', duration: 5 }, out: { preset: 'fade', duration: 3 } },
+  },
+]
+
+export const captionStyle = (id: CaptionStyle | undefined) => CAPTION_STYLES.find((s) => s.id === id) ?? CAPTION_STYLES[0]
+
+/** Words that carry the line get the accent colour (word-by-word captions): long words, numbers, and the end of a phrase. */
+export function keyWord(word: string, last: boolean) {
+  const bare = word.replace(/[^\p{L}\p{N}]/gu, '')
+  return bare.length >= 7 || /\d/.test(bare) || (last && /[!?]$/.test(word))
+}
+
+/**
  * Lays caption clips on a Captions track in the subtitle style (replacing what's
  * there, unless `track` names a fresh track), as one undo step. Returns the ids.
  */
-export function layCaptions(lines: CaptionLine[], opts: { label: string; source: 'user' | 'ai'; size?: number; y?: number; uppercase?: boolean; newTrack?: string }) {
+export function layCaptions(
+  lines: CaptionLine[],
+  opts: { label: string; source: 'user' | 'ai'; size?: number; y?: number; uppercase?: boolean; newTrack?: string; style?: CaptionStyle; accent?: string },
+) {
   const project = getProject()
   const fps = project.settings.fps
   const preset = TITLE_PRESETS.find((t) => t.id === 'subtitle') ?? TITLE_PRESETS[0]
-  const size = opts.size ?? Math.round(Math.min(project.settings.width, project.settings.height) * 0.045)
-  const y = opts.y ?? Math.round(project.settings.height * 0.36)
+  const style = captionStyle(opts.style)
+  const size = opts.size ?? Math.round(Math.min(project.settings.width, project.settings.height) * style.size)
+  const y = opts.y ?? Math.round(project.settings.height * style.y)
+  const accent = opts.accent ?? '#ffd84a'
   const how = { source: opts.source }
   const ids: string[] = []
   let trackId = opts.newTrack ? null : (project.tracks.find((t) => t.role === 'captions')?.id ?? null)
@@ -148,9 +226,16 @@ export function layCaptions(lines: CaptionLine[], opts: { label: string; source:
           duration: Math.max(2, end - l.start),
           name: l.text.split('\n')[0],
           patch: {
-            text: { ...preset.text, content: l.text, size, uppercase: opts.uppercase ?? false },
+            text: {
+              ...preset.text,
+              ...style.text,
+              content: l.text,
+              size,
+              uppercase: opts.uppercase ?? style.text.uppercase ?? false,
+              ...(style.id === 'word' && keyWord(l.text, i === sorted.length - 1 || /[.!?]$/.test(l.text)) ? { color: accent } : {}),
+            },
             transform: { y },
-            animation: { in: { preset: 'fade', duration: 3 }, out: { preset: 'fade', duration: 3 } },
+            animation: style.animation,
           },
         },
         how,

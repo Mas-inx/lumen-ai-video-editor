@@ -1,5 +1,6 @@
-import { clamp, easeInCubic, easeInOutCubic, easeOutCubic, lerp } from '@/lib/math'
-import type { AnimatableProp, Clip, Easing, Keyframe } from './types'
+import { clamp, lerp } from '@/lib/math'
+import { easeAt } from './easing'
+import type { AnimatableProp, Clip, Keyframe } from './types'
 
 export const ANIMATABLE: AnimatableProp[] = ['x', 'y', 'scale', 'rotation', 'opacity', 'volume', 'rotateX', 'rotateY', 'z', 'speed']
 
@@ -8,21 +9,6 @@ export function baseValue(clip: Clip, prop: AnimatableProp): number {
   if (prop === 'volume') return clip.audio.volume
   if (prop === 'speed') return clip.speed
   return clip.transform[prop] ?? 0
-}
-
-function ease(e: Easing, t: number) {
-  switch (e) {
-    case 'linear':
-      return t
-    case 'ease':
-      return easeInOutCubic(t)
-    case 'ease-in':
-      return easeInCubic(t)
-    case 'ease-out':
-      return easeOutCubic(t)
-    case 'hold':
-      return 0
-  }
 }
 
 export function evalKeyframes(kfs: Keyframe[], frame: number): number {
@@ -34,7 +20,7 @@ export function evalKeyframes(kfs: Keyframe[], frame: number): number {
     const b = kfs[i + 1]
     if (frame >= a.frame && frame < b.frame) {
       const t = clamp((frame - a.frame) / (b.frame - a.frame), 0, 1)
-      return lerp(a.value, b.value, ease(a.easing, t))
+      return lerp(a.value, b.value, easeAt(a.easing, t))
     }
   }
   return last.value

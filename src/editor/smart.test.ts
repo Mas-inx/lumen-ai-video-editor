@@ -187,6 +187,56 @@ describe('addCaptions', () => {
     expect(clipsOnTrack(getProject(), track.id)).toHaveLength(3)
     expect(getProject().tracks.filter((t) => t.role === 'captions')).toHaveLength(1)
   })
+
+  it('styles captions: a few big words at a time, or one word at a time with key words in colour', () => {
+    const { add, withAsset, load } = setup()
+    const a = asset(4, [], { transcript: [{ start: 0, end: 3, text: 'We built it in 30 days!' }] })
+    add('Voice', 'audio', 0, 120, { assetId: withAsset(a) })
+    load()
+    const captions = () => clipsOnTrack(getProject(), getProject().tracks.find((t) => t.role === 'captions')!.id)
+
+    addCaptions({ style: 'bold' })
+    expect(captions().map((c) => c.text!.content)).toEqual(['We built it', 'in 30 days!'])
+    expect(captions()[0].text).toMatchObject({ uppercase: true, background: null, outline: { color: '#000000' } })
+    expect(captions()[0].animation?.in.preset).toBe('pop')
+
+    addCaptions({ style: 'word', accent: '#ff0055' })
+    expect(captions().map((c) => c.text!.content)).toEqual(['We', 'built', 'it', 'in', '30', 'days!'])
+    expect(captions().map((c) => c.text!.color === '#ff0055')).toEqual([false, false, false, false, true, true])
+    const { width, height } = getProject().settings
+    expect(captions()[1].text!.size).toBe(Math.round(Math.min(width, height) * 0.095))
+
+    // The default stays classic subtitles.
+    addCaptions()
+    expect(captions()).toHaveLength(1)
+    expect(captions()[0].text).toMatchObject({ uppercase: false, background: 'rgba(0,0,0,0.55)' })
+    expect(captions()[0].animation?.in.preset).toBe('fade')
+  })
+
+  it('captions what’s heard, once: silent copies and doubled speech are left out', () => {
+    const { add, withAsset, load } = setup()
+    const id = withAsset(
+      asset(8, [], {
+        kind: 'video',
+        transcript: [
+          { start: 0, end: 2, text: 'Hello there everyone' },
+          { start: 3, end: 5, text: 'Welcome back to the channel' },
+        ],
+      }),
+    )
+    add('Main', 'video', 0, 240, { assetId: id })
+    // The same interview as B-roll on top, still audible: it would say the first line twice.
+    add('Overlay', 'video', 0, 90, { assetId: id })
+    // A cut-out copy turned all the way down.
+    add('Overlay', 'video', 120, 60, { assetId: id }).audio.volume = -60
+    load()
+    addCaptions({ maxWords: 8 })
+    const caps = clipsOnTrack(getProject(), getProject().tracks.find((t) => t.role === 'captions')!.id)
+    expect(caps.map((c) => [c.text!.content, c.start])).toEqual([
+      ['Hello there everyone', 0],
+      ['Welcome back to the channel', 90],
+    ])
+  })
 })
 
 describe('duckMusic', () => {

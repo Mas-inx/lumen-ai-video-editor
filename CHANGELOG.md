@@ -4,6 +4,67 @@ Every notable change to Lumen, newest first. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-10-03
+
+Render previews, a Copilot that thinks out loud, and the effects editors reach for every day.
+
+### Added
+
+- **Render previews**, like Premiere and Filmora. A bar under the ruler shows yellow where playback may not keep up and green where a stretch is rendered.
+  - Press `Enter` to render in to out (or the whole timeline), render just the selected clips, or let Lumen render heavy stretches while you're idle.
+  - Rendered stretches play smoothly and frame-exact. They stay valid until what's on screen changes, and undo brings them back.
+  - Render at Full, 1/2, 1/4 or 1/8 resolution. Lower resolutions are scaled up to the viewer, either *Sharp* (contrast-adaptive sharpening on the GPU) or *Smooth*.
+  - Renders are kept per project, up to 8 GB in all.
+- **Preview resolution** in the program monitor: Auto, Full, 1/2, 1/4 or 1/8. Auto steps down while playing when the computer can't keep up.
+- **Chats per project.** Start a new chat any time, switch between a project's chats, and rename or delete them. Chats survive restarts, and the model remembers them too, Claude Code and Codex sessions included.
+- **See the Copilot think.** Its reasoning streams in live, then folds away under *Thought for 12s*. This works with Claude, OpenAI and Gemini reasoning models, Claude Code and Codex.
+- **Copy from chats:** any request, reply, thinking or code block.
+- **The web in the Copilot.** It can search the web, read a page, and see a page as a screenshot, and links in its replies show previews.
+  - Only public sites are reachable: your network, this computer and cloud metadata addresses are blocked.
+  - Pages load in a separate, isolated session.
+- **Skills:** know-how the Copilot loads when a task calls for it, in the same SKILL.md format as Claude.
+  - Eight are built in: short-form editing, motion design craft, HyperFrames compositions, text behind subject, colour grading, sound and music, Blender 3D, and prompts for generating images, video and voice.
+  - Write your own in *Integrations › Skills*, or switch on the ones from Claude Code.
+  - The Copilot, Claude Code, Codex and any agent using Lumen's MCP server all get the list and load a skill before that kind of work, Blender scenes and generations included.
+- **Motion graphics that look made, not generated.** The templates were redesigned with considered type (Fraunces, Archivo, Syne, Space Grotesk, Instrument Serif), easing that differs per element, and holds long enough to read.
+  - Lower thirds, title cards and kinetic type now come in several styles.
+  - Two new templates: *Pull quote* and *Chapter marker*.
+- **Text behind subject.** Right-click a clip › *Subject*: on-device AI cuts the person out and slips a title between them and the background, in one undo step.
+  - The same menu cuts out the subject, removes the background, or removes the person and keeps the background.
+  - *Any subject* (objects, animals) uses a GPU model.
+  - Each cut-out is made once and reused, and exports are frame-exact.
+- **Motion presets** in the Animate tab, baked into keyframes you can then edit. Each comes with an intensity and a curve.
+  - Camera moves: Ken Burns, push in, pull out, pans, tilts and drift.
+  - Entrances and exits: slide, pop, fade, zoom, drop and spin.
+  - Emphasis at the playhead: punch, pulse, shake and wobble.
+- **Easing curves per keyframe:** 28 curves (smooth, arrive, leave, overshoot, anticipate, elastic, bounce, hold…) or your own cubic-bezier. Each keyframe's curve shapes the move to the next one.
+- **Drag keyframes on the timeline:** the selected clip shows its keyframes. Drag one to retime it, and every property keyed there moves with it. Click one to jump to it.
+- **Beat detection.** Right-click a music clip › *Beat* › *Find the beat*. Lumen finds the tempo, beats and bars and marks them on the waveform. Cuts, clips and the playhead then snap to the beat.
+  - The same menu adds markers on the downbeats.
+  - On video, it lays the selected clips out on the beat.
+- **Caption styles.** *Text › Auto captions* has four: *Clean*, *Bold* (big outlined words popping in), *Word by word* (key words in an accent colour) and *Boxed*. One click transcribes what's needed and captions the speech.
+- **Select many media files at once:** `Ctrl`-click, `Shift`-click a range, drag a box, or `Ctrl+A`. Then add, favourite, transcribe, make proxies for or remove them together.
+- New title fonts: Fraunces, Archivo, Syne and Space Grotesk.
+- 11 new AI tools, for 119 in all:
+  - `web_search`, `read_web_page` and `screenshot_web_page`;
+  - `list_skills`, `use_skill` and `read_skill_file`;
+  - `cut_out_subject`, `detect_beats`, `cut_to_beats`, `clip_animate` and `keyframe_move`.
+  - `add_captions` also takes a style and an accent colour.
+
+### Changed
+
+- **Smoother on modest computers.**
+  - The timeline and preview no longer redraw while nothing changes.
+  - Filmstrips and waveforms are painted once and reused.
+  - Zooming stretches what's there and repaints when you pause.
+  - Scrolling is batched, and scrubbing previews at a lower resolution until you stop.
+
+### Fixed
+
+- HyperFrames motion graphics rendered slightly off-centre when Windows display scaling was above 100% (for example 125%). They're now pixel-exact at any scaling.
+- Captions skip silent copies of a clip: detached sound, freeze frames, or volume all the way down. Speech playing on two tracks at once is no longer captioned twice.
+- A render or generation that failed straight away could look stuck on *running*, for you and for the Copilot. It now shows its error.
+
 ## [1.2.0] — 2026-10-01
 
 Copilot meets your MCP servers.
@@ -136,7 +197,9 @@ First release.
 - **Integrations** — Blender renders (3D titles, backgrounds, agent-written scenes), HyperFrames motion graphics, MCP host (Higgsfield, Runway, Replicate, fal.ai or any server) and Lumen's own MCP server for external agents.
 - Windows installer (NSIS, per-user or all-users).
 
-[Unreleased]: https://github.com/Mas-inx/lumen-ai-video-editor/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/Mas-inx/lumen-ai-video-editor/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.3.0
+[1.2.0]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.2.0
 [1.1.0]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.1.0
 [1.0.2]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.0.2
 [1.0.1]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.0.1

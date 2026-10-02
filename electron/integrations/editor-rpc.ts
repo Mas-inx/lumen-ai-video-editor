@@ -49,6 +49,12 @@ export async function editorTools(): Promise<BridgeTool[]> {
   return res.result as BridgeTool[]
 }
 
+/** The editor's standing instructions for agents (the skills that are switched on). */
+export async function editorInstructions(): Promise<string> {
+  const res = await askEditor({ method: 'instructions' }, 5_000)
+  return res.ok && typeof res.result === 'string' ? res.result : ''
+}
+
 export async function callEditorTool(tool: string, args: Record<string, unknown>, timeoutMs = 20 * 60_000): Promise<BridgeToolResult> {
   const res = await askEditor({ method: 'call', tool, args }, timeoutMs)
   return res.ok ? (res.result as BridgeToolResult) : { content: [{ type: 'text', text: res.error ?? 'Failed' }], isError: true }

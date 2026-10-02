@@ -5,6 +5,7 @@ import { getProject, undoEntry, useEditor } from '@/editor/store'
 import { useUI } from '@/editor/ui-store'
 import { onAgentEvent, resolveTarget, targetLabel } from '@/integrations/ai'
 import { api } from '@/integrations/store'
+import { skillsPrompt } from '@/integrations/skills'
 import { onToolImages } from '@/integrations/tools/events'
 import { uid } from '@/lib/id'
 import { formatTimecode } from '@/lib/time'
@@ -19,6 +20,8 @@ export interface ToolCall {
   status: CallStatus
   /** What the AI looked at — frames, contact sheets, screenshots (data URLs). */
   images?: string[]
+  /** Pictures that were shown but aren't kept (a chat reopened after a restart). */
+  pictures?: number
 }
 
 export interface Message {
@@ -42,29 +45,190 @@ export interface Message {
   /** Live progress line, e.g. "Codex is working…" */
   status?: string
   error?: { message: string; code?: AgentErrorCode }
+  /** The model's thinking for this reply, as it streamed. */
+  reasoning?: string
+  /** While thinking: when this stretch of it started (ms). */
+  thinkingSince?: number
+  /** How long it thought, all stretches together (ms). */
+  thoughtMs?: number
+  createdAt?: number
+}
+
+/** One Copilot conversation; each project keeps its own. */
+export interface Chat {
+  id: string
+  /** Set when renamed; otherwise the first request names it. */
+  title?: string
+  createdAt: number
+  updatedAt: number
+  messages: Message[]
 }
 
 interface CopilotState {
+  /** The project these chats belong to. */
+  projectId: string | null
+  /** This project's chats, newest first. The open one's messages live in `messages` while it's open. */
+  chats: Chat[]
   messages: Message[]
   busy: boolean
   draft: string
-  /** Keys the main process's history / agent session for this conversation. */
+  /** The open chat — also keys the main process's history / agent session for it. */
   conversationId: string
   setDraft: (draft: string) => void
+  /** Starts a fresh chat (the current one stays in the list). */
   clear: () => void
 }
 
-export const useCopilot = create<CopilotState>((set, get) => ({
+export const useCopilot = create<CopilotState>((set) => ({
+  projectId: null,
+  chats: [],
   messages: [],
   busy: false,
   draft: '',
   conversationId: uid('conv'),
   setDraft: (draft) => set({ draft }),
-  clear: () => {
-    void api?.ai.forget(get().conversationId)
-    set({ messages: [], conversationId: uid('conv') })
-  },
+  clear: () => newChat(),
 }))
+
+// ─── Chats ───────────────────────────────────────────────────────────────
+
+/** What a chat is called: its own title, or its first request. */
+export function chatTitle(chat: Pick<Chat, 'title' | 'messages'>) {
+  if (chat.title) return chat.title
+  const first = chat.messages.find((m) => m.role === 'user')?.text.trim().replace(/\s+/g, ' ')
+  if (!first) return 'New chat'
+  return first.length > 52 ? `${first.slice(0, 50).trimEnd()}…` : first
+}
+
+/** Every chat of this project with the open one up to date, newest first, empty ones left out. */
+export function allChats(): Chat[] {
+  const { chats, messages, conversationId } = useCopilot.getState()
+  return mergeChats(chats, messages, conversationId)
+}
+
+/** The chat list with the open chat's current messages in it (pure, for rendering). */
+export function mergeChats(chats: Chat[], messages: Message[], conversationId: string): Chat[] {
+  const open = chats.find((c) => c.id === conversationId)
+  const list = chats.filter((c) => c.id !== conversationId)
+  if (messages.length) {
+    const updatedAt = open && open.messages === messages ? open.updatedAt : Date.now()
+    list.push({ id: conversationId, title: open?.title, createdAt: open?.createdAt ?? Date.now(), updatedAt, messages })
+  }
+  return list.filter((c) => c.messages.length).sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
+/** Opens a fresh chat; the one that was open stays in the list. */
+export function newChat() {
+  if (useCopilot.getState().busy) return
+  const chats = allChats()
+  useCopilot.setState({ chats, messages: [], conversationId: uid('conv') })
+}
+
+export function openChat(id: string) {
+  const s = useCopilot.getState()
+  if (s.busy || id === s.conversationId) return
+  const chats = allChats()
+  const chat = chats.find((c) => c.id === id)
+  if (!chat) return
+  useCopilot.setState({ chats, messages: chat.messages, conversationId: id })
+}
+
+export function deleteChat(id: string) {
+  const s = useCopilot.getState()
+  if (s.busy && id === s.conversationId) return
+  void api?.ai.forget(id)
+  const chats = allChats().filter((c) => c.id !== id)
+  if (id === s.conversationId) useCopilot.setState({ chats, messages: [], conversationId: uid('conv') })
+  else useCopilot.setState({ chats })
+}
+
+export function renameChat(id: string, title: string) {
+  const name = title.trim().slice(0, 80)
+  const chats = allChats().map((c) => (c.id === id ? { ...c, title: name || undefined } : c))
+  useCopilot.setState({ chats })
+}
+
+/** A chat as it's kept on disk: no pictures (they're large) — just how many there were. */
+function forDisk(chat: Chat): Chat {
+  return {
+    ...chat,
+    messages: chat.messages.map((m) => ({
+      ...m,
+      thinkingSince: undefined,
+      status: undefined,
+      calls: m.calls?.map(({ images, ...c }) => ({ ...c, pictures: (c.pictures ?? 0) + (images?.length ?? 0) || undefined })),
+    })),
+  }
+}
+
+/** A chat read back from disk: whatever was running when it was saved has stopped. */
+function fromDisk(raw: unknown): Chat | null {
+  const c = raw as Partial<Chat> | null
+  if (!c || typeof c.id !== 'string' || !Array.isArray(c.messages)) return null
+  const messages = (c.messages as Message[])
+    .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.text === 'string')
+    .map((m) => ({
+      ...m,
+      shown: m.text.length,
+      outroShown: undefined,
+      phase: m.role === 'assistant' ? ('done' as const) : m.phase,
+      historyId: undefined,
+      historyIds: undefined,
+      calls: m.calls?.map((call) => (call.status === 'running' || call.status === 'queued' ? { ...call, status: 'error' as const } : call)),
+    }))
+  return { id: c.id, title: typeof c.title === 'string' ? c.title : undefined, createdAt: Number(c.createdAt) || Date.now(), updatedAt: Number(c.updatedAt) || Date.now(), messages }
+}
+
+let saveTimer: ReturnType<typeof setTimeout> | undefined
+let pendingFor: string | null = null
+/** Projects with chats on disk (the others get no file until they have a chat). */
+const kept = new Set<string>()
+
+function saveNow() {
+  clearTimeout(saveTimer)
+  const projectId = pendingFor
+  pendingFor = null
+  if (!projectId || !api) return
+  const chats = allChats()
+  if (!chats.length && !kept.has(projectId)) return
+  if (chats.length) kept.add(projectId)
+  void api.ai.saveChats(projectId, chats.map(forDisk)).catch(() => {})
+}
+
+useCopilot.subscribe((s, prev) => {
+  if (!s.projectId || s.projectId !== prev.projectId) return
+  if (s.messages === prev.messages && s.chats === prev.chats) return
+  pendingFor = s.projectId
+  clearTimeout(saveTimer)
+  // While a reply streams, saving now and then is plenty.
+  saveTimer = setTimeout(saveNow, s.busy ? 2500 : 700)
+})
+
+/** Opens a project's chats: the latest one, ready to carry on. */
+async function loadChatsFor(projectId: string) {
+  saveNow()
+  if (useCopilot.getState().busy) stopCopilot()
+  useCopilot.setState({ projectId, chats: [], messages: [], conversationId: uid('conv'), busy: false })
+  if (!api) return
+  try {
+    const chats = (await api.ai.loadChats(projectId)).map(fromDisk).filter((c): c is Chat => c !== null)
+    if (useCopilot.getState().projectId !== projectId || useCopilot.getState().messages.length) return
+    chats.sort((a, b) => b.updatedAt - a.updatedAt)
+    if (chats.length) kept.add(projectId)
+    const latest = chats[0]
+    useCopilot.setState(latest ? { chats, messages: latest.messages, conversationId: latest.id } : { chats })
+  } catch {
+    // No saved chats.
+  }
+}
+
+if (api) {
+  useEditor.subscribe((s, prev) => {
+    if (s.project.id !== prev.project.id) void loadChatsFor(s.project.id)
+  })
+  void loadChatsFor(useEditor.getState().project.id)
+  window.addEventListener('beforeunload', saveNow)
+}
 
 function patch(id: string, fn: (m: Message) => Partial<Message>) {
   useCopilot.setState((s) => ({ messages: s.messages.map((m) => (m.id === id ? { ...m, ...fn(m) } : m)) }))
@@ -130,8 +294,8 @@ export async function sendPrompt(text: string) {
     draft: '',
     messages: [
       ...s.messages,
-      { id: uid('msg'), role: 'user', text: prompt, shown: prompt.length, context: [...context, ...attachments.map((a) => ({ id: a.id, name: a.name }))] },
-      { id: aid, role: 'assistant', text: '', shown: 0, phase: 'thinking', agent: target ? targetLabel(target).title : undefined },
+      { id: uid('msg'), role: 'user', text: prompt, shown: prompt.length, createdAt: Date.now(), context: [...context, ...attachments.map((a) => ({ id: a.id, name: a.name }))] },
+      { id: aid, role: 'assistant', text: '', shown: 0, phase: 'thinking', createdAt: Date.now(), agent: target ? targetLabel(target).title : undefined },
     ],
   }))
 
@@ -162,7 +326,7 @@ async function runLive(messageId: string, target: CopilotTarget, prompt: string,
   const runId = uid('run')
   live = { runId, messageId, startedAfter: Math.max(0, ...useEditor.getState().past.map((e) => e.id)) }
   try {
-    await api.ai.run({ runId, conversationId: useCopilot.getState().conversationId, target, prompt, context: turnContext(context, attachments) })
+    await api.ai.run({ runId, conversationId: useCopilot.getState().conversationId, target, prompt, context: turnContext(context, attachments), instructions: skillsPrompt() || undefined })
   } catch (err) {
     finishLive(messageId, { message: err instanceof Error ? err.message : String(err), code: 'failed' })
   }
@@ -214,6 +378,16 @@ const TOOL_TITLES: Record<string, string> = {
   save_project: 'Save the project',
   export_video: 'Export the video',
   shell: 'Run a command',
+  web_search: 'Search the web',
+  read_web_page: 'Read a web page',
+  screenshot_web_page: 'Look at a web page',
+  list_skills: 'Check its skills',
+  detect_beats: 'Find the beat',
+  cut_to_beats: 'Cut to the beat',
+  cut_out_subject: 'Cut out the subject',
+  clip_animate: 'Animate',
+  use_skill: 'Use a skill',
+  read_skill_file: 'Read a skill’s notes',
 }
 
 function toolTitle(tool: string) {
@@ -237,6 +411,7 @@ function finishLive(messageId: string, error?: { message: string; code?: AgentEr
   const past = useEditor.getState().past
   const ids = run ? past.filter((e) => e.id > run.startedAfter && e.source === 'ai').map((e) => e.id) : []
   patch(messageId, (m) => ({
+    ...stopThinking(m),
     phase: 'done',
     status: undefined,
     error: error?.code === 'cancelled' ? undefined : error,
@@ -249,6 +424,12 @@ function finishLive(messageId: string, error?: { message: string; code?: AgentEr
   useCopilot.setState({ busy: false })
 }
 
+/** Ends the current stretch of thinking, adding it to the time thought. */
+function stopThinking(m: Message): Partial<Message> {
+  if (!m.thinkingSince) return {}
+  return { thinkingSince: undefined, thoughtMs: (m.thoughtMs ?? 0) + (Date.now() - m.thinkingSince) }
+}
+
 onAgentEvent((e: AgentEvent) => {
   if (!live || e.runId !== live.runId) return
   const id = live.messageId
@@ -256,16 +437,24 @@ onAgentEvent((e: AgentEvent) => {
     case 'status':
       patch(id, () => ({ status: e.message }))
       break
+    case 'reasoning':
+      patch(id, (m) => {
+        // A new stretch of thinking after the model did something else starts on its own paragraph.
+        const sep = m.reasoning && !m.thinkingSince && !m.reasoning.endsWith('\n\n') ? '\n\n' : ''
+        return { reasoning: (m.reasoning ?? '') + sep + e.delta, thinkingSince: m.thinkingSince ?? Date.now() }
+      })
+      break
     case 'text':
       // Before any tool call, text is the intro; after, it's the wrap-up.
       patch(id, (m) =>
         m.calls?.length
-          ? { outro: (m.outro ?? '') + e.delta.replace(/^\n+/, m.outro ? '\n\n' : ''), phase: 'outro' }
-          : { text: m.text + e.delta, shown: m.text.length + e.delta.length, phase: 'intro' },
+          ? { ...stopThinking(m), outro: (m.outro ?? '') + e.delta.replace(/^\n+/, m.outro ? '\n\n' : ''), phase: 'outro' }
+          : { ...stopThinking(m), text: m.text + e.delta, shown: m.text.length + e.delta.length, phase: 'intro' },
       )
       break
     case 'tool-start':
       patch(id, (m) => ({
+        ...stopThinking(m),
         phase: 'tools',
         status: undefined,
         calls: [...(m.calls ?? []), { id: e.callId, tool: e.tool, title: toolTitle(e.tool), detail: inputDetail(e.input), status: 'running' }],

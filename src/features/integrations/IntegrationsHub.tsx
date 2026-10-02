@@ -1,4 +1,4 @@
-import { ArrowRight, AudioLines, Box, Check, Clapperboard, Copy, ExternalLink, Eye, EyeOff, LoaderCircle, LogOut, Plug, Plus, RefreshCw, Server, Sparkles, Terminal, Trash, Unplug, Waypoints } from 'lucide-react'
+import { ArrowRight, AudioLines, BookOpen, Box, Check, Clapperboard, Copy, ExternalLink, Eye, EyeOff, LoaderCircle, LogOut, Plug, Plus, RefreshCw, Server, Sparkles, Terminal, Trash, Unplug, Waypoints } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { MCP_CATALOG, type McpCatalogEntry, type McpServerConfig, type McpServerState, type McpTool } from '@shared/integrations'
@@ -10,16 +10,18 @@ import { Switch } from '@/components/ui/switch'
 import { useUI } from '@/editor/ui-store'
 import { PROVIDERS } from '@shared/ai'
 import { useAi } from '@/integrations/ai'
+import { skillEntries, useSkills } from '@/integrations/skills'
 import { useBridge, setBridgeEnabled, regenerateBridgeToken } from '@/integrations/bridge'
 import { connectServer, disconnectServer, refreshBlender, removeServer, saveServer, setBlenderPath, signOutServer, useIntegrations } from '@/integrations/store'
 import { cn } from '@/lib/cn'
 import { useGenerate } from '@/features/assets/generate-store'
 import { LocalAgentsPane, ModelsPane } from './AiPanes'
 import { ElevenLabsPane } from './ElevenLabsPane'
+import { SkillsPane } from './SkillsPane'
 import { Card, IconTile, STATUS_LABEL, StatusDot } from './parts'
 import { ToolList, ToolRunner } from './ToolRunner'
 
-type Selection = 'ai-models' | 'local-agents' | 'blender' | 'hyperframes' | 'elevenlabs' | 'agents' | 'add' | `server:${string}` | `catalog:${string}`
+type Selection = 'ai-models' | 'local-agents' | 'skills' | 'blender' | 'hyperframes' | 'elevenlabs' | 'agents' | 'add' | `server:${string}` | `catalog:${string}`
 
 export function IntegrationsHub() {
   const open = useIntegrations((s) => s.hubOpen)
@@ -66,6 +68,10 @@ function Sidebar({ selected, onSelect }: { selected: Selection; onSelect: (s: Se
   const catalog = MCP_CATALOG.filter((c) => !servers[c.id])
   const modelCount = PROVIDERS.filter((p) => providers[p.id]?.configured).length
   const agentsReady = Object.values(localAgents).filter((a) => a?.signedIn).length
+  const skillDisk = useSkills((s) => s.disk)
+  const skillsOff = useSkills((s) => s.off)
+  const claudeOn = useSkills((s) => s.on)
+  const skillsOn = skillEntries({ disk: skillDisk, off: skillsOff, on: claudeOn }).filter((k) => k.enabled).length
 
   return (
     <nav className="flex w-[244px] shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-line bg-black/15 px-2.5 py-5">
@@ -93,6 +99,7 @@ function Sidebar({ selected, onSelect }: { selected: Selection; onSelect: (s: Se
         hint={agentsReady ? `${agentsReady} ready` : 'Use your own install'}
         status={agentsReady ? 'ready' : undefined}
       />
+      <NavItem active={selected === 'skills'} onClick={() => onSelect('skills')} icon={<IconTile tone="lumen" size="sm"><BookOpen /></IconTile>} label="Skills" hint={`${skillsOn} on`} status={skillsOn ? 'ready' : undefined} />
 
       <NavLabel>Engines</NavLabel>
       <NavItem active={selected === 'blender'} onClick={() => onSelect('blender')} icon={<IconTile tone="blender" size="sm"><Box /></IconTile>} label="Blender" hint={!available ? 'Desktop app' : blender?.found ? blender.version : blender ? 'Not found' : 'Checking…'} status={blender?.found ? 'ready' : blender ? 'missing' : undefined} />
@@ -190,6 +197,7 @@ function Detail({ selected, onSelect }: { selected: Selection; onSelect: (s: Sel
   if (!available && selected !== 'hyperframes') return <DesktopOnly />
   if (selected === 'ai-models') return <ModelsPane />
   if (selected === 'local-agents') return <LocalAgentsPane />
+  if (selected === 'skills') return <SkillsPane />
   if (selected === 'blender') return <BlenderPane />
   if (selected === 'hyperframes') return <HyperFramesPane />
   if (selected === 'elevenlabs') return <ElevenLabsPane />

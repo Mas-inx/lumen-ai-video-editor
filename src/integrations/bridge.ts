@@ -6,6 +6,7 @@
 import { create } from 'zustand'
 import type { BridgeLogEntry, BridgeStatus } from '@shared/integrations'
 import { agentTools, runAgentTool } from './agent-tools'
+import { describeTool, skillsPrompt } from './skills'
 import { api } from './store'
 
 interface BridgeStore {
@@ -23,7 +24,9 @@ export function startBridgeClient() {
   started = true
   useBridge.setState({ toolNames: agentTools().map((t) => t.name) })
   api.bridge.serve(async (req) => {
-    if (req.method === 'tools') return agentTools().map(({ name, description, inputSchema }) => ({ name, description, inputSchema }))
+    if (req.method === 'tools') return agentTools().map(({ name, description, inputSchema }) => ({ name, description: describeTool(name, description), inputSchema }))
+    // Standing instructions for MCP clients: the skills that are on.
+    if (req.method === 'instructions') return skillsPrompt()
     return runAgentTool(req.tool ?? '', req.args ?? {})
   })
   api.bridge.onState(({ status, log }) => useBridge.setState({ status, log }))

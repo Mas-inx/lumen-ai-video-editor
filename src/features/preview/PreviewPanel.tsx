@@ -1,16 +1,18 @@
-import { Activity, Camera, Gauge, Grid3x3, Maximize2, Pause, Play, Repeat, SkipBack, SkipForward, StepBack, StepForward, Video } from 'lucide-react'
+import { Activity, Camera, Check, ChevronDown, Gauge, Grid3x3, Maximize2, MonitorPlay, Pause, Play, Repeat, SkipBack, SkipForward, StepBack, StepForward, Video } from 'lucide-react'
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { toast } from 'sonner'
 import { desktop } from '@/lib/platform'
 import { importMediaFiles } from '@/project/media-import'
 import { IconButton } from '@/components/ui/button'
-import { Select } from '@/components/ui/select'
+import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from '@/components/ui/menu'
 import { Tip } from '@/components/ui/tooltip'
 import { projectDuration } from '@/editor/ops'
-import { playback, usePlayback } from '@/editor/playback'
+import { onPlayhead, playback, usePlayback } from '@/editor/playback'
 import { getProject, useEditor } from '@/editor/store'
-import { useUI } from '@/editor/ui-store'
+import { PREVIEW_RES, useUI } from '@/editor/ui-store'
 import { audioEngine } from '@/engine/audio-engine'
+import { onMeterFrame } from '@/engine/meter-clock'
+import { useAutoRes } from '@/engine/preview-res'
 import { timelineStills } from '@/engine/stills'
 import { meterPos } from '@/features/mixer/scales'
 import { MARKER_COLORS } from '@/features/timeline/Ruler'
@@ -22,9 +24,52 @@ import { AngleViewer } from './AngleViewer'
 import { PreviewStage } from './PreviewStage'
 import { Scopes } from './Scopes'
 
+const RES_SHORT: Record<string, string> = { '1': 'Full', '0.5': '½', '0.25': '¼', '0.125': '⅛' }
+
+/** Preview resolution while playing (Auto adapts to this computer) and while paused. */
+function ResolutionMenu() {
+  const playbackRes = useUI((s) => s.playbackRes)
+  const pausedRes = useUI((s) => s.pausedRes)
+  const auto = useAutoRes((s) => s.level)
+  const label = playbackRes === 'auto' ? `Auto${auto < 1 ? ` · ${RES_SHORT[String(auto)]}` : ''}` : RES_SHORT[String(playbackRes)]
+  return (
+    <Menu>
+      <Tip content="Preview resolution — lower plays heavy timelines smoothly">
+        <MenuTrigger asChild>
+          <button
+            type="button"
+            className="mr-1 flex h-7 items-center gap-1.5 rounded-lg bg-white/[0.045] px-2 text-xs font-medium text-fg-2 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)] outline-none transition-colors hover:bg-white/[0.08] hover:text-fg focus-visible:ring-2 focus-visible:ring-accent/60 data-[state=open]:bg-white/[0.08]"
+          >
+            <MonitorPlay className="size-3.5 text-fg-3" />
+            <span className="tabular">{label}</span>
+            <ChevronDown className="size-3 text-fg-4" />
+          </button>
+        </MenuTrigger>
+      </Tip>
+      <MenuContent align="end" className="w-72">
+        <MenuLabel>While playing</MenuLabel>
+        {PREVIEW_RES.map((r) => (
+          <MenuItem key={String(r.value)} icon={playbackRes === r.value ? <Check /> : <span className="size-4" />} onSelect={() => useUI.getState().setPlaybackRes(r.value)}>
+            <span className="flex flex-col py-0.5 leading-tight">
+              <span>{r.label}</span>
+              <span className="text-2xs text-fg-4">{r.hint}</span>
+            </span>
+          </MenuItem>
+        ))}
+        <MenuSeparator />
+        <MenuLabel>While paused</MenuLabel>
+        {PREVIEW_RES.filter((r) => r.value !== 'auto').map((r) => (
+          <MenuItem key={String(r.value)} icon={pausedRes === r.value ? <Check /> : <span className="size-4" />} onSelect={() => useUI.getState().setPausedRes(r.value as 1)}>
+            {r.label}
+          </MenuItem>
+        ))}
+      </MenuContent>
+    </Menu>
+  )
+}
+
 export function PreviewPanel() {
   const panelRef = useRef<HTMLDivElement>(null)
-  const [quality, setQuality] = useState<'full' | 'half'>('full')
   const [scopes, setScopes] = useState(false)
   const hasProxies = useEditor((s) => Object.values(s.project.assets).some((a) => a.proxy))
   const useProxies = useUI((s) => s.useProxies)
@@ -73,16 +118,7 @@ export function PreviewPanel() {
           {settings.width}×{settings.height} · {settings.fps} fps
         </button>
         <div className="ml-auto flex items-center gap-0.5">
-          <Select
-            aria-label="Preview quality"
-            value={quality}
-            onChange={setQuality}
-            className="mr-1 w-[76px]"
-            options={[
-              { value: 'full', label: 'Full' },
-              { value: 'half', label: 'Half' },
-            ]}
-          />
+          <ResolutionMenu />
           {hasProxies && (
             <IconButton label={useProxies ? 'Playing proxies — click for the originals' : 'Playing originals — click for the proxies'} active={useProxies} onClick={() => useUI.getState().setUseProxies(!useProxies)}>
               <Gauge />
@@ -108,7 +144,7 @@ export function PreviewPanel() {
         </div>
       </div>
       <div className="flex min-h-0 flex-1">
-        <PreviewStage q={quality} />
+        <PreviewStage />
         {scopes && <Scopes />}
       </div>
       <AngleViewer />
@@ -117,8 +153,20 @@ export function PreviewPanel() {
   )
 }
 
+/** The playhead's timecode, written straight to the DOM as it moves (no re-render per frame). */
+function LiveTimecode({ fps, className }: { fps: number; className?: string }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  useEffect(
+    () =>
+      onPlayhead((f) => {
+        if (ref.current) ref.current.textContent = formatTimecode(f, fps)
+      }),
+    [fps],
+  )
+  return <span ref={ref} className={className} />
+}
+
 function Transport() {
-  const frame = usePlayback((s) => s.frame)
   const playing = usePlayback((s) => s.playing)
   const rate = usePlayback((s) => s.rate)
   const loop = usePlayback((s) => s.loop)
@@ -130,7 +178,7 @@ function Transport() {
       <ScrubBar />
       <div className="mt-2 grid grid-cols-[1fr_auto_1fr] items-center">
         <div className="flex items-baseline gap-1.5 font-mono tabular">
-          <span className="text-[13px] font-medium text-fg">{formatTimecode(frame, fps)}</span>
+          <LiveTimecode fps={fps} className="text-[13px] font-medium text-fg" />
           <span className="text-xs text-fg-4">/ {formatTimecode(duration, fps)}</span>
         </div>
         <div className="flex items-center gap-1">
@@ -177,24 +225,16 @@ function MasterMeter() {
   const right = useRef<HTMLSpanElement>(null)
   useEffect(() => {
     const bars = [left, right]
-    let raf = 0
-    let last = performance.now()
     const shown = [-60, -60]
-    const tick = (now: number) => {
-      const dt = (now - last) / 1000
-      last = now
+    // The shared meter clock only runs while sound plays — an idle editor doesn't redraw 120 times a second.
+    return onMeterFrame((_now, dt) => {
       const lv = audioEngine.levels('master') ?? [-Infinity, -Infinity]
       for (let i = 0; i < 2; i++) {
         shown[i] = Math.max(Number.isFinite(lv[i]) ? lv[i] : -60, shown[i] - 24 * dt)
         const el = bars[i].current
-        if (el) {
-          el.style.clipPath = `inset(0 ${((1 - meterPos(shown[i])) * 100).toFixed(2)}% 0 0)`
-        }
+        if (el) el.style.clipPath = `inset(0 ${((1 - meterPos(shown[i])) * 100).toFixed(2)}% 0 0)`
       }
-      raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
+    })
   }, [])
   return (
     <Tip content="Master level — open the mixer">
@@ -210,12 +250,22 @@ function MasterMeter() {
 }
 
 function ScrubBar() {
-  const frame = usePlayback((s) => s.frame)
   const fps = useEditor((s) => s.project.settings.fps)
   const duration = useEditor((s) => Math.max(1, projectDuration(s.project)))
   const markers = useEditor((s) => s.project.markers)
   const [hover, setHover] = useState<number | null>(null)
-  const pct = clamp(frame / duration, 0, 1) * 100
+  const fill = useRef<HTMLDivElement>(null)
+  const knob = useRef<HTMLSpanElement>(null)
+  // Follows the playhead by writing to the DOM: no re-render on every playback frame.
+  useEffect(
+    () =>
+      onPlayhead((f) => {
+        const pct = `${clamp(f / duration, 0, 1) * 100}%`
+        if (fill.current) fill.current.style.width = pct
+        if (knob.current) knob.current.style.left = pct
+      }),
+    [duration],
+  )
 
   const frameAt = (e: ReactPointerEvent<HTMLDivElement>) => {
     const r = e.currentTarget.getBoundingClientRect()
@@ -238,14 +288,14 @@ function ScrubBar() {
       onPointerLeave={() => setHover(null)}
     >
       <div className="relative h-[3px] w-full overflow-hidden rounded-full bg-white/[0.08] transition-[height] duration-150 group-hover/scrub:h-[5px]">
-        <div className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-accent to-ai-2" style={{ width: `${pct}%` }} />
+        <div ref={fill} className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-accent to-ai-2" />
       </div>
       {markers.map((m) => (
         <span key={m.id} className="pointer-events-none absolute top-1/2 size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full ring-2 ring-surface" style={{ left: `${(m.frame / duration) * 100}%`, background: MARKER_COLORS[m.color] }} />
       ))}
       <span
+        ref={knob}
         className={cn('pointer-events-none absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_1px_4px_rgb(0_0_0/0.5)] transition-transform duration-150', 'scale-0 group-hover/scrub:scale-100')}
-        style={{ left: `${pct}%` }}
       />
       {hover !== null && (
         <span

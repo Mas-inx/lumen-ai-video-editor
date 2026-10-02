@@ -11,6 +11,28 @@ export type SelectMode = 'replace' | 'toggle' | 'add'
 export const ZOOM_MIN = 6
 export const ZOOM_MAX = 720
 
+/** How much of the viewer's resolution the preview renders: 1 = full, 0.5 = half… Auto adapts while playing. */
+export type PreviewRes = 'auto' | 1 | 0.5 | 0.25 | 0.125
+export const PREVIEW_RES: { value: PreviewRes; label: string; hint: string }[] = [
+  { value: 'auto', label: 'Auto', hint: 'Full resolution, stepping down while playing when this computer can’t keep up' },
+  { value: 1, label: 'Full', hint: 'Every pixel of the viewer' },
+  { value: 0.5, label: '1/2', hint: 'Half resolution — about four times less work' },
+  { value: 0.25, label: '1/4', hint: 'Quarter resolution — for heavy effects on slower computers' },
+  { value: 0.125, label: '1/8', hint: 'Draft — the lightest preview' },
+]
+
+/** Render previews' resolution, as a fraction of the project's. */
+export type RenderRes = 1 | 0.5 | 0.25 | 0.125
+export const RENDER_RES: { value: RenderRes; label: string; hint: string }[] = [
+  { value: 1, label: 'Full', hint: 'Every pixel — the slowest to render and the largest files' },
+  { value: 0.5, label: '1/2', hint: 'Half resolution, upscaled on playback — the best balance' },
+  { value: 0.25, label: '1/4', hint: 'Quarter resolution — renders four times faster than 1/2' },
+  { value: 0.125, label: '1/8', hint: 'Draft — renders in moments' },
+]
+
+/** How lower-resolution pictures (previews, renders) are scaled up to the viewer. */
+export type Upscale = 'sharp' | 'smooth'
+
 /** The box being placed to track motion, in project pixels (top-left based) at the playhead. */
 export interface TrackEdit {
   clipId: string
@@ -30,8 +52,20 @@ interface UIState {
   showGuides: boolean
   /** The preview plays proxies where there are some. */
   useProxies: boolean
+  /** Preview resolution while playing (Auto steps down on a slow computer). */
+  playbackRes: PreviewRes
+  /** Preview resolution while paused and scrubbing. */
+  pausedRes: Exclude<PreviewRes, 'auto'>
   /** Make proxies for 4K footage automatically. */
   autoProxies: boolean
+  /** Render previews' resolution. */
+  renderRes: RenderRes
+  /** Scaling lower-resolution pictures up: sharp (contrast-adaptive sharpening on the GPU) or smooth. */
+  upscale: Upscale
+  /** Render stretches that need it while the editor sits idle. */
+  backgroundRender: boolean
+  /** Play rendered previews where there are some (instead of compositing live). */
+  usePreviews: boolean
   /** The preview gizmo edits the selected clip's crop instead of its transform. */
   cropMode: boolean
   /** The mask being edited on the canvas (on the selected clip). */
@@ -65,7 +99,13 @@ interface UIState {
   clearSelection: () => void
   setShowGuides: (v: boolean) => void
   setUseProxies: (v: boolean) => void
+  setPlaybackRes: (v: PreviewRes) => void
+  setPausedRes: (v: Exclude<PreviewRes, 'auto'>) => void
   setAutoProxies: (v: boolean) => void
+  setRenderRes: (v: RenderRes) => void
+  setUpscale: (v: Upscale) => void
+  setBackgroundRender: (v: boolean) => void
+  setUsePreviews: (v: boolean) => void
   setCropMode: (v: boolean) => void
   setMaskEdit: (id: string | null) => void
   setPasteAttributesOpen: (v: boolean) => void
@@ -94,7 +134,13 @@ export const useUI = create<UIState>()(
       selection: [],
       showGuides: false,
       useProxies: true,
+      playbackRes: 'auto',
+      pausedRes: 1,
       autoProxies: true,
+      renderRes: 0.5,
+      upscale: 'sharp',
+      backgroundRender: true,
+      usePreviews: true,
       cropMode: false,
       maskEdit: null,
       pasteAttributesOpen: false,
@@ -130,7 +176,13 @@ export const useUI = create<UIState>()(
       clearSelection: () => set({ selection: [] }),
       setShowGuides: (showGuides) => set({ showGuides }),
       setUseProxies: (useProxies) => set({ useProxies }),
+      setPlaybackRes: (playbackRes) => set({ playbackRes }),
+      setPausedRes: (pausedRes) => set({ pausedRes }),
       setAutoProxies: (autoProxies) => set({ autoProxies }),
+      setRenderRes: (renderRes) => set({ renderRes }),
+      setUpscale: (upscale) => set({ upscale }),
+      setBackgroundRender: (backgroundRender) => set({ backgroundRender }),
+      setUsePreviews: (usePreviews) => set({ usePreviews }),
       setCropMode: (cropMode) => set({ cropMode, ...(cropMode ? { maskEdit: null } : {}) }),
       setMaskEdit: (maskEdit) => set({ maskEdit, ...(maskEdit ? { cropMode: false } : {}) }),
       setPasteAttributesOpen: (pasteAttributesOpen) => set({ pasteAttributesOpen }),
@@ -162,7 +214,13 @@ export const useUI = create<UIState>()(
         pxPerSecond: s.pxPerSecond,
         showGuides: s.showGuides,
         useProxies: s.useProxies,
+        playbackRes: s.playbackRes,
+        pausedRes: s.pausedRes,
         autoProxies: s.autoProxies,
+        renderRes: s.renderRes,
+        upscale: s.upscale,
+        backgroundRender: s.backgroundRender,
+        usePreviews: s.usePreviews,
         angleViewer: s.angleViewer,
       }),
     },

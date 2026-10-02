@@ -1,10 +1,10 @@
-import { Circle, Crosshair, Eye, EyeOff, Move, Plus, Square, Trash, Unlink } from 'lucide-react'
+import { Circle, Crosshair, Eye, EyeOff, Move, Plus, Square, Trash, Type, Unlink, UserRound } from 'lucide-react'
 import { IconButton } from '@/components/ui/button'
 import { Menu, MenuContent, MenuItem, MenuTrigger } from '@/components/ui/menu'
 import { Row, Section } from '@/components/ui/section'
 import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
-import { dispatch } from '@/editor/store'
+import { dispatch, useEditor } from '@/editor/store'
 import type { Clip, Mask } from '@/editor/types'
 import { useUI } from '@/editor/ui-store'
 import { actions } from '@/features/shell/actions'
@@ -14,6 +14,9 @@ import { cn } from '@/lib/cn'
 export function MaskSection({ clip }: { clip: Clip }) {
   const masks = clip.masks ?? []
   const editing = useUI((s) => s.maskEdit)
+  const matte = useEditor((s) => (clip.matte ? s.project.assets[clip.matte.assetId] : undefined))
+  // Subject masks need footage of their own (not titles or adjustment layers).
+  const canSubject = (clip.kind === 'video' || clip.kind === 'image') && Boolean(clip.assetId) && !clip.sequenceId
   const add = (shape: Mask['shape']) => {
     const res = dispatch('mask.add', { clipId: clip.id, mask: { shape, ...(shape === 'rectangle' ? { width: 0.6, height: 0.6 } : {}) } })
     if (res.ok) useUI.getState().setMaskEdit(res.result as string)
@@ -24,7 +27,7 @@ export function MaskSection({ clip }: { clip: Clip }) {
     <Section
       title="Masks"
       icon={<Circle />}
-      defaultOpen={masks.length > 0}
+      defaultOpen={masks.length > 0 || Boolean(clip.matte)}
       actions={
         <Menu>
           <MenuTrigger asChild>
@@ -39,13 +42,46 @@ export function MaskSection({ clip }: { clip: Clip }) {
             <MenuItem icon={<Square />} onSelect={() => add('rectangle')}>
               Rectangle
             </MenuItem>
+            {canSubject && (
+              <>
+                <MenuItem icon={<UserRound />} onSelect={() => void actions.cutOutSubject(clip.id)}>
+                  The person (AI)
+                </MenuItem>
+                <MenuItem icon={<UserRound />} onSelect={() => void actions.cutOutSubject(clip.id, 'any')}>
+                  The main subject (AI, GPU)
+                </MenuItem>
+                <MenuItem icon={<Type />} onSelect={() => void actions.textBehindSubject(clip.id)}>
+                  Text behind the person
+                </MenuItem>
+              </>
+            )}
           </MenuContent>
         </Menu>
       }
     >
+      {clip.matte && (
+        <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-white/[0.035] p-2 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.04)]">
+          <UserRound className="size-3.5 text-fg-3" />
+          <span className="min-w-0 flex-1 truncate text-xs font-medium text-fg">
+            {clip.matte.invert ? 'Everything but the ' : 'Only the '}
+            {matte?.matteOf?.subject === 'any' ? 'subject' : 'person'}
+            <span className="font-normal text-fg-4"> · AI matte</span>
+          </span>
+          <IconButton size="xs" label={clip.matte.invert ? 'Show the subject instead' : 'Show everything but the subject'} active={clip.matte.invert} onClick={() => dispatch('clip.update', { ids: [clip.id], patch: { matte: { ...clip.matte!, invert: !clip.matte!.invert } } })}>
+            {clip.matte.invert ? <EyeOff /> : <Eye />}
+          </IconButton>
+          <IconButton size="xs" label="Show the whole picture again" onClick={() => dispatch('clip.update', { ids: [clip.id], patch: { matte: null } })}>
+            <Trash />
+          </IconButton>
+        </div>
+      )}
       {!masks.length ? (
         <p className="text-2xs leading-relaxed text-fg-4">
-          {clip.kind === 'adjustment' ? 'Limit the grade to part of the frame — a face, the sky, a vignette of your own.' : 'Show only part of the clip — spotlight a subject, split the screen, soften an edge.'}
+          {clip.kind === 'adjustment'
+            ? 'Limit the grade to part of the frame — a face, the sky, a vignette of your own.'
+            : canSubject
+              ? 'Show only part of the clip — spotlight a subject, split the screen, soften an edge. + also cuts out the person with AI, or puts text behind them.'
+              : 'Show only part of the clip — spotlight a subject, split the screen, soften an edge.'}
         </p>
       ) : (
         <div className="space-y-2">

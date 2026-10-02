@@ -4,6 +4,7 @@
  * silence analysis, the undo history and the catalog of valid ids.
  */
 import { BLEND_MODES, EASINGS } from '@/editor/commands'
+import { MOTION_PRESETS } from '@/editor/motion-presets'
 import { FONTS } from '@/editor/defaults'
 import { propAt } from '@/editor/keyframes'
 import { CANVAS_PRESETS } from '@/editor/new-project'
@@ -353,7 +354,7 @@ export const INSPECT_TOOLS: AgentTool[] = [
     description:
       'The exact ids Lumen’s editing commands accept, with names and descriptions: effects, transitions, looks (color presets), title presets, text animations, fonts, blend modes, easings, built-in sound effects and canvas presets. Use it instead of guessing ids.',
     inputSchema: obj({
-      section: oneOf('Just one section (default: everything)', ['effects', 'transitions', 'looks', 'titles', 'animations', 'fonts', 'blend_modes', 'easings', 'sound_effects', 'canvas_presets']),
+      section: oneOf('Just one section (default: everything)', ['effects', 'transitions', 'looks', 'titles', 'animations', 'fonts', 'blend_modes', 'easings', 'motion_presets', 'sound_effects', 'canvas_presets']),
     }),
     run: async (a) => {
       const all = {
@@ -365,6 +366,7 @@ export const INSPECT_TOOLS: AgentTool[] = [
         fonts: Object.entries(FONTS).map(([id, f]) => ({ id, name: f.label })),
         blend_modes: [...BLEND_MODES],
         easings: [...EASINGS],
+        motion_presets: MOTION_PRESETS.map((m) => ({ id: m.id, name: m.name, group: m.group, description: m.description })),
         sound_effects: SFX.map((s) => ({ id: s.id, name: s.name, category: s.category, description: s.description, duration_seconds: s.duration })),
         canvas_presets: CANVAS_PRESETS.map((c) => ({ id: c.id, name: c.label, size: `${c.width}x${c.height}`, use: c.hint })),
       }

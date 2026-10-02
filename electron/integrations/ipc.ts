@@ -1,4 +1,4 @@
-import { ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { IPC, type BlenderRenderRequest, type ImageGenRequest, type McpServerConfig, type MotionRenderRequest, type Provenance, type VideoGenRequest } from '../../shared/integrations'
 import { detectBlender, renderBlender, runLive, setBlenderPath } from './blender'
 import { renderMotion } from './hyperframes'
@@ -8,6 +8,9 @@ import { elevenLabsState, listVoices, music, setElevenLabsKey, soundEffect, spea
 import { importUrl, reveal } from './media'
 import { bridgeState, regenerateToken, startBridge, stopBridge } from './server'
 import { forgetConversation, startAgentRun, stopAgentRun } from './ai/agent'
+import { loadChats, saveChats } from './ai/chats'
+import { linkPreview, readPage, screenshotPage, webSearch } from './web'
+import { deleteSkill, importSkill, listSkills, openSkillsFolder, readSkill, readSkillFile, saveSkill } from './skills'
 import { localAgentStates, signInLocal } from './ai/local-agents'
 import { signInOpenRouter } from './ai/openrouter'
 import { listModels, providerStates, setProvider } from './ai/providers'
@@ -68,10 +71,44 @@ export function registerIntegrationIpc(isTrustedUrl: (url: string) => boolean) {
     if (!req || typeof req.runId !== 'string' || typeof req.conversationId !== 'string' || typeof req.prompt !== 'string') throw new Error('Bad request')
     const target = cleanTarget(req.target)
     if (!target) throw new Error('Unknown model or agent')
-    return startAgentRun({ ...req, target, prompt: req.prompt.slice(0, 20_000), context: typeof req.context === 'string' ? req.context.slice(0, 4000) : undefined })
+    return startAgentRun({
+      ...req,
+      target,
+      prompt: req.prompt.slice(0, 20_000),
+      context: typeof req.context === 'string' ? req.context.slice(0, 4000) : undefined,
+      instructions: typeof req.instructions === 'string' ? req.instructions.slice(0, 12_000) : undefined,
+    })
   })
   handle(IPC.aiStop, (runId: string) => stopAgentRun(String(runId)))
   handle(IPC.aiForget, (conversationId: string) => forgetConversation(String(conversationId)))
+  handle(IPC.aiChatsLoad, (projectId: string) => loadChats(String(projectId)))
+  handle(IPC.aiChatsSave, (projectId: string, chats: unknown) => saveChats(String(projectId), chats))
+  handle(IPC.webSearch, (query: string, max?: number) => webSearch(String(query), Number(max) || 8))
+  handle(IPC.webRead, (url: string, maxChars?: number) => readPage(String(url), Number(maxChars) || 12000))
+  handle(IPC.webScreenshot, (url: string, opts?: { width?: number; height?: number; fullPage?: boolean }) => {
+    const o = opts && typeof opts === 'object' ? opts : {}
+    return screenshotPage(String(url), { width: Number(o.width) || undefined, height: Number(o.height) || undefined, fullPage: o.fullPage === true })
+  })
+  handle(IPC.webPreview, (url: string) => linkPreview(String(url)))
+
+  const skillSource = (s: unknown) => {
+    if (s !== 'user' && s !== 'claude') throw new Error('Unknown skill source')
+    return s
+  }
+  handle(IPC.skillsList, () => listSkills())
+  handle(IPC.skillsRead, (source: string, folder: string) => readSkill(skillSource(source), String(folder)))
+  handle(IPC.skillsReadFile, (source: string, folder: string, file: string) => readSkillFile(skillSource(source), String(folder), String(file)))
+  handle(IPC.skillsSave, (input: { folder?: unknown; name?: unknown; description?: unknown; body?: unknown }) =>
+    saveSkill({
+      folder: typeof input?.folder === 'string' && input.folder ? input.folder : undefined,
+      name: String(input?.name ?? ''),
+      description: String(input?.description ?? ''),
+      body: String(input?.body ?? ''),
+    }),
+  )
+  handle(IPC.skillsDelete, (folder: string) => deleteSkill(String(folder)))
+  handle(IPC.skillsImport, () => importSkill(BrowserWindow.getFocusedWindow()))
+  handle(IPC.skillsOpenFolder, () => openSkillsFolder())
   const genProvider = (p: unknown) => {
     if (p !== 'openai' && p !== 'gemini') throw new Error('Unknown provider')
     return p
@@ -146,7 +183,7 @@ function sanitizeBlender(req: BlenderRenderRequest): BlenderRenderRequest {
 }
 
 function sanitizeMotion(req: MotionRenderRequest): MotionRenderRequest {
-  if (!['lower-third', 'kinetic', 'counter', 'title-card', 'custom'].includes(req?.template)) throw new Error('Unknown motion template')
+  if (!['lower-third', 'kinetic', 'counter', 'title-card', 'quote', 'chapter', 'custom'].includes(req?.template)) throw new Error('Unknown motion template')
   return {
     ...frameSpec(req),
     params: req.params && typeof req.params === 'object' ? req.params : {},

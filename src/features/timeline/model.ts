@@ -30,7 +30,7 @@ export interface DropGhost {
 }
 
 interface DragState {
-  mode: 'move' | 'trim' | 'marquee' | 'scrub' | 'fade' | null
+  mode: 'move' | 'trim' | 'marquee' | 'scrub' | 'fade' | 'keyframe' | null
   /** Clips under the pointer's direct control (others with previews are just making room). */
   dragIds: string[]
   /** Live positions of clips being moved/trimmed — and neighbours sliding out of the way */
@@ -45,6 +45,8 @@ interface DragState {
   dropTargetClip: string | null
   /** Reordering tracks: the content-space y of the insertion line. */
   trackDropY: number | null
+  /** A keyframe being dragged along its clip: where it was and where it would land (clip-relative frames). */
+  keyDrag: { clipId: string; from: number; to: number } | null
 }
 
 export const useDrag = create<DragState>(() => ({
@@ -58,9 +60,10 @@ export const useDrag = create<DragState>(() => ({
   dropGhost: null,
   dropTargetClip: null,
   trackDropY: null,
+  keyDrag: null,
 }))
 
 export const resetDrag = () =>
-  useDrag.setState({ mode: null, dragIds: [], previews: {}, snapFrame: null, marquee: null, readout: null })
+  useDrag.setState({ mode: null, dragIds: [], previews: {}, snapFrame: null, marquee: null, readout: null, keyDrag: null })
 
 export const dbToGain = (db: number) => Math.pow(10, db / 20)

@@ -9,7 +9,7 @@ import { clipEnd, findFreeStart, isMagneticTrack, magneticLayout, projectDuratio
 import { applyEffect, applyLook, applyTransition, assetFrames, placeAsset, placeSequence, placeTitle } from '@/editor/placement'
 import { angleTracks } from '@/editor/sequences'
 import { openTimeline } from '@/editor/timeline-nav'
-import { usePlayback } from '@/editor/playback'
+import { onPlayhead, usePlayback } from '@/editor/playback'
 import { SPEED_RAMPS, TITLE_PRESETS } from '@/editor/presets'
 import { dispatch, getProject, useEditor } from '@/editor/store'
 import { isRamped } from '@/editor/timing'
@@ -29,6 +29,7 @@ import { TimelineToolbar } from './TimelineToolbar'
 import { TrackHeader } from './TrackHeader'
 import { TrackLane } from './TrackLane'
 import { usePointerController } from './usePointerController'
+import { anchorNextZoom, useViewport } from './viewport'
 
 const SCISSORS_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><path d="M8.12 8.12 12 12"/><path d="M20 4 8.12 15.88"/><circle cx="6" cy="18" r="3"/><path d="M14.8 14.8 20 20"/></svg>',
@@ -58,9 +59,12 @@ export function Timeline() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const { width: viewW } = useElementSize(scrollRef)
-  const [scrollLeft, setScrollLeft] = useState(0)
   const laneViewport = Math.max(0, viewW - HEADER_W)
   const contentW = Math.max(laneViewport, (duration / fps + 30) * pps)
+  // What's on screen lives in a store: scrolling updates the lanes and clips near the edge, not the whole timeline.
+  useLayoutEffect(() => {
+    useViewport.setState({ width: laneViewport })
+  }, [laneViewport])
 
   const rows = useMemo(() => computeRows(tracks), [tracks])
   const layout = useMemo<TimelineLayout>(() => ({ pps, fps, tracks, rowTop: rows.rowTop, rowHeight: rows.rowHeight }), [pps, fps, tracks, rows])
@@ -72,7 +76,6 @@ export function Timeline() {
   const pointer = usePointerController({ scrollRef, contentRef, layoutRef })
 
   // ── Scroll & zoom ─────────────────────────────────────────────────────
-  const anchor = useRef<{ sec: number; px: number } | null>(null)
   const prevPps = useRef(pps)
 
   useEffect(() => {
@@ -83,17 +86,28 @@ export function Timeline() {
       if (raf) return
       raf = requestAnimationFrame(() => {
         raf = 0
-        setScrollLeft(el.scrollLeft)
+        useViewport.setState({ scrollLeft: el.scrollLeft })
       })
     }
+    useViewport.setState({ scrollLeft: el.scrollLeft })
+    // Wheels and trackpads send several zoom events per frame: add them up and zoom once per frame.
+    let zoomRaf = 0
+    let wheel = 0
+    let wheelX = 0
     const onWheel = (e: WheelEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return
       e.preventDefault()
-      const rect = el.getBoundingClientRect()
-      const px = Math.max(0, e.clientX - rect.left - HEADER_W)
-      const { pxPerSecond, setZoom } = useUI.getState()
-      anchor.current = { sec: (el.scrollLeft + px) / pxPerSecond, px }
-      setZoom(clamp(pxPerSecond * Math.exp(-e.deltaY * 0.0025), ZOOM_MIN, ZOOM_MAX))
+      wheel += e.deltaY
+      wheelX = e.clientX
+      if (zoomRaf) return
+      zoomRaf = requestAnimationFrame(() => {
+        zoomRaf = 0
+        const px = Math.max(0, wheelX - el.getBoundingClientRect().left - HEADER_W)
+        const { pxPerSecond, setZoom } = useUI.getState()
+        anchorNextZoom((useViewport.getState().scrollLeft + px) / pxPerSecond, px)
+        setZoom(clamp(pxPerSecond * Math.exp(-wheel * 0.0025), ZOOM_MIN, ZOOM_MAX))
+        wheel = 0
+      })
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     el.addEventListener('wheel', onWheel, { passive: false })
@@ -101,23 +115,18 @@ export function Timeline() {
       el.removeEventListener('scroll', onScroll)
       el.removeEventListener('wheel', onWheel)
       cancelAnimationFrame(raf)
+      cancelAnimationFrame(zoomRaf)
     }
   }, [])
 
-  // Keep the zoom anchored (pointer for wheel, otherwise the playhead).
+  // Zooming keeps the pointer (wheel) or the playhead in place: the viewport store
+  // works out where to scroll along with the new zoom, and the element follows.
   useLayoutEffect(() => {
     const el = scrollRef.current
     if (!el || prevPps.current === pps) return
-    if (anchor.current) {
-      el.scrollLeft = anchor.current.sec * pps - anchor.current.px
-      anchor.current = null
-    } else {
-      const sec = usePlayback.getState().frame / fps
-      const onScreen = sec * prevPps.current - el.scrollLeft
-      el.scrollLeft = sec * pps - clamp(onScreen, 0, laneViewport)
-    }
+    el.scrollLeft = useViewport.getState().scrollLeft
     prevPps.current = pps
-  }, [pps, fps, laneViewport])
+  }, [pps])
 
   // Zoom to fit on first layout and on request.
   const fitted = useRef(-1)
@@ -134,15 +143,20 @@ export function Timeline() {
     if (tool !== 'blade') useDrag.setState({ bladeFrame: null })
   }, [tool])
 
-  // Follow the playhead during playback.
+  // Follow the playhead during playback. Reads the viewport store, not the DOM:
+  // asking the element for its size or scroll position on every frame forces a layout.
   useEffect(
     () =>
       usePlayback.subscribe((s, prev) => {
         const el = scrollRef.current
         if (!el || !s.playing || s.frame === prev.frame) return
         const x = (s.frame / fps) * useUI.getState().pxPerSecond
-        const view = el.clientWidth - HEADER_W
-        if (x > el.scrollLeft + view - 24 || x < el.scrollLeft) el.scrollLeft = x - 48
+        const { scrollLeft, width } = useViewport.getState()
+        if (x > scrollLeft + width - 24 || x < scrollLeft) {
+          const next = Math.max(0, x - 48)
+          el.scrollLeft = next
+          useViewport.setState({ scrollLeft: next })
+        }
       }),
     [fps],
   )
@@ -167,8 +181,10 @@ export function Timeline() {
       const asset = project.assets[payload.assetId]
       if (!asset) return null
       kind = asset.kind
-      length = assetFrames(project, asset)
-      label = asset.name
+      // Several media land one after another: the ghost covers them all.
+      const all = (payload.assetIds ?? [payload.assetId]).map((id) => project.assets[id]).filter(Boolean)
+      length = all.reduce((n, a) => n + assetFrames(project, a), 0)
+      label = all.length > 1 ? `${all.length} items` : asset.name
     } else if (payload.type === 'title') {
       const preset = TITLE_PRESETS.find((p) => p.id === payload.presetId) ?? TITLE_PRESETS[0]
       kind = 'text'
@@ -249,9 +265,23 @@ export function Timeline() {
     if (!payload) return
     const select = (id: string | null) => id && useUI.getState().select([id])
     switch (payload.type) {
-      case 'asset':
-        select(placeAsset(payload.assetId, ghost?.start ?? frame, { trackId: ghost?.trackId ?? undefined }))
+      case 'asset': {
+        const ids = payload.assetIds ?? [payload.assetId]
+        let at = ghost?.start ?? frame
+        const placed: string[] = []
+        useEditor.getState().transaction(ids.length > 1 ? `Add ${ids.length} clips` : 'Add clip', 'user', () => {
+          for (const id of ids) {
+            const asset = getProject().assets[id]
+            const onTrack = ghost?.trackId && asset && trackAccepts(getProject().tracks.find((t) => t.id === ghost.trackId)!, asset.kind) ? ghost.trackId : undefined
+            const clipId = placeAsset(id, at, { trackId: onTrack })
+            if (!clipId) continue
+            placed.push(clipId)
+            at = clipEnd(getProject().clips[clipId])
+          }
+        })
+        if (placed.length) useUI.getState().select(placed)
         break
+      }
       case 'title':
         select(placeTitle(payload.presetId, ghost?.start ?? frame, { trackId: ghost?.trackId ?? undefined }))
         break
@@ -315,7 +345,7 @@ export function Timeline() {
               >
                 <div className="sticky top-0 z-40 flex shrink-0" style={{ height: RULER_H }}>
                   <TimecodeCell />
-                  <Ruler width={contentW} laneViewport={laneViewport} scrollLeft={scrollLeft} />
+                  <Ruler width={contentW} laneViewport={laneViewport} />
                 </div>
 
                 {tracks.map((t) => (
@@ -364,10 +394,24 @@ function AddTrackButton({ kind }: { kind: 'video' | 'audio' }) {
   )
 }
 
+/** The playhead line, moved by writing its transform as the playhead moves (no re-render per frame). */
+function PlayheadLine() {
+  const pps = useUI((s) => s.pxPerSecond)
+  const fps = useEditor((s) => s.project.settings.fps)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(
+    () =>
+      onPlayhead((f) => {
+        if (ref.current) ref.current.style.transform = `translateX(${HEADER_W + (f / fps) * pps}px)`
+      }),
+    [pps, fps],
+  )
+  return <div ref={ref} className="pointer-events-none absolute bottom-0 left-0 z-20 -ml-[0.75px] w-[1.5px] bg-white shadow-[0_0_10px_rgb(255_255_255/0.45)] will-change-transform" style={{ top: RULER_H }} />
+}
+
 function Overlays() {
   const pps = useUI((s) => s.pxPerSecond)
   const fps = useEditor((s) => s.project.settings.fps)
-  const frame = usePlayback((s) => s.frame)
   const snapFrame = useDrag((s) => s.snapFrame)
   const bladeFrame = useDrag((s) => s.bladeFrame)
   const marquee = useDrag((s) => s.marquee)
@@ -385,8 +429,7 @@ function Overlays() {
           style={{ left: x(range.in), width: x(range.out) - x(range.in), top: RULER_H }}
         />
       )}
-      {/* Playhead */}
-      <div className="pointer-events-none absolute bottom-0 z-20 w-[1.5px] -translate-x-1/2 bg-white shadow-[0_0_10px_rgb(255_255_255/0.45)]" style={{ left: x(frame), top: RULER_H }} />
+      <PlayheadLine />
       {snapFrame !== null && (
         <div className="pointer-events-none absolute top-0 bottom-0 z-[22] w-px -translate-x-1/2 bg-snap shadow-[0_0_8px_var(--color-snap)]" style={{ left: x(snapFrame) }}>
           <span className="absolute top-[7px] left-1/2 size-2 -translate-x-1/2 rotate-45 bg-snap" />
@@ -528,6 +571,34 @@ function TimelineMenu({ clipId, frame }: { clipId: string | null; frame: number 
           <ContextItem onSelect={() => actions.trackMotion(clip.id)}>{clip.follow ? 'Track motion again…' : 'Track motion…'}</ContextItem>
         )}
         {clip.follow && <ContextItem onSelect={() => dispatch('clip.update', { ids: [clip.id], patch: { follow: null } })}>Stop following</ContextItem>}
+        {(clip.kind === 'video' || clip.kind === 'image') && clip.assetId && !clip.sequenceId && (
+          <ContextSub label="Subject">
+            <ContextItem onSelect={() => void actions.textBehindSubject(clip.id)}>Put text behind the person</ContextItem>
+            <ContextItem onSelect={() => void actions.textBehindSubject(clip.id, 'any')}>Put text behind the main subject (GPU)</ContextItem>
+            <ContextSeparator />
+            <ContextItem onSelect={() => void actions.cutOutSubject(clip.id)}>Cut out the person</ContextItem>
+            <ContextItem onSelect={() => void actions.cutOutSubject(clip.id, 'any')}>Cut out the main subject (GPU)</ContextItem>
+            <ContextItem onSelect={() => void actions.cutOutSubject(clip.id, 'person', true)}>Remove the person, keep the background</ContextItem>
+            {clip.matte && (
+              <>
+                <ContextSeparator />
+                <ContextItem onSelect={() => dispatch('clip.update', { ids: [clip.id], patch: { matte: { ...clip.matte!, invert: !clip.matte!.invert } } })}>
+                  {clip.matte.invert ? 'Show the subject instead' : 'Show everything but the subject'}
+                </ContextItem>
+                <ContextItem onSelect={() => dispatch('clip.update', { ids: [clip.id], patch: { matte: null } })}>Show the whole picture again</ContextItem>
+              </>
+            )}
+          </ContextSub>
+        )}
+        {(clip.kind === 'audio' || clip.kind === 'video') && clip.assetId && (
+          <ContextSub label="Beat">
+            <ContextItem onSelect={() => void actions.detectBeats(clip.id)}>{getProject().assets[clip.assetId]?.beats ? 'Show the beat again' : 'Find the beat'}</ContextItem>
+            <ContextItem onSelect={() => void actions.beatMarkers(clip.id)}>Add markers on the downbeats</ContextItem>
+            {clip.kind !== 'audio' && (
+              <ContextItem onSelect={() => void actions.cutToBeats(2)}>Cut the selected clips to the beat (2 beats each)</ContextItem>
+            )}
+          </ContextSub>
+        )}
         <ContextSeparator />
         <ContextItem icon={<AiSparkle />} onSelect={() => askCopilotAbout(clip.id)}>
           Ask Copilot about this clip

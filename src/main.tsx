@@ -34,7 +34,11 @@ if (import.meta.env.DEV || window.lumen?.testMode) {
     import('@/project/subtitle-files'),
     import('@/engine/compositor'),
     import('mediabunny'),
-  ]).then(([store, ui, pb, copilot, ai, integrations, session, media, exporter, smart, transcribe, audio, tools, engineMedia, proxies, sequences, nav, analysis, queue, subtitles, compositor, mediabunny]) => {
+    import('@/features/preview/PreviewStage'),
+    import('@/engine/render-cache'),
+    import('@/engine/preview-res'),
+    import('@/engine/stills'),
+  ]).then(([store, ui, pb, copilot, ai, integrations, session, media, exporter, smart, transcribe, audio, tools, engineMedia, proxies, sequences, nav, analysis, queue, subtitles, compositor, mediabunny, previewStage, renders, previewRes, stills]) => {
     Object.assign(window, {
       __lumen: {
         editor: store.useEditor,
@@ -61,6 +65,10 @@ if (import.meta.env.DEV || window.lumen?.testMode) {
         subtitles,
         compositor,
         mediabunny,
+        previewStage,
+        renders,
+        previewRes,
+        stills,
       },
     })
   })

@@ -1,11 +1,12 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { BrowserWindow, session } from 'electron'
+import { session, type BrowserWindow } from 'electron'
+import { exactOffscreenWindow } from '../../offscreen'
 import type { GeneratedAsset, Job, MotionRenderRequest } from '../../../shared/integrations'
 import { createJob, failJob, finishJob, isCancelled, setCanceller, updateJob } from '../jobs'
 import { jobDir, mediaUrl, packageFile, workDir } from '../paths'
-import { buildTemplate, TEMPLATE_DURATION, TEMPLATE_NAMES } from './templates'
+import { buildTemplate, fontFaces, TEMPLATE_NAMES, templateDuration } from './templates'
 
 /**
  * HyperFrames rendering, natively inside Lumen: the composition loads in a
@@ -33,6 +34,12 @@ function renderSession() {
     ses.setPermissionRequestHandler((_wc, _permission, cb) => cb(false))
   }
   return ses
+}
+
+/** Lumen's typefaces for a composition written from scratch (templates carry them already). */
+function withFonts(html: string) {
+  const style = `<style data-lumen-fonts>${fontFaces()}</style>`
+  return /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (m) => `${m}\n${style}`) : style + html
 }
 
 /** Points GSAP (and its plugins) at the bundled copies instead of a CDN, and injects the runtime. */
@@ -85,25 +92,21 @@ async function run(jobId: string, req: MotionRenderRequest, label: string) {
   let html: string
   if (req.template === 'custom') {
     if (!req.html) throw new Error('A custom motion graphic needs its HyperFrames HTML.')
-    html = req.html
+    html = withFonts(req.html)
   } else {
-    html = buildTemplate(req.template, req.params, { width, height, duration: req.duration ?? TEMPLATE_DURATION[req.template] })
+    html = buildTemplate(req.template, req.params, { width, height, duration: req.duration ?? templateDuration(req.template, req.params) })
   }
   const htmlPath = path.join(work, 'composition.html')
   fs.writeFileSync(htmlPath, prepareHtml(html))
 
   updateJob(jobId, { message: 'Loading composition…' })
-  const win = new BrowserWindow({
-    show: false,
-    width,
-    height,
-    useContentSize: true,
+  // Exactly width×height on any display scaling (a plain window this size would be cut to the screen and render off centre).
+  const { win } = exactOffscreenWindow(width, height, {
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
     enableLargerThanScreen: true,
     webPreferences: {
-      offscreen: true,
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
@@ -122,7 +125,7 @@ async function run(jobId: string, req: MotionRenderRequest, label: string) {
   try {
     await win.loadFile(htmlPath)
     await waitFor(win, 'window.__playerReady && window.__player', 20_000)
-    const duration = req.duration ?? (req.template === 'custom' ? Number(await win.webContents.executeJavaScript('window.__player.getDuration()')) : TEMPLATE_DURATION[req.template])
+    const duration = req.duration ?? (req.template === 'custom' ? Number(await win.webContents.executeJavaScript('window.__player.getDuration()')) : templateDuration(req.template, req.params))
     if (!Number.isFinite(duration) || duration <= 0) throw new Error('The composition has no duration.')
     const frames = Math.max(1, Math.round(duration * fps))
     updateJob(jobId, { message: `Rendering ${frames} frames` })

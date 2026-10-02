@@ -21,7 +21,8 @@ export function usePropValue(clip: Clip, prop: AnimatableProp) {
 
 export function KeyframeButton({ clip, prop }: { clip: Clip; prop: AnimatableProp }) {
   const animated = isAnimated(clip, prop)
-  const local = usePlayback((s) => clamp(s.frame - clip.start, 0, clip.duration))
+  // Whether there's a key "here" only matters while paused: no re-render on every playback frame.
+  const local = usePlayback((s) => clamp(s.pausedFrame - clip.start, 0, clip.duration))
   const here = keyframeAt(clip, prop, local)
   const kfs = clip.keyframes[prop] ?? []
   const prev = [...kfs].reverse().find((k) => k.frame < local)

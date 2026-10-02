@@ -1,20 +1,21 @@
 import { AudioLines, Blend, Crosshair, Film, Gauge, Image as ImageIcon, Layers, Link2, Move, Snowflake, Sparkles, Type, Video } from 'lucide-react'
-import { memo, useMemo } from 'react'
-import { PEAKS_PER_SECOND } from '@/editor/defaults'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { clipBeats } from '@/editor/beat-grid'
 import { allKeyframeFrames } from '@/editor/keyframes'
 import { angleTracks } from '@/editor/sequences'
 import { useEditor } from '@/editor/store'
 import { openTimeline } from '@/editor/timeline-nav'
-import { isRamped, sourceFrameAt, type Timed } from '@/editor/timing'
+import { isRamped, type Timed } from '@/editor/timing'
 import type { Asset, Clip, Sequence } from '@/editor/types'
 import { useUI } from '@/editor/ui-store'
 import { getPeaks } from '@/engine/audio'
-import { sequenceFrameUrl } from '@/engine/media'
-import { FrameCanvas, stripFrame, useFilmstrip } from '@/features/assets/frames'
+import { useFilmstrip } from '@/features/assets/frames'
 import { cn } from '@/lib/cn'
 import { clamp } from '@/lib/math'
 import { useLayout } from './layout'
 import { CLIP_COLOR, dbToGain, useDrag } from './model'
+import { cssColor, onThumb, paintFilm, paintWave } from './strips'
+import { OVERSCAN, QUANTUM, useViewport } from './viewport'
 
 const INSET = 3
 
@@ -74,7 +75,7 @@ export const ClipView = memo(function ClipView({ clipId, locked }: { clipId: str
       {clip.sequenceId ? (
         <NestBody clip={clip} seq={nested} inPoint={inPoint} duration={duration} width={width} height={height} />
       ) : (
-        <ClipBody clip={clip} asset={asset} inPoint={inPoint} duration={duration} width={width} height={height} />
+        <ClipBody clip={clip} asset={asset} inPoint={inPoint} duration={duration} left={left} width={width} height={height} />
       )}
 
       {showLabel && <ClipLabel clip={clip} asset={asset} nested={nested} />}
@@ -102,21 +103,42 @@ export const ClipView = memo(function ClipView({ clipId, locked }: { clipId: str
 
 // ─── Bodies ──────────────────────────────────────────────────────────────
 
-function ClipBody({ clip, asset, inPoint, duration, width, height }: { clip: Clip; asset?: Asset; inPoint: number; duration: number; width: number; height: number }) {
-  const { fps, pps } = useLayout()
-  const timing: Timed = { speed: clip.speed, duration, inPoint, reverse: clip.reverse, freeze: clip.freeze, keyframes: clip.keyframes }
+/**
+ * The stretch of a clip worth drawing — clip-local pixels near the screen. Clips
+ * fully inside the window never re-render while scrolling; long ones re-render a
+ * few times per screen width as the window steps along.
+ */
+function useClipWindow(left: number, width: number): [number, number] {
+  const x0 = useViewport((s) => clamp(Math.floor((s.scrollLeft - OVERSCAN) / QUANTUM) * QUANTUM - left, 0, width))
+  const x1 = useViewport((s) => clamp(Math.ceil((s.scrollLeft + Math.max(s.width, 1) + OVERSCAN) / QUANTUM) * QUANTUM - left, 0, width))
+  return [x0, x1]
+}
+
+function ClipBody({ clip, asset, inPoint, duration, left, width, height }: { clip: Clip; asset?: Asset; inPoint: number; duration: number; left: number; width: number; height: number }) {
+  const [x0, x1] = useClipWindow(left, width)
+  const timing = useMemo<Timed>(
+    () => ({ speed: clip.speed, duration, inPoint, reverse: clip.reverse, freeze: clip.freeze, keyframes: clip.keyframes }),
+    [clip.speed, duration, inPoint, clip.reverse, clip.freeze, clip.keyframes],
+  )
+  const { fps } = useLayout()
+  // Music with a beat grid shows its beats (clip-local frames, following trims and speed).
+  const grid = asset?.beats
+  const beats = useMemo(
+    () => (grid && asset ? clipBeats({ assets: { [asset.id]: asset }, settings: { width: 0, height: 0, fps, background: '' } }, { ...clip, start: 0, duration, inPoint }).map((b) => ({ frame: b.frame, down: b.down })) : undefined),
+    [grid, asset, clip, duration, inPoint, fps],
+  )
   switch (clip.kind) {
     case 'video':
     case 'image': {
       const strip = clip.kind === 'video' && asset?.hasAudio && !clip.audio.detached && !clip.freeze && height >= 56 ? 15 : 0
       return (
         <>
-          {asset && <Filmstrip asset={asset} timing={timing} fps={fps} pps={pps} width={width} height={height - strip} />}
+          {asset && x1 > x0 && <FilmCanvas asset={asset} timing={timing} x0={x0} x1={x1} height={height - strip} />}
           <div className="absolute inset-x-0 top-0 h-6 bg-gradient-to-b from-black/60 to-transparent" />
           <div className="absolute inset-x-0 top-0 h-[2px] opacity-90" style={{ background: 'var(--clip)' }} />
           {strip > 0 && asset && (
             <div className="absolute inset-x-0 bottom-0 border-t border-black/40 bg-[color-mix(in_oklab,var(--clip)_22%,#10110e)]" style={{ height: strip }}>
-              <Waveform asset={asset} timing={timing} width={width} gain={dbToGain(clip.audio.volume)} color="color-mix(in oklab, var(--clip) 70%, white)" />
+              {x1 > x0 && <WaveCanvas asset={asset} timing={timing} x0={x0} x1={x1} height={strip - 1} gain={dbToGain(clip.audio.volume)} color={`color-mix(in oklab, ${CLIP_COLOR[clip.kind]} 70%, white)`} />}
             </div>
           )}
         </>
@@ -125,15 +147,20 @@ function ClipBody({ clip, asset, inPoint, duration, width, height }: { clip: Cli
     case 'audio':
       return asset ? (
         <div className="absolute inset-x-0 top-[14px] bottom-[2px]">
-          <Waveform
-            asset={asset}
-            timing={timing}
-            width={width}
-            gain={dbToGain(clip.audio.volume)}
-            fadeIn={clip.audio.fadeIn}
-            fadeOut={clip.audio.fadeOut}
-            color="color-mix(in oklab, var(--clip) 82%, white)"
-          />
+          {x1 > x0 && (
+            <WaveCanvas
+              asset={asset}
+              timing={timing}
+              x0={x0}
+              x1={x1}
+              height={Math.max(4, height - 16)}
+              gain={dbToGain(clip.audio.volume)}
+              fadeIn={clip.audio.fadeIn}
+              fadeOut={clip.audio.fadeOut}
+              color={`color-mix(in oklab, ${CLIP_COLOR[clip.kind]} 82%, white)`}
+              beats={beats}
+            />
+          )}
         </div>
       ) : null
     case 'text':
@@ -249,84 +276,88 @@ function NestBody({ clip, seq, inPoint, duration, width, height }: { clip: Clip;
 
 // ─── Filmstrip ───────────────────────────────────────────────────────────
 
-/** A still for a source time: an image sequence frame, or the file's image / poster. */
-function stillAt(asset: Asset, seconds: number): string | undefined {
-  const src = asset.source
-  if (src.type === 'file') return asset.kind === 'image' ? src.url : src.poster
-  if (src.type === 'sequence') return sequenceFrameUrl(src, Math.floor(seconds * src.fps))
-  return undefined
+/** Re-renders when a still this asset shows becomes ready (posters, photos, sequence frames). */
+function useThumbTick(asset: Asset) {
+  const [tick, setTick] = useState(0)
+  const prefix = asset.source.type === 'sequence' ? asset.source.base : asset.source.type === 'file' ? (asset.kind === 'image' ? asset.source.url : (asset.source.poster ?? '')) : ''
+  useEffect(() => (prefix ? onThumb((url) => url.startsWith(prefix) && setTick((t) => t + 1)) : undefined), [prefix])
+  return tick
 }
 
-function Filmstrip({ asset, timing, fps, pps, width, height }: { asset: Asset; timing: Timed; fps: number; pps: number; width: number; height: number }) {
-  const tileW = Math.max(36, Math.round(height * 1.6))
-  const count = Math.min(200, Math.max(1, Math.ceil(width / tileW)))
+/** What a strip canvas shows: the zoom and clip-local stretch it was painted at, and everything else that went into it. */
+interface Painted {
+  pps: number
+  x0: number
+  x1: number
+  inputs: unknown[]
+}
+
+/**
+ * Paints a strip canvas whenever what it shows changes, except in the middle of
+ * a zoom gesture: then the canvas is stretched to the new zoom (no drawing, no
+ * new pixels for the GPU) and painted properly when the gesture settles. The
+ * painter sizes the canvas (in steps, so zooming reuses it); this places it.
+ */
+function useStripPaint(ref: RefObject<HTMLCanvasElement | null>, pps: number, x0: number, x1: number, inputs: unknown[], paint: (canvas: HTMLCanvasElement) => void) {
+  const painted = useRef<Painted | null>(null)
+  const zooming = useViewport((s) => s.zooming)
+  useLayoutEffect(() => {
+    const canvas = ref.current
+    if (!canvas) return
+    const last = painted.current
+    const same = last !== null && last.inputs.length === inputs.length && last.inputs.every((v, i) => Object.is(v, inputs[i]))
+    if (same && last.pps === pps && last.x0 === x0 && last.x1 === x1) return
+    // Clips coming into view mid-zoom draw when it settles.
+    if (zooming && last === null) return
+    if (same && zooming && last.pps !== pps) {
+      const r = pps / last.pps
+      canvas.style.left = `${last.x0 * r}px`
+      canvas.style.transform = `scaleX(${r})`
+      return
+    }
+    canvas.style.left = `${x0}px`
+    canvas.style.transform = ''
+    paint(canvas)
+    painted.current = { pps, x0, x1, inputs }
+  })
+}
+
+function FilmCanvas({ asset, timing, x0, x1, height }: { asset: Asset; timing: Timed; x0: number; x1: number; height: number }) {
+  const { fps, pps } = useLayout()
+  const ref = useRef<HTMLCanvasElement>(null)
   const strip = useFilmstrip(asset)
-  const tiles: { frame: ImageBitmap | null; url?: string }[] = []
-  for (let i = 0; i < count; i++) {
-    const xMid = i * tileW + tileW / 2
-    const t = Math.max(0, sourceFrameAt(timing, Math.min(timing.duration, (xMid / pps) * fps)) / fps)
-    const frame = stripFrame(strip, t)
-    tiles.push({ frame, url: frame ? undefined : stillAt(asset, Math.round(t * 2) / 2) })
-  }
-  return (
-    <div className="absolute inset-x-0 top-0 flex overflow-hidden" style={{ height }}>
-      {tiles.map((tile, i) => (
-        <div key={i} className="h-full shrink-0 border-r border-black/35 bg-cover bg-center" style={{ width: tileW, backgroundImage: tile.url ? `url(${tile.url})` : undefined }}>
-          {tile.frame && <FrameCanvas frame={tile.frame} />}
-        </div>
-      ))}
-    </div>
-  )
+  const progress = strip ? strip.frames.reduce((n, f) => n + (f ? 1 : 0), 0) : 0
+  const thumbs = useThumbTick(asset)
+  useStripPaint(ref, pps, x0, x1, [asset, timing, fps, height, strip, progress, thumbs], (canvas) => paintFilm(canvas, { asset, timing, fps, pps, x0, x1, height, strip }))
+  return <canvas ref={ref} className="pointer-events-none absolute top-0 left-0 origin-top-left" />
 }
 
 // ─── Waveform ────────────────────────────────────────────────────────────
 
-interface WaveformProps {
+interface WaveCanvasProps {
   asset: Asset
   /** Where the clip's frames come from in the source — speed ramps and reverse included. */
   timing: Timed
-  width: number
+  x0: number
+  x1: number
+  height: number
   gain: number
   fadeIn?: number
   fadeOut?: number
+  /** Any CSS colour: theme variables and color-mix are fine. */
   color: string
+  beats?: { frame: number; down: boolean }[]
 }
 
-export function Waveform({ asset, timing, width, gain, fadeIn = 0, fadeOut = 0, color }: WaveformProps) {
-  const { fps } = useLayout()
-  const { speed, duration, inPoint, reverse, freeze, keyframes } = timing
-  const path = useMemo(() => {
-    const peaks = getPeaks(asset)
-    if (!peaks) return ''
-    const n = clamp(Math.floor(width / 2.2), 8, 1600)
-    const t = { speed, duration, inPoint, reverse, freeze, keyframes }
-    const peakAt = (local: number) => (sourceFrameAt(t, local) / fps) * PEAKS_PER_SECOND
-    const amps: number[] = []
-    for (let j = 0; j <= n; j++) {
-      const x = peakAt((j / n) * duration)
-      const y = peakAt(((j + 1) / n) * duration)
-      const a = Math.floor(Math.min(x, y))
-      const b = Math.max(a + 1, Math.floor(Math.max(x, y)))
-      let peak = 0
-      for (let k = a; k < b && k < peaks.length; k++) peak = Math.max(peak, peaks[k] ?? 0)
-      const local = (j / n) * duration
-      let env = 1
-      if (fadeIn > 0 && local < fadeIn) env *= local / fadeIn
-      if (fadeOut > 0 && duration - local < fadeOut) env *= (duration - local) / fadeOut
-      amps.push(Math.min(1, Math.max(0.015, peak * gain * env)))
-    }
-    let d = `M0 50`
-    amps.forEach((a, j) => (d += `L${j} ${(50 - a * 47).toFixed(1)}`))
-    for (let j = amps.length - 1; j >= 0; j--) d += `L${j} ${(50 + amps[j] * 47).toFixed(1)}`
-    return `${d}Z`
-  }, [asset, inPoint, duration, speed, reverse, freeze, keyframes, width, gain, fadeIn, fadeOut, fps])
-
-  if (!path) return null
-  return (
-    <svg className="absolute inset-0 h-full w-full" viewBox={`0 0 ${clamp(Math.floor(width / 2.2), 8, 1600)} 100`} preserveAspectRatio="none" aria-hidden>
-      <path d={path} fill={color} />
-    </svg>
-  )
+function WaveCanvas({ asset, timing, x0, x1, height, gain, fadeIn = 0, fadeOut = 0, color, beats }: WaveCanvasProps) {
+  const { fps, pps } = useLayout()
+  const ref = useRef<HTMLCanvasElement>(null)
+  const peaks = getPeaks(asset)
+  useStripPaint(ref, pps, x0, x1, [peaks, timing, fps, height, gain, fadeIn, fadeOut, color, beats], (canvas) => {
+    if (peaks) paintWave(canvas, { peaks, timing, fps, pps, x0, x1, height, gain, fadeIn, fadeOut, color: cssColor(color), beats })
+  })
+  if (!peaks) return null
+  return <canvas ref={ref} aria-hidden className="pointer-events-none absolute top-0 left-0 origin-top-left" />
 }
 
 // ─── Fades & keyframes ───────────────────────────────────────────────────
@@ -353,18 +384,32 @@ function Fades({ clip, width, height }: { clip: Clip; width: number; height: num
   )
 }
 
+/** Keyframes on the selected clip: drag one to retime it (every property keyed there moves), click to go to it. */
 function KeyframeDiamonds({ clip, duration, width }: { clip: Clip; duration: number; width: number }) {
   const frames = allKeyframeFrames(clip)
+  const drag = useDrag((s) => (s.keyDrag?.clipId === clip.id ? s.keyDrag : null))
   if (!frames.length) return null
+  const x = (f: number) => clamp((f / duration) * width, 4, width - 4)
   return (
     <>
       {frames.map((f) => (
         <span
           key={f}
-          className="pointer-events-none absolute bottom-[4px] z-10 size-[7px] -translate-x-1/2 rotate-45 bg-white shadow-[0_0_0_1px_rgb(0_0_0/0.45)]"
-          style={{ left: clamp((f / duration) * width, 4, width - 4) }}
-        />
+          data-handle="keyframe"
+          data-frame={f}
+          title="Drag to retime · click to go to it"
+          className={cn(
+            'absolute bottom-[1px] z-[13] grid size-[13px] -translate-x-1/2 cursor-ew-resize place-items-center',
+            drag?.from === f && 'opacity-30',
+          )}
+          style={{ left: x(f) }}
+        >
+          <span className="size-[7px] rotate-45 bg-white shadow-[0_0_0_1px_rgb(0_0_0/0.45)] transition-transform hover:scale-125" />
+        </span>
       ))}
+      {drag && drag.to !== drag.from && (
+        <span className="pointer-events-none absolute bottom-[4px] z-[14] size-[8px] -translate-x-1/2 rotate-45 bg-accent shadow-[0_0_0_1px_rgb(0_0_0/0.5)]" style={{ left: x(drag.to) }} />
+      )}
     </>
   )
 }

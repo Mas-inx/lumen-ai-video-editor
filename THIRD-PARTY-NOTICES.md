@@ -10,10 +10,14 @@ Lumen is released under the [MIT license](LICENSE). It is built on, and its inst
 | [@ai-sdk/google](https://ai-sdk.dev/docs) | 4.0.77 | Apache-2.0 |
 | [@ai-sdk/openai](https://ai-sdk.dev/docs) | 4.0.72 | Apache-2.0 |
 | [@ai-sdk/openai-compatible](https://ai-sdk.dev/docs) | 3.0.53 | Apache-2.0 |
+| [@fontsource-variable/archivo](https://fontsource.org/fonts/archivo) | 5.3.0 | OFL-1.1 |
 | [@fontsource-variable/bricolage-grotesque](https://fontsource.org/fonts/bricolage-grotesque) | 5.3.0 | OFL-1.1 |
 | [@fontsource-variable/caveat](https://fontsource.org/fonts/caveat) | 5.3.0 | OFL-1.1 |
+| [@fontsource-variable/fraunces](https://fontsource.org/fonts/fraunces) | 5.3.0 | OFL-1.1 |
 | [@fontsource-variable/geist](https://fontsource.org/fonts/geist) | 5.3.0 | OFL-1.1 |
 | [@fontsource-variable/geist-mono](https://fontsource.org/fonts/geist-mono) | 5.3.0 | OFL-1.1 |
+| [@fontsource-variable/space-grotesk](https://fontsource.org/fonts/space-grotesk) | 5.3.0 | OFL-1.1 |
+| [@fontsource-variable/syne](https://fontsource.org/fonts/syne) | 5.3.0 | OFL-1.1 |
 | [@fontsource/bricolage-grotesque](https://fontsource.org/fonts/bricolage-grotesque) | 5.3.0 | OFL-1.1 |
 | [@fontsource/geist](https://fontsource.org/fonts/geist) | 5.3.0 | OFL-1.1 |
 | [@fontsource/instrument-serif](https://fontsource.org/fonts/instrument-serif) | 5.3.0 | OFL-1.1 |
@@ -52,7 +56,8 @@ Lumen is released under the [MIT license](LICENSE). It is built on, and its inst
 - **Electron and Chromium** — the installer includes Electron (MIT) and Chromium, whose licenses are listed in `LICENSES.chromium.html` next to `Lumen.exe`. That includes FFmpeg as built for Chromium (LGPL 2.1).
 - **RNNoise** (BSD-3-Clause) — noise reduction, compiled to WebAssembly by `@shiguredo/rnnoise-wasm`.
 - **Whisper** — the speech model (`onnx-community/whisper-base`, a conversion of OpenAI's Whisper, MIT) is downloaded from Hugging Face the first time you transcribe on your device. It isn't part of the installer.
-- **Fonts** — Geist, Geist Mono, Bricolage Grotesque, Instrument Serif and Caveat, under the SIL Open Font License 1.1, via Fontsource.
+- **Subject cut-outs** — MODNet (`Xenova/modnet`, Apache-2.0) for people and BiRefNet lite (`onnx-community/BiRefNet_lite-ONNX`, MIT) for any subject are downloaded from Hugging Face the first time you cut out a subject. They aren't part of the installer.
+- **Fonts** — Geist, Geist Mono, Bricolage Grotesque, Instrument Serif, Caveat, Fraunces, Archivo, Syne and Space Grotesk, under the SIL Open Font License 1.1, via Fontsource.
 - **GSAP** — used by HyperFrames motion graphics under GreenSock's [standard no-charge license](https://gsap.com/standard-license).
 - **Mediabunny** — MPL-2.0; used unmodified. Source and documentation: [mediabunny.dev](https://mediabunny.dev/).
 

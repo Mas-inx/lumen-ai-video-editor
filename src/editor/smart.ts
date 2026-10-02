@@ -7,7 +7,7 @@ import { activeRegions, activeRegionsStreamed, isAudible, isLongAudio, loadAudio
 import { speechScript } from '@/engine/audio'
 import { clipEnd } from './ops'
 import { dispatch, getProject, useEditor } from './store'
-import { layCaptions } from './subtitles'
+import { captionStyle, layCaptions, type CaptionStyle } from './subtitles'
 import { consumed, localForSource } from './timing'
 import type { Clip, Project } from './types'
 
@@ -56,17 +56,29 @@ function toTimeline(project: Project, clip: Clip, sourceSec: number) {
   return clip.start + (before !== clip.reverse ? 0 : clip.duration)
 }
 
-/** Clips that carry speech: anything with a transcript, or sound on a voice-ish track or the main track. */
+const VOICE_TRACK = /voice|vo\b|dialog|narrat|interview|speech/i
+
+/** Where speech is expected first: the main track and voice-ish tracks. */
+const speechTrack = (project: Project, clip: Clip) => {
+  const track = project.tracks.find((t) => t.id === clip.trackId)
+  return Boolean(track && (track.role === 'main' || VOICE_TRACK.test(track.name)))
+}
+
+/**
+ * Clips that carry speech: anything with a transcript, or sound on a voice-ish
+ * track or the main track. A silent copy — sound detached, a freeze frame, or
+ * turned all the way down (B-roll from the interview, a cut-out subject) —
+ * isn't speech, transcript or not.
+ */
 export function voiceClips(project: Project): Clip[] {
   return Object.values(project.clips)
     .filter((c) => {
       if (c.kind !== 'audio' && c.kind !== 'video') return false
       const asset = c.assetId ? project.assets[c.assetId] : undefined
       if (!asset) return false
+      if (c.freeze || (c.kind === 'video' && c.audio.detached) || c.audio.volume <= -60) return false
       if (speechScript(asset).length) return true
-      const track = project.tracks.find((t) => t.id === c.trackId)
-      if (!track || !isAudible(project, c)) return false
-      return /voice|vo\b|dialog|narrat|interview|speech/i.test(track.name) || track.role === 'main'
+      return isAudible(project, c) && speechTrack(project, c)
     })
     .sort((a, b) => a.start - b.start)
 }
@@ -273,11 +285,17 @@ export function untranscribed(project: Project) {
 }
 
 /** Lays captions from every transcribed speech clip on a Captions track (replacing previous captions). */
-export function addCaptions(opts: { maxWords?: number; size?: number; y?: number; uppercase?: boolean } = {}) {
+export function addCaptions(opts: { maxWords?: number; size?: number; y?: number; uppercase?: boolean; style?: CaptionStyle; accent?: string; source?: 'user' | 'ai' } = {}) {
   const project = getProject()
-  const maxWords = opts.maxWords ?? 6
+  const maxWords = opts.maxWords ?? captionStyle(opts.style).words
   const lines: { start: number; end: number; text: string }[] = []
-  for (const clip of voiceClips(project)) {
+  // Two clips talking at once (the same interview on two tracks) would garble
+  // each other's captions: the main and voice tracks speak first, and a phrase
+  // mostly covered by one already captioned is left out.
+  const clips = voiceClips(project).sort((a, b) => Number(speechTrack(project, b)) - Number(speechTrack(project, a)) || a.start - b.start)
+  const spoken: [number, number][] = []
+  const covered = (a: number, b: number) => spoken.reduce((sum, [x, y]) => sum + Math.max(0, Math.min(b, y) - Math.max(a, x)), 0) > (b - a) / 2
+  for (const clip of clips) {
     const script = speechScript(project.assets[clip.assetId!])
     if (!script.length) continue
     const [s0, s1] = sourceRange(project, clip)
@@ -285,6 +303,8 @@ export function addCaptions(opts: { maxWords?: number; size?: number; y?: number
       if (seg.end <= s0 || seg.start >= s1) continue
       const a = toTimeline(project, clip, Math.max(seg.start, s0))
       const b = toTimeline(project, clip, Math.min(seg.end, s1))
+      if (b <= a || covered(a, b)) continue
+      spoken.push([a, b])
       const chunks = captionChunks(seg.text, maxWords)
       const weights = chunks.map((c) => c.length + 2)
       const total = weights.reduce((x, y) => x + y, 0)
@@ -297,7 +317,7 @@ export function addCaptions(opts: { maxWords?: number; size?: number; y?: number
     }
   }
   if (!lines.length) return { added: 0, trackId: null as string | null }
-  const { ids, trackId } = layCaptions(lines, { label: 'Add captions', source: 'ai', size: opts.size, y: opts.y, uppercase: opts.uppercase })
+  const { ids, trackId } = layCaptions(lines, { label: 'Add captions', source: opts.source ?? 'ai', size: opts.size, y: opts.y, uppercase: opts.uppercase, style: opts.style, accent: opts.accent })
   return { added: ids.length, trackId }
 }
 

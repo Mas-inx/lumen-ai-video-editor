@@ -92,6 +92,10 @@ export const FONTS: Record<FontId, { label: string; css: string }> = {
   serif: { label: 'Instrument Serif', css: '"Instrument Serif", Georgia, serif' },
   mono: { label: 'Geist Mono', css: '"Geist Mono Variable", ui-monospace, monospace' },
   hand: { label: 'Caveat', css: '"Caveat Variable", cursive' },
+  fraunces: { label: 'Fraunces', css: '"Fraunces Variable", Georgia, serif' },
+  archivo: { label: 'Archivo', css: '"Archivo Variable", system-ui, sans-serif' },
+  syne: { label: 'Syne', css: '"Syne Variable", system-ui, sans-serif' },
+  'space-grotesk': { label: 'Space Grotesk', css: '"Space Grotesk Variable", system-ui, sans-serif' },
 }
 
 export const TRACK_HEIGHTS = { titles: 44, video: 56, main: 72, audio: 52, sfx: 44 } as const

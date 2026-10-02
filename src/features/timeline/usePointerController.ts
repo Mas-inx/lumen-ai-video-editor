@@ -29,6 +29,7 @@ import {
   trimBounds,
   withGroups,
 } from '@/editor/ops'
+import { timelineBeats } from '@/editor/beat-grid'
 import { playback, usePlayback } from '@/editor/playback'
 import { dispatch, getProject } from '@/editor/store'
 import { averageSpeed, consumed } from '@/editor/timing'
@@ -53,6 +54,8 @@ function snapTargets(project: Project, exclude: Set<string>) {
     set.add(clipEnd(c))
   }
   for (const m of project.markers) set.add(m.frame)
+  // The music's beats, so cuts land on them.
+  for (const b of timelineBeats(project)) set.add(b.frame)
   return [...set]
 }
 
@@ -494,6 +497,35 @@ export function usePointerController({ scrollRef, contentRef, layoutRef }: Env) 
     )
   }
 
+  /** Drags a keyframe along its clip (snapping to the playhead); a click without moving goes to it. */
+  function retime(e: ReactPointerEvent, clip: Clip, from: number) {
+    const start = toContent(e.clientX, e.clientY).x
+    let to = from
+    let moved = false
+    document.body.style.cursor = 'ew-resize'
+    session(
+      (ev) => {
+        const p = toContent(ev.clientX, ev.clientY)
+        if (!moved && Math.abs(p.x - start) < 3) return
+        moved = true
+        let f = clamp(from + Math.round(((p.x - start) / L().pps) * L().fps), 0, clip.duration - 1)
+        const playhead = usePlayback.getState().frame - clip.start
+        if (useUI.getState().snapping && Math.abs(playhead - f) <= snapThreshold() && playhead >= 0 && playhead < clip.duration) f = playhead
+        to = f
+        useDrag.setState({ mode: 'keyframe', keyDrag: { clipId: clip.id, from, to }, readout: { x: p.x, y: p.y, text: `Keyframe  ${formatDuration(f, L().fps)}` } })
+      },
+      () => {
+        resetDrag()
+        if (!moved) return playback.seek(clip.start + from)
+        if (to !== from) {
+          const res = dispatch('keyframe.move', { clipId: clip.id, from, to })
+          if (!res.ok) toast(res.error)
+        }
+      },
+      false,
+    )
+  }
+
   function blade(e: ReactPointerEvent, clip: Clip) {
     let f = frameAtX(toContent(e.clientX, e.clientY).x)
     const playhead = usePlayback.getState().frame
@@ -559,6 +591,7 @@ export function usePointerController({ scrollRef, contentRef, layoutRef }: Env) 
       if (handle === 'start' || handle === 'end') return trim(e, clip, handle)
       if (handle === 'fade-in') return fade(e, clip, 'fadeIn')
       if (handle === 'fade-out') return fade(e, clip, 'fadeOut')
+      if (handle === 'keyframe') return retime(e, clip, Number(target.closest<HTMLElement>('[data-handle]')!.dataset.frame))
       return move(e, clip)
     }
     if (target.closest('[data-lane],[data-lane-filler]')) {
