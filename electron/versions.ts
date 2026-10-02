@@ -54,7 +54,9 @@ export function writeVersion(projectId: string, envelopeText: string, kind: Vers
   const list = readIndex(dir)
   if (list[0]?.hash === hash && kind !== 'save') return
   const savedAt = Date.now()
-  const file = `${savedAt}-${kind}.lumen`
+  // Saves can land in the same millisecond: each version needs its own file.
+  let file = `${savedAt}-${kind}.lumen`
+  for (let n = 2; fs.existsSync(path.join(dir, file)); n++) file = `${savedAt}-${kind}-${n}.lumen`
   fs.writeFileSync(path.join(dir, file), envelopeText)
   const clips = Object.values(project.clips ?? {})
   const end = clips.reduce((m, c) => Math.max(m, (c.start ?? 0) + (c.duration ?? 0)), 0)

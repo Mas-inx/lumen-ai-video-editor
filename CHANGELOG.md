@@ -4,6 +4,10 @@ Every notable change to Lumen, newest first. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+### Fixed
+
+- Version history could lose a version when two were saved in the same millisecond: the second overwrote the first.
+
 ## [1.3.0] — 2026-10-03
 
 Render previews, a Copilot that thinks out loud, and the effects editors reach for every day.

@@ -70,6 +70,21 @@ describe('version history', () => {
     expect(opened.missing).toEqual([])
   })
 
+  it('keeps versions saved in the same millisecond apart', () => {
+    const s = scene('p-same-ms')
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 9, 3, 12))
+    try {
+      saveProject(s.file, JSON.stringify(s.project('First', 1)))
+      saveProject(s.file, JSON.stringify(s.project('Second', 2)))
+    } finally {
+      now.mockRestore()
+    }
+    const list = listVersions('p-same-ms')
+    expect(new Set(list.map((v) => v.id)).size).toBe(2)
+    const names = list.map((v) => JSON.parse(openVersion('p-same-ms', v.id, s.file).text).name)
+    expect(names).toEqual(['Second', 'First'])
+  })
+
   it('thins out old versions', () => {
     const s = scene('p-prune')
     for (let i = 0; i < 40; i++) saveProject(s.file, JSON.stringify(s.project('Show', i)))
