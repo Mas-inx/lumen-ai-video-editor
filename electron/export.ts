@@ -179,6 +179,14 @@ export async function writeFrame(id: string, index: number, data: Uint8Array) {
   e.size += data.byteLength
 }
 
+/** Empties an open export file to write it again from the start (the encoder failed and another one takes over). */
+export function restartExport(id: string) {
+  const e = get(id)
+  if (e.kind !== 'file') throw new Error('Only a single-file export can be started again.')
+  fs.ftruncateSync(e.fd, 0)
+  e.size = 0
+}
+
 export function finishExport(id: string) {
   const e = get(id)
   open.delete(String(id))

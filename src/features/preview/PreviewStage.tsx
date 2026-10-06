@@ -455,10 +455,16 @@ function TrackGizmo({ edit, pw, ph, scale }: { edit: TrackEdit; pw: number; ph: 
     setBusy(true)
     try {
       const r = await withProgress('Tracking', (onProgress, signal) =>
-        trackMotion({ targetId: current.clipId, maskId: current.maskId, box: { x: b.x + b.w / 2 - pw / 2, y: b.y + b.h / 2 - ph / 2, width: b.w, height: b.h }, direction }, onProgress, signal),
+        trackMotion({ targetId: current.clipId, maskId: current.maskId, newTitle: current.newTitle, box: { x: b.x + b.w / 2 - pw / 2, y: b.y + b.h / 2 - ph / 2, width: b.w, height: b.h }, direction }, onProgress, signal),
       )
-      toast.success(`Tracked ${r.frames} frames`, { description: r.lost ? 'It lost sight of the point before the end — move the playhead there and track again to go on.' : undefined })
+      const lost = r.lost ? 'It lost sight of the point before the end — move the playhead there and track again to go on.' : undefined
       useUI.getState().setTrackEdit(null)
+      if ('clipId' in r) {
+        // The footage itself was tracked: the new title that follows it is ready to be reworded.
+        useUI.getState().select([r.clipId])
+        useUI.getState().setRightTab('inspector')
+        toast.success(`Tracked ${r.frames} frames`, { description: lost ?? 'A title now follows it. Change its words in the Inspector, or drag it to sit where you like.' })
+      } else toast.success(`Tracked ${r.frames} frames`, { description: lost })
     } catch (err) {
       if (!(err instanceof AnalysisCancelled)) toast.error('Couldn’t track that', { description: err instanceof Error ? err.message : String(err) })
     } finally {
@@ -483,7 +489,7 @@ function TrackGizmo({ edit, pw, ph, scale }: { edit: TrackEdit; pw: number; ph: 
         {knob('se', '-right-[5px] -bottom-[5px]', 'nwse-resize')}
       </div>
       <div onPointerDown={(e) => e.stopPropagation()} className="popover absolute top-2 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full p-1 shadow-[0_6px_20px_-6px_rgb(0_0_0/0.8)]">
-        <span className="px-2 text-2xs font-medium whitespace-nowrap text-fg-3">{busy ? 'Tracking…' : `Box what the ${edit.maskId ? 'mask' : 'clip'} should follow`}</span>
+        <span className="px-2 text-2xs font-medium whitespace-nowrap text-fg-3">{busy ? 'Tracking…' : edit.newTitle ? 'Box what a new title should follow' : `Box what the ${edit.maskId ? 'mask' : 'clip'} should follow`}</span>
         <button type="button" disabled={busy} onClick={() => void run('backward')} className={cn(btn, 'text-fg-2 hover:bg-white/[0.08] hover:text-fg')} title="Track back from the playhead">
           <ArrowLeft className="size-3.5" /> Back
         </button>

@@ -12,8 +12,20 @@ import { formatTimecode } from '@/lib/time'
 
 export type ToolArgs = Record<string, unknown>
 
+/** Who is calling and what they can take. */
+export interface ToolContext {
+  /** The longest to wait on a job before answering, in seconds — set for callers over HTTP, who time out. */
+  maxWait?: number
+}
+
 export interface AgentTool extends BridgeTool {
-  run: (args: ToolArgs) => Promise<unknown>
+  run: (args: ToolArgs, ctx?: ToolContext) => Promise<unknown>
+}
+
+/** How long a tool waits on a job: what was asked for (else `fallback`), within what the caller can take. */
+export function waitSeconds(args: ToolArgs, ctx: ToolContext | undefined, fallback: number, max = 600) {
+  const asked = typeof args.wait_seconds === 'number' && Number.isFinite(args.wait_seconds) ? args.wait_seconds : fallback
+  return Math.max(0, Math.min(max, ctx?.maxWait ?? max, asked))
 }
 
 // ─── Schemas ─────────────────────────────────────────────────────────────

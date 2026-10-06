@@ -98,7 +98,8 @@ export function drawUpscaled(ctx: CanvasRenderingContext2D, src: Source, sw: num
   const H = ctx.canvas.height
   // Sharpening only helps when there's real enlargement.
   if (mode === 'sharp' && (W > sw * 1.2 || H > sh * 1.2)) {
-    if (gpu === undefined) gpu = setup()
+    // Set up on first use — and again after the graphics driver was reset, which loses the context.
+    if (gpu === undefined || gpu?.gl.isContextLost()) gpu = setup()
     if (gpu && !gpu.gl.isContextLost()) {
       const { gl, canvas } = gpu
       if (canvas.width !== W || canvas.height !== H) {

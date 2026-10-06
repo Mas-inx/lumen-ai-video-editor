@@ -6,7 +6,7 @@ describe('skills', () => {
 
   it('ships the built-in craft skills, each with a description', () => {
     const names = BUILTIN_SKILLS.map((k) => k.name)
-    for (const n of ['motion-design-craft', 'hyperframes-compositions', 'blender-3d', 'color-grading', 'short-form-editing', 'sound-and-music', 'generation-prompts', 'text-behind-subject']) expect(names).toContain(n)
+    for (const n of ['motion-design-craft', 'motion-graphic-styles', 'motion-graphic-styles-textured', 'hyperframes-compositions', 'blender-3d', 'color-grading', 'short-form-editing', 'sound-and-music', 'generation-prompts', 'text-behind-subject']) expect(names).toContain(n)
     for (const k of BUILTIN_SKILLS) {
       expect(k.description.length).toBeGreaterThan(40)
       expect(k.body.length).toBeGreaterThan(200)
@@ -26,6 +26,8 @@ describe('skills', () => {
     expect(describeTool('render_3d_title', 'Render a 3D title.')).toContain('use_skill("blender-3d")')
     expect(describeTool('render_3d_title', 'Render a 3D title.')).toContain('use_skill("motion-design-craft")')
     expect(describeTool('render_hyperframes_html', 'Render HTML.')).toContain('use_skill("hyperframes-compositions")')
+    expect(describeTool('render_hyperframes_html', 'Render HTML.')).toContain('use_skill("motion-graphic-styles")')
+    expect(describeTool('render_hyperframes_html', 'Render HTML.')).not.toContain('motion-graphic-styles-textured')
     setSkillEnabled('builtin:blender-3d', false)
     expect(describeTool('render_3d_title', 'Render a 3D title.')).not.toContain('blender-3d')
     expect(describeTool('get_project', 'Read the project.')).toBe('Read the project.')

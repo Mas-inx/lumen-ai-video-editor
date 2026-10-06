@@ -1,4 +1,4 @@
-import { Activity, Camera, Check, ChevronDown, Gauge, Grid3x3, Maximize2, MonitorPlay, Pause, Play, Repeat, SkipBack, SkipForward, StepBack, StepForward, Video } from 'lucide-react'
+import { Activity, Camera, Check, ChevronDown, Gauge, Grid3x3, Maximize2, Minimize2, MonitorPlay, Pause, Play, Repeat, SkipBack, SkipForward, StepBack, StepForward, Video } from 'lucide-react'
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { toast } from 'sonner'
 import { desktop } from '@/lib/platform'
@@ -69,8 +69,15 @@ function ResolutionMenu() {
 }
 
 export function PreviewPanel() {
-  const panelRef = useRef<HTMLDivElement>(null)
   const [scopes, setScopes] = useState(false)
+  const [fullscreen, setFullscreen] = useState(false)
+  // The whole window goes full screen and the panel covers it, so menus, tooltips and toasts (drawn outside the panel) still show.
+  useEffect(() => {
+    const sync = () => setFullscreen(Boolean(document.fullscreenElement))
+    document.addEventListener('fullscreenchange', sync)
+    return () => document.removeEventListener('fullscreenchange', sync)
+  }, [])
+  const toggleFullscreen = () => void (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen())?.catch(() => {})
   const hasProxies = useEditor((s) => Object.values(s.project.assets).some((a) => a.proxy))
   const useProxies = useUI((s) => s.useProxies)
   const settings = useEditor((s) => s.project.settings)
@@ -104,7 +111,7 @@ export function PreviewPanel() {
   }
 
   return (
-    <div ref={panelRef} className="panel flex h-full flex-col overflow-hidden">
+    <div className={cn('panel flex h-full flex-col overflow-hidden', fullscreen && 'fixed inset-0 z-40 rounded-none border-0')}>
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line pr-2 pl-4">
         <span className="text-sm font-semibold text-fg">Program</span>
         <button
@@ -138,8 +145,8 @@ export function PreviewPanel() {
           <IconButton label="Save this frame to Media" onClick={snapshot}>
             <Camera />
           </IconButton>
-          <IconButton label="Full screen" onClick={() => void panelRef.current?.requestFullscreen()}>
-            <Maximize2 />
+          <IconButton label={fullscreen ? 'Exit full screen' : 'Full screen'} active={fullscreen} onClick={toggleFullscreen}>
+            {fullscreen ? <Minimize2 /> : <Maximize2 />}
           </IconButton>
         </div>
       </div>

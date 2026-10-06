@@ -1,4 +1,4 @@
-import { AudioLines, Check, CircleAlert, Download, ExternalLink, FolderOpen, Link2, LoaderCircle, Plus, X } from 'lucide-react'
+import { AudioLines, Check, CircleAlert, Copy, Download, ExternalLink, Eye, EyeOff, FolderOpen, Link2, LoaderCircle, Plus, X } from 'lucide-react'
 import { motion } from 'motion/react'
 import { useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
@@ -253,5 +253,48 @@ export function RenderCard({ job }: { job: Job }) {
       )}
       {job.status === 'error' && <p className="line-clamp-4 text-2xs leading-relaxed break-words text-danger/90">{job.error}</p>}
     </motion.div>
+  )
+}
+
+export function PaneHeader({ icon, title, subtitle, right }: { icon: ReactNode; title: ReactNode; subtitle: ReactNode; right?: ReactNode }) {
+  return (
+    <div className="mb-6 flex items-start gap-4">
+      {icon}
+      <div className="min-w-0 flex-1">
+        <h2 className="text-xl font-semibold tracking-tight text-fg">{title}</h2>
+        <p className="mt-0.5 text-sm leading-relaxed text-fg-3">{subtitle}</p>
+      </div>
+      {right}
+    </div>
+  )
+}
+
+export function CopyField({ label, value, secret }: { label: string; value: string; secret?: boolean }) {
+  const [shown, setShown] = useState(!secret)
+  const [copied, setCopied] = useState(false)
+  return (
+    <div>
+      <div className="mb-1.5 text-xs font-medium text-fg-2">{label}</div>
+      <div className="flex items-center gap-1 rounded-lg bg-black/30 py-1 pr-1 pl-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)]">
+        <code className="min-w-0 flex-1 truncate font-mono text-xs text-fg-2">{shown ? value : '•'.repeat(Math.min(32, value.length))}</code>
+        {secret && (
+          <button type="button" aria-label={shown ? 'Hide' : 'Show'} onClick={() => setShown(!shown)} className="grid size-7 place-items-center rounded-md text-fg-4 hover:bg-white/[0.06] hover:text-fg-2">
+            {shown ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+          </button>
+        )}
+        <button
+          type="button"
+          aria-label="Copy"
+          onClick={() => {
+            void navigator.clipboard.writeText(value)
+            setCopied(true)
+            setTimeout(() => setCopied(false), 1400)
+          }}
+          className="grid size-7 place-items-center rounded-md text-fg-4 hover:bg-white/[0.06] hover:text-fg-2"
+        >
+          {copied ? <Check className="size-3.5 text-ok" /> : <Copy className="size-3.5" />}
+        </button>
+      </div>
+    </div>
   )
 }

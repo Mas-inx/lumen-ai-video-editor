@@ -1,6 +1,7 @@
 import { AudioLines, Blend, Crosshair, Film, Gauge, Image as ImageIcon, Layers, Link2, Move, Snowflake, Sparkles, Type, Video } from 'lucide-react'
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { clipBeats } from '@/editor/beat-grid'
+import { clipCues, cueText, cueTone, type ClipCue, type CueTone } from '@/editor/cues'
 import { allKeyframeFrames } from '@/editor/keyframes'
 import { angleTracks } from '@/editor/sequences'
 import { useEditor } from '@/editor/store'
@@ -120,7 +121,10 @@ function ClipBody({ clip, asset, inPoint, duration, left, width, height }: { cli
     () => ({ speed: clip.speed, duration, inPoint, reverse: clip.reverse, freeze: clip.freeze, keyframes: clip.keyframes }),
     [clip.speed, duration, inPoint, clip.reverse, clip.freeze, clip.keyframes],
   )
-  const { fps } = useLayout()
+  const { fps, pps } = useLayout()
+  // A clip that came with a cue sheet shows what happens in it (following trims and speed).
+  const sheet = asset?.cues
+  const cues = useMemo(() => (sheet && asset ? clipCues({ ...clip, start: 0, duration, inPoint }, asset, fps) : []), [sheet, asset, clip, duration, inPoint, fps])
   // Music with a beat grid shows its beats (clip-local frames, following trims and speed).
   const grid = asset?.beats
   const beats = useMemo(
@@ -141,6 +145,7 @@ function ClipBody({ clip, asset, inPoint, duration, left, width, height }: { cli
               {x1 > x0 && <WaveCanvas asset={asset} timing={timing} x0={x0} x1={x1} height={strip - 1} gain={dbToGain(clip.audio.volume)} color={`color-mix(in oklab, ${CLIP_COLOR[clip.kind]} 70%, white)`} />}
             </div>
           )}
+          {cues.length > 0 && height >= 40 && x1 > x0 && <CueLane cues={cues} fps={fps} pps={pps} x0={x0} x1={x1} width={width} bottom={strip} />}
         </>
       )
     }
@@ -176,6 +181,38 @@ function ClipBody({ clip, asset, inPoint, duration, left, width, height }: { cli
         </div>
       )
   }
+}
+
+const CUE_COLOR: Record<CueTone, string> = { speech: 'var(--color-accent)', cut: '#ffffff', sound: 'var(--color-clip-audio)', action: 'var(--color-warn)' }
+
+/** What happens in a clip, along its bottom edge: a tick for each cue, named where there is room. */
+function CueLane({ cues, fps, pps, x0, x1, width, bottom }: { cues: ClipCue[]; fps: number; pps: number; x0: number; x1: number; width: number; bottom: number }) {
+  const shown: { x: number; room: number; item: ClipCue }[] = []
+  for (const item of cues) {
+    const x = (item.frame / fps) * pps
+    const last = shown[shown.length - 1]
+    // Packed tighter than a tick is wide, one stands for its neighbours.
+    if (last && x - last.x < 3) continue
+    if (last) last.room = x - last.x
+    shown.push({ x, room: width - x, item })
+  }
+  return (
+    <div className="pointer-events-none absolute inset-x-0 h-[14px] bg-gradient-to-t from-black/80 to-black/45" style={{ bottom }}>
+      {shown
+        .filter((s) => s.x + s.room >= x0 && s.x <= x1)
+        .map(({ x, room, item }) => (
+          <span
+            key={`${item.frame}:${item.cue.kind}:${item.cue.label}`}
+            title={`${cueText(item.cue)} — ${item.cue.at.toFixed(2)} s into the clip${item.cue.seconds ? `, ${item.cue.seconds} s long` : ''}`}
+            className="pointer-events-auto absolute inset-y-0 flex items-center overflow-hidden"
+            style={{ left: x, width: Math.max(3, room - 1) }}
+          >
+            <span className="h-full w-[2px] shrink-0" style={{ background: CUE_COLOR[cueTone(item.cue.kind)] }} />
+            {room >= 40 && <span className="min-w-0 truncate pr-1 pl-1 text-[9.5px] leading-none font-medium text-white/90">{cueText(item.cue)}</span>}
+          </span>
+        ))}
+    </div>
+  )
 }
 
 function ClipLabel({ clip, asset, nested }: { clip: Clip; asset?: Asset; nested?: Sequence }) {

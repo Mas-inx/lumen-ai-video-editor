@@ -241,6 +241,8 @@ export interface TrackRequest {
   frame?: number
   /** Footage to read (default: the target if it's video, else the video under it). */
   sourceId?: string
+  /** The target is the footage itself: nothing follows yet, so a new title is added and pinned to the point. */
+  newTitle?: boolean
   source?: 'user' | 'ai'
 }
 
@@ -275,8 +277,8 @@ export async function trackMotion(req: TrackRequest, onProgress?: (p: number) =>
   if (!req.maskId && target.kind === 'adjustment') throw new Error('An adjustment layer doesn’t move — track one of its masks instead.')
   const frame = Math.round(req.frame ?? usePlayback.getState().frame)
   if (frame < target.start || frame >= clipEnd(target)) throw new Error(`Put the playhead over “${target.name}” — on a frame where what it should follow is visible.`)
-  const src = req.sourceId ? p.clips[req.sourceId] : trackingSource(p, target, frame, Boolean(req.maskId))
-  if (!src) throw new Error('There’s no video under this clip at the playhead to follow.')
+  const src = req.newTitle ? target : req.sourceId ? p.clips[req.sourceId] : trackingSource(p, target, frame, Boolean(req.maskId))
+  if (!src) throw new Error(NOTHING_TO_FOLLOW)
   const { asset } = mediaClip(src.id)
   if (frame < src.start || frame >= clipEnd(src)) throw new Error('Put the playhead over the footage to follow.')
   const fps = p.settings.fps
@@ -332,9 +334,43 @@ export async function trackMotion(req: TrackRequest, onProgress?: (p: number) =>
   if (frame < first) ref = 0
   const path: TrackPath = { start: first - tgt.start, ref: Math.min(ref, points.length / 2 - 1), points }
   const how = { source: req.source ?? ('user' as const), label: 'Track motion' }
+  const tracked = { frames: points.length / 2, from: first, to: first + points.length / 2, lost: samples.length > 1 && samples[samples.length - 1].score < 0.6 }
+  if (req.newTitle) return { ...tracked, clipId: pinnedTitle(now, first, path, req.box.height, how.source) }
   const res = req.maskId ? dispatch('mask.update', { clipId: tgt.id, maskId: req.maskId, patch: { follow: path } }, how) : dispatch('clip.update', { ids: [tgt.id], patch: { follow: path } }, how)
   if (!res.ok) throw new Error(res.error)
-  return { frames: points.length / 2, from: first, to: first + points.length / 2, lost: samples.length > 1 && samples[samples.length - 1].score < 0.6 }
+  return tracked
+}
+
+export const NOTHING_TO_FOLLOW = 'There’s no video under this clip at the playhead. Put the clip on a track above the video it should follow, with the playhead over both.'
+
+/** A new title sitting just above a tracked point and moving with it (one undo step). Returns its id. */
+function pinnedTitle(project: Project, start: number, path: TrackPath, boxHeight: number, source: 'user' | 'ai'): string {
+  const { height: PH } = project.settings
+  const frames = path.points.length / 2
+  const size = Math.round(PH * 0.06)
+  let id = ''
+  let failed = ''
+  useEditor.getState().transaction('Track motion', source, () => {
+    const p = getProject()
+    const how = { source }
+    let trackId = (p.tracks.find((t) => t.role === 'titles' && !t.locked) ?? p.tracks.find((t) => t.kind === 'video' && t.role !== 'main' && t.role !== 'captions' && !t.locked))?.id
+    if (!trackId) {
+      const made = dispatch('track.add', { kind: 'video', name: 'Titles', index: 0, role: 'titles' }, how)
+      if (!made.ok) return void (failed = made.error)
+      trackId = made.result as string
+    }
+    const x = path.points[path.ref * 2]
+    const y = path.points[path.ref * 2 + 1] - boxHeight / 2 - size
+    const added = dispatch('clip.add', { trackId, kind: 'text', start, duration: frames, name: 'Tracked title', patch: { text: { content: 'Title', size }, transform: { x: Math.round(x), y: Math.round(y) } } }, how)
+    if (!added.ok) return void (failed = added.error)
+    id = added.result as string
+    // Where it landed (a busy track moves it to the nearest free spot) decides where its path starts.
+    const clip = getProject().clips[id]
+    const pinned = dispatch('clip.update', { ids: [id], patch: { follow: { ...path, start: start - clip.start } } }, how)
+    if (!pinned.ok) failed = pinned.error
+  })
+  if (failed || !id) throw new Error(failed || 'Couldn’t add the title.')
+  return id
 }
 
 /**

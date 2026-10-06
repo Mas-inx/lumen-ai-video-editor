@@ -3,10 +3,10 @@ import { useShallow } from 'zustand/react/shallow'
 import { Slider } from '@/components/ui/slider'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Button } from '@/components/ui/button'
-import { adjacentBefore, clipEnd } from '@/editor/ops'
+import { adjacentBefore, clipEnd, maxTransition, transitionLead } from '@/editor/ops'
 import { TRANSITIONS } from '@/editor/presets'
 import { dispatch, getProject, useEditor } from '@/editor/store'
-import type { Clip, Project, Track, TransitionKind } from '@/editor/types'
+import type { Clip, Project, Track, TransitionAlign, TransitionKind } from '@/editor/types'
 import { cn } from '@/lib/cn'
 import { formatDuration } from '@/lib/time'
 import { ClipView } from './ClipView'
@@ -49,6 +49,7 @@ export function TrackLane({ track, width }: { track: Track; width: number }) {
         <ClipView key={id} clipId={id} locked={track.locked} />
       ))}
       <TransitionBadges trackId={track.id} />
+      <TransitionDrop trackId={track.id} />
       {track.kind === 'audio' && !track.locked && <CrossfadeHandles trackId={track.id} />}
       {ghost && (
         <div
@@ -64,6 +65,38 @@ export function TrackLane({ track, width }: { track: Track; width: number }) {
         </div>
       )}
     </div>
+  )
+}
+
+/** Where a transition can sit on its cut, as the menu and the drop preview name it. */
+const ALIGNS: { id: TransitionAlign; label: string; hint: string }[] = [
+  { id: 'before', label: 'Before', hint: 'Ends at the cut: over the end of the first clip' },
+  { id: 'center', label: 'On the cut', hint: 'Half on each clip' },
+  { id: 'after', label: 'After', hint: 'Starts at the cut: over the start of the second clip' },
+]
+
+/** While a transition is dragged over a cut: where it would sit. */
+function TransitionDrop({ trackId }: { trackId: string }) {
+  const spot = useDrag((s) => s.dropTransition)
+  const clip = useEditor((s) => (spot ? s.project.clips[spot.clipId] : undefined))
+  const { pps, fps } = useLayout()
+  if (!spot || !clip || clip.trackId !== trackId) return null
+  const duration = Math.min(clip.transitionIn?.duration ?? Math.round(fps * 0.6), maxTransition(getProject(), clip, spot.align))
+  const lead = transitionLead({ kind: 'dissolve', duration, align: spot.align })
+  return (
+    <>
+      <div
+        className="pointer-events-none absolute top-[2px] bottom-[2px] z-[14] rounded-[6px] bg-accent/25 shadow-[inset_0_0_0_1.5px_var(--color-accent)]"
+        style={{ left: ((clip.start - lead) / fps) * pps, width: Math.max(6, (duration / fps) * pps) }}
+      />
+      <div className="pointer-events-none absolute top-0 bottom-0 z-[15] w-px bg-accent" style={{ left: (clip.start / fps) * pps }} />
+      <span
+        className="pointer-events-none absolute top-[5px] z-[15] -translate-x-1/2 rounded-md bg-accent px-1.5 py-0.5 text-[9.5px] font-semibold whitespace-nowrap text-accent-fg"
+        style={{ left: ((clip.start - lead + duration / 2) / fps) * pps }}
+      >
+        {ALIGNS.find((a) => a.id === spot.align)?.label}
+      </span>
+    </>
   )
 }
 
@@ -115,8 +148,11 @@ function TransitionBadge({ clipId }: { clipId: string }) {
   const { pps, fps } = useLayout()
   if (!clip?.transitionIn || moving) return null
   const tr = clip.transitionIn
+  const align = tr.align ?? 'after'
   const x = (clip.start / fps) * pps
   const w = (tr.duration / fps) * pps
+  const from = ((clip.start - transitionLead(tr)) / fps) * pps
+  const longest = Math.max(3, Math.min(maxTransition(getProject(), clip, align), fps * 3))
   // On audio, every transition is a crossfade.
   const audio = clip.kind === 'audio'
   const name = audio ? 'Crossfade' : (TRANSITIONS.find((t) => t.kind === tr.kind)?.name ?? 'Transition')
@@ -124,8 +160,13 @@ function TransitionBadge({ clipId }: { clipId: string }) {
   return (
     <>
       <div
-        className="pointer-events-none absolute top-[3px] bottom-[3px] z-[11] rounded-l-[7px] bg-[linear-gradient(90deg,rgb(255_255_255/0.26),rgb(255_255_255/0.04))]"
-        style={{ left: x, width: w }}
+        className={cn(
+          'pointer-events-none absolute top-[3px] bottom-[3px] z-[11]',
+          align === 'after' && 'rounded-l-[7px] bg-[linear-gradient(90deg,rgb(255_255_255/0.26),rgb(255_255_255/0.04))]',
+          align === 'before' && 'rounded-r-[7px] bg-[linear-gradient(90deg,rgb(255_255_255/0.04),rgb(255_255_255/0.26))]',
+          align === 'center' && 'bg-[linear-gradient(90deg,rgb(255_255_255/0.04),rgb(255_255_255/0.26),rgb(255_255_255/0.04))]',
+        )}
+        style={{ left: from, width: w }}
       />
       <Popover>
         <PopoverTrigger asChild>
@@ -157,11 +198,27 @@ function TransitionBadge({ clipId }: { clipId: string }) {
             ))}
           </div>
           <div className="mt-3 flex items-center gap-3">
+            <span className="w-14 text-xs text-fg-3">Position</span>
+            <div className="grid flex-1 grid-cols-3 gap-0.5 rounded-lg bg-white/[0.05] p-0.5">
+              {ALIGNS.map((a) => (
+                <button
+                  key={a.id}
+                  type="button"
+                  title={a.hint}
+                  onClick={() => dispatch('clip.setTransition', { id: clip.id, transition: { ...tr, align: a.id } }, { label: 'Move transition' })}
+                  className={cn('h-6 rounded-md text-2xs font-medium text-fg-3 transition-colors hover:text-fg', a.id === align && 'bg-white/[0.12] text-fg')}
+                >
+                  {a.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="mt-3 flex items-center gap-3">
             <span className="w-14 text-xs text-fg-3">Duration</span>
             <Slider
               value={tr.duration}
               min={2}
-              max={Math.max(3, Math.min(clip.duration, fps * 3))}
+              max={longest}
               onChange={(v) => dispatch('clip.setTransition', { id: clip.id, transition: { ...tr, duration: Math.round(v) } }, { coalesce: `tr:${clip.id}` })}
             />
             <span className="w-10 text-right text-xs text-fg-2 tabular">{formatDuration(tr.duration, fps)}</span>

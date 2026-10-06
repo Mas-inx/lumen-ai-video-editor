@@ -4,7 +4,7 @@
  * (white = subject) kept with the project; a clip with a matte shows just its
  * subject — the top layer of "text behind subject" — or, inverted, everything
  * but it. The model downloads once (through Lumen's cache) and then works
- * offline: MODNet (people, ~25 MB) or BiRefNet-lite (any subject, needs WebGPU).
+ * offline: MODNet (people, ~25 MB) or IS-Net (any subject, ~170 MB, needs WebGPU).
  */
 import ortMjs from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs?url'
 import ortWasm from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url'
@@ -21,7 +21,9 @@ export type Subject = 'person' | 'any'
 
 export const SEGMENT_MODELS: Record<Subject, string> = {
   person: 'Xenova/modnet',
-  any: 'onnx-community/BiRefNet_lite-ONNX',
+  // A plain convolutional network: it runs on every graphics card. (BiRefNet splits tensors more ways than
+  // Direct3D gives a shader buffers for, so it can't run on Windows.)
+  any: 'imgly/isnet-general-onnx',
 }
 
 /** Matte width: about what the models see; the compositor scales it to the picture. */

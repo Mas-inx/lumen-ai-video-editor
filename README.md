@@ -19,7 +19,7 @@ Lumen is a desktop video editor where the AI isn't a chatbot bolted onto a timel
 [![CI](https://img.shields.io/github/actions/workflow/status/Mas-inx/lumen-ai-video-editor/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/Mas-inx/lumen-ai-video-editor/actions/workflows/ci.yml)
 ![License: MIT](https://img.shields.io/badge/license-MIT-d6ee00?style=flat-square)
 ![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-2b2c26?style=flat-square)
-![119 AI tools](https://img.shields.io/badge/AI%20tools-119-d6ee00?style=flat-square)
+![122 AI tools](https://img.shields.io/badge/AI%20tools-122-d6ee00?style=flat-square)
 ![MCP server and client](https://img.shields.io/badge/MCP-server%20%2B%20client-2b2c26?style=flat-square)
 ![Electron 44](https://img.shields.io/badge/Electron-44-2b2c26?style=flat-square&logo=electron)
 ![React 19](https://img.shields.io/badge/React-19-2b2c26?style=flat-square&logo=react)
@@ -68,7 +68,7 @@ It's an open-source alternative to editors like CapCut, Filmora and Descript —
   - render at Full, 1/2, 1/4 or 1/8 resolution, sharpened back up on playback.
 - **Smooth on modest computers.** Nothing redraws while idle, filmstrips and waveforms are painted once and reused, and the preview drops resolution when it has to.
 - **Pro editing tools:** roll, slip and slide; ripple trim and insert or overwrite on any track; in and out points to play, lift, extract or export a stretch; copy, cut, paste and *paste attributes*; crop with rounded corners; freeze frames and **speed ramps**; detached sound for J- and L-cuts; groups; and solo and reorder for tracks.
-- **2D and 3D transitions** (cube, flip, door, page curl, shatter…), effects, **colour looks and grading**, and extruded **3D titles** rendered live.
+- **2D and 3D transitions** (cube, flip, door, page curl, shatter…) placed before, on or after a cut, effects, **colour looks and grading**, and extruded **3D titles** rendered live.
 - **Real colour grading** on the GPU: tone curves, lift / gamma / gain wheels, HSL by colour range, imported **.cube LUTs**, and **scopes** (waveform, RGB parade, vectorscope, histogram) beside the program monitor.
 - **Compositing:** chroma and luma keys with an eyedropper and spill suppression; feathered rectangle and ellipse **masks** you drag on the canvas (on adjustment layers too, to grade just part of the frame); outlined titles in **any font** — imported, or picked from those installed on your computer, and embedded in the project.
 - **Text behind subject:** on-device AI cuts the person (or, with a GPU, any subject) out of a shot. Slip a title between them and the background, remove the background, or remove the person. One click, one undo step, frame-exact on export.
@@ -140,6 +140,7 @@ One-click suggestions on the timeline, and tools for every AI:
 - **Voiceovers, sound effects and music** with ElevenLabs.
 - Anything from an **MCP server** — Higgsfield, Runway, Replicate, fal.ai or your own.
 - **GTA V cinematics** from a FiveM game with **GS Cinematic Studio**: the Copilot stages the scene, directs the cameras, renders it in the game and drops the clip on your timeline.
+- **Frame ingest:** another app on your computer sends finished frames straight to Lumen, which encodes each shot once into a full-colour (4:4:4) master, visually lossless or bit-exact. [How it works →](docs/INGEST.md)
 
 ### Effects, transitions and looks
 
@@ -160,7 +161,7 @@ One-click suggestions on the timeline, and tools for every AI:
 | GIF | animated, palette-optimised |
 | WAV · M4A | audio only |
 
-From 480p to 4K in your timeline's shape, 24–60 fps, with **hardware encoding** where your GPU supports it, a live file-size estimate and progress in the taskbar. Export any timeline, burn captions in or save them as an **SRT / WebVTT** file beside the video, and line several exports up in the **render queue** to render one after another while you keep editing.
+From 480p to 4K in your timeline's shape, 24–60 fps, with **hardware encoding** on Intel, NVIDIA and AMD graphics, a live file-size estimate and progress in the taskbar. Lumen tries the encoder with real frames first and falls back by itself: to the processor, then to another codec, even if the graphics card's encoder fails part-way through. *Graphics and encoding* in the Lumen menu shows what your computer can do. Export any timeline, burn captions in or save them as an **SRT / WebVTT** file beside the video, and line several exports up in the **render queue** to render one after another while you keep editing.
 
 ### Connect anything
 
@@ -209,6 +210,7 @@ npm run dev      # the app, with hot reload
 ## Documentation
 
 - [AI tools reference](docs/AI-TOOLS.md) — every tool the AI can use, with parameters
+- [Frame ingest](docs/INGEST.md) — sending frames to Lumen from another app
 - [Architecture](docs/ARCHITECTURE.md) — how the editor, media engine, AI and integrations fit together
 - [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md) · [Third-party notices](THIRD-PARTY-NOTICES.md)
 

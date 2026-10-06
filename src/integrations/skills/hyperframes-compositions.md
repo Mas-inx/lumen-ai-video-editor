@@ -5,7 +5,7 @@ description: Use when writing a custom HyperFrames composition (render_hyperfram
 
 # Writing HyperFrames compositions for Lumen
 
-render_hyperframes_html renders your HTML page frame by frame into a transparent clip. Follow the motion-design-craft skill for taste. This skill covers mechanics.
+render_hyperframes_html renders your HTML page frame by frame into a transparent clip. Follow the motion-design-craft skill for taste, and motion-graphic-styles when the piece has a named look. This skill covers mechanics.
 
 ## The page
 
@@ -87,9 +87,27 @@ Techniques that read as crafted:
 - **Position parameters.** Use absolute times or labels (`tl.addLabel("hit", 1.25)`) so moments land on the music's beats: beat times = offset + n × 60 / bpm.
 - **Staggers.** `stagger: { each: 0.05, from: "start" }` for reading order. `from: "center"` only when the shape is symmetric.
 
+## Beyond tweens
+
+- **Cue sheet.** Keep every hit time in one object and position tweens from it, so picture and sound share the numbers: `const CUE = { hook: 0.4, hero: 6, logo: 8.2 }`, then `tl.from(".logo", { … }, CUE.logo)`.
+- **Canvas and computed drawing.** Drive a pure `draw(t)` from one linear tween that spans the piece:
+
+  ```js
+  const clock = { t: 0 };
+  tl.to(clock, { t: 10, duration: 10, ease: "none", onUpdate: () => draw(clock.t) }, 0);
+  draw(0);
+  ```
+
+  `draw(t)` works everything out from `t` alone: closed-form motion, particles from seeded start values, no state kept between calls.
+- **Stepped time.** For hand-made and retro looks, hold motion on a lower frame rate: `ease: "steps(12)"` on a 1 s tween, or draw from `Math.floor(t * 12) / 12`. Key per-drawing jitter to that stepped frame number.
+- **Smear, not blur.** Each frame is one sharp capture; there is no motion blur. On a fast move, stretch the shape along its path for 1–2 frames.
+- **Grain against banding.** Large soft gradients band. Lay 3–5% noise over them (an `feTurbulence` rect or a small tiled noise canvas).
+- **Thin lines.** Keep moving strokes at 2 px or more, or they shimmer.
+- **Loading.** Scripts, fonts and images load only from Google Fonts, cdn.jsdelivr.net, unpkg.com and cdnjs.cloudflare.com, and only when online. Other hosts are blocked: draw artwork as inline SVG or canvas, or embed it as a data URL.
+
 ## Avoid
 
-- Filters on large layers (blur, drop-shadow on full-frame elements): slow to render and the stock look.
+- Filters on large layers (blur, drop-shadow on full-frame elements): slow to render and the stock look. When a named style needs one (liquid fusion, a HUD glow), put it on one group.
 - `box-shadow` glows, `backdrop-filter`, gradient text by default.
 - Animating `top`/`left`/`width` (use transforms); layouts that depend on the viewport (use the page's px size).
 

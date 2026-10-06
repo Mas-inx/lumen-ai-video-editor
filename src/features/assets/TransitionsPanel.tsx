@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Preview3D } from '@/components/Preview3D'
-import { applyTransition } from '@/editor/placement'
+import { adjacentBefore } from '@/editor/ops'
+import { applyTransition, transitionSpot } from '@/editor/placement'
+import { getProject } from '@/editor/store'
 import { TRANSITIONS } from '@/editor/presets'
 import type { TransitionKind } from '@/editor/types'
 import { useUI } from '@/editor/ui-store'
@@ -59,9 +61,17 @@ export function TransitionsPanel() {
   const [hovered, setHovered] = useState<TransitionKind | null>(null)
   const art = usePreviewArt()
   const apply = (kind: TransitionKind) => {
-    const sel = useUI.getState().selection
-    if (sel.length !== 1) return toast('Select the clip after a cut, then pick a transition')
-    applyTransition(kind, sel[0])
+    const p = getProject()
+    const sel = useUI
+      .getState()
+      .selection.map((id) => p.clips[id])
+      .filter((c) => c && c.kind !== 'audio')
+      .sort((a, b) => a.start - b.start)
+    // Two clips that touch: the cut between them. One clip: the cut at its start, or else at its end.
+    if (sel.length === 2 && adjacentBefore(p, sel[1])?.id === sel[0].id) return void applyTransition(kind, sel[1].id, 'user', 'center')
+    const spot = sel.length === 1 ? transitionSpot(p, sel[0]) : null
+    if (!spot) return void toast('Select a clip next to a cut', { description: 'Or the two clips on either side of it. You can also drag a transition onto the cut.' })
+    applyTransition(kind, spot.clipId, 'user', spot.align)
   }
 
   const card = (t: (typeof TRANSITIONS)[number]) => (
@@ -92,7 +102,7 @@ export function TransitionsPanel() {
         <div className="grid grid-cols-2 gap-x-2.5 gap-y-3">{TRANSITIONS.filter((t) => t.is3d).map(card)}</div>
         <SectionLabel>Classic</SectionLabel>
         <div className="grid grid-cols-2 gap-x-2.5 gap-y-3">{TRANSITIONS.filter((t) => !t.is3d).map(card)}</div>
-        <p className="mt-4 px-1 text-2xs leading-relaxed text-fg-4">Drop a transition onto the clip that comes after a cut, or select that clip and click.</p>
+        <p className="mt-4 px-1 text-2xs leading-relaxed text-fg-4">Drag a transition to where two clips touch: onto the end of the first clip, onto the cut itself, or onto the start of the second. Or select the clips and click. Click a transition on the timeline to move it, change its length or remove it.</p>
       </div>
     </>
   )

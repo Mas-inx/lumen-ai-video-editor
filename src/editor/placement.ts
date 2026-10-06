@@ -4,10 +4,10 @@
  */
 import { toast } from 'sonner'
 import { LOOKS, TITLE_PRESETS } from './presets'
-import { adjacentBefore, clipEnd, clipsOnTrack, sourceFrames, trackAccepts } from './ops'
+import { adjacentAfter, adjacentBefore, clipEnd, clipsOnTrack, sourceFrames, trackAccepts } from './ops'
 import { dispatch, getProject, useEditor } from './store'
 import type { ActionSource } from './store'
-import type { Asset, ClipKind, EffectKind, Project, Track, TransitionKind } from './types'
+import type { Asset, Clip, ClipKind, EffectKind, Project, Track, TransitionAlign, TransitionKind } from './types'
 
 const STILL_SECONDS = 5
 
@@ -147,14 +147,39 @@ export function applyLook(lookId: string, clipIds: string[], source: ActionSourc
   return dispatch('clip.update', { ids, patch: { color: look.grade, look: look.id } }, { source, label: `Apply ${look.name} look` }).ok
 }
 
-export function applyTransition(kind: TransitionKind, clipId: string, source: ActionSource = 'user') {
+export interface TransitionSpot {
+  /** The clip after the cut: the one that carries the transition. */
+  clipId: string
+  align: TransitionAlign
+}
+
+/**
+ * Where a transition aimed at a clip goes. A clip has a cut at each end that
+ * touches another clip: `frame` (the timeline frame pointed at) picks the
+ * nearer one. Right on a cut (within `near` frames) the transition is centred
+ * on it; further into the clip it stays on that clip — at the end of the first
+ * clip, or the start of the second. Null when the clip touches no other.
+ */
+export function transitionSpot(project: Project, clip: Clip, frame?: number, near = 0): TransitionSpot | null {
+  if (clip.kind === 'audio') return null
+  const prev = adjacentBefore(project, clip)
+  const next = adjacentAfter(project, clip)
+  if (!prev && !next) return null
+  const at = frame ?? clip.start
+  if (prev && (!next || at < clip.start + clip.duration / 2)) return { clipId: clip.id, align: frame !== undefined && at - clip.start <= near ? 'center' : 'after' }
+  return { clipId: next!.id, align: frame !== undefined && clipEnd(clip) - at <= near ? 'center' : 'before' }
+}
+
+/** Puts a transition on the cut before `clipId` (see {@link transitionSpot} for choosing it). */
+export function applyTransition(kind: TransitionKind, clipId: string, source: ActionSource = 'user', align?: TransitionAlign) {
   const project = getProject()
   const clip = project.clips[clipId]
   if (!clip || clip.kind === 'audio') return false
   if (!adjacentBefore(project, clip)) {
-    toast('Transitions go on a cut — drop it on a clip that follows another')
+    toast('Transitions go on a cut', { description: 'Drop it where two clips touch on a track: on the end of the first, on the cut, or on the start of the second.' })
     return false
   }
-  const duration = Math.min(Math.round(project.settings.fps * 0.6), clip.duration)
-  return dispatch('clip.setTransition', { id: clipId, transition: { kind, duration } }, { source }).ok
+  // Keeps the length of a transition that is only being swapped or moved.
+  const duration = clip.transitionIn?.duration ?? Math.round(project.settings.fps * 0.6)
+  return dispatch('clip.setTransition', { id: clipId, transition: { kind, duration, ...(align ? { align } : {}) } }, { source }).ok
 }

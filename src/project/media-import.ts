@@ -51,8 +51,18 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   return out
 }
 
-/** Adds files to the project library (skipping ones already in it). Returns the assets, new and existing. */
-export async function importMediaFiles(files: MediaFileInfo[]): Promise<Asset[]> {
+export interface ImportFailure {
+  name: string
+  reason: string
+  /** Why, in technical terms (the codec string, the parser's error). */
+  detail?: string
+}
+
+/**
+ * Adds files to the project library (skipping ones already in it). Returns the
+ * assets, new and existing; files that couldn't be imported are added to `failures`.
+ */
+export async function importMediaFiles(files: MediaFileInfo[], failures: ImportFailure[] = []): Promise<Asset[]> {
   if (!files.length) return []
   const byPath = new Map(
     Object.values(getProject().assets)
@@ -66,12 +76,12 @@ export async function importMediaFiles(files: MediaFileInfo[]): Promise<Asset[]>
     return !hit
   })
   const id = fresh.length ? toast.loading(`Importing ${plural(fresh.length, 'file')}…`) : undefined
-  const failed: { name: string; reason: string }[] = []
+  const failed = failures
   const results = await mapLimit(fresh, 3, async (file) => {
     try {
       return await assetFromFile(file)
     } catch (err) {
-      failed.push({ name: file.name, reason: err instanceof Error ? err.message : String(err) })
+      failed.push({ name: file.name, reason: err instanceof Error ? err.message : String(err), detail: err instanceof MediaError ? err.detail : undefined })
       return null
     }
   })

@@ -16,6 +16,8 @@ The bar: it should look like a considered studio made it for this film — not l
 - The stock HyperFrames / Remotion look: everything fades and slides 40 px with the same ease and duration; blur-in letters; scale-and-blur pops; drop shadows on everything.
 - Everything moving at once. Text that leaves before it can be read. Motion with no reason.
 
+A named style (use_skill motion-graphic-styles) may use an item from this list when it is that style's signature, and only then.
+
 ## Typography
 
 - Pick a typeface for the job and the film's voice:
@@ -61,6 +63,18 @@ The bar: it should look like a considered studio made it for this film — not l
 - Pass `bpm` to render_motion_graphic for kinetic type and poster titles; punch-ins are clip_animate `punch` at a beat's frame; cut_to_beats lays a montage out on the beat.
 - Use every beat for energetic edits, every other beat or every bar for calm ones.
 
+## Shape of a piece
+
+For anything longer than one title (an intro, an explainer, an ident):
+
+- **Hook** in the first 0.5 s. Never open on more than 0.3 s of empty or black frame.
+- **Escalate.** Each beat adds something new. Alternate busy stretches with calm ones.
+- **One hero moment** at 60–75% of the runtime: the biggest move and the loudest sound. Everything before it builds to it.
+- **End frame** composed like a poster and held 0.8–1.2 s with small living motion (a 1–2% drift, a blink), never frozen.
+- One hero moves at a time. An element carries each transition (a shape that fills the frame, an object that flies through), not a crossfade.
+- Fast moves get anticipation (2–4 frames the other way) and follow-through (secondary parts arrive 2–3 frames late).
+- Keep one cue sheet: the time in seconds of every hit. The animation and the sound both read from it (see sound-and-music).
+
 ## Camera moves with intent
 
 - Every move has a reason:
@@ -81,10 +95,26 @@ The bar: it should look like a considered studio made it for this film — not l
 
 1. Write the idea in one line: what should the viewer feel or understand?
 2. Choose the system before rendering:
+   - one named style when the piece is style-led (use_skill motion-graphic-styles);
    - typeface and weights;
    - one accent colour from the footage;
    - an ease for each element role;
    - holds from reading time;
    - beat timing if there's music.
-3. Make it: render_motion_graphic (pick a style, font, accent and bpm on purpose), or render_hyperframes_html for something bespoke (use_skill hyperframes-compositions).
-4. Check it: get_frame at the end of the entrance, mid-hold and the start of the exit. Fix anything that looks templated, cramped, off-grid or too short to read before you say you're done.
+3. Design the key frames first: the hook, the hero moment and the end frame must each work as a still poster before you animate between them.
+4. Make it: render_motion_graphic (pick a style, font, accent and bpm on purpose), or render_hyperframes_html for something bespoke (use_skill hyperframes-compositions).
+5. Check it: get_frame at the end of the entrance, mid-hold and the start of the exit. Fix anything that looks templated, cramped, off-grid or too short to read before you say you're done. For a full piece, run the review below.
+
+## Review before you call it done
+
+Look at it as a stranger would: get_contact_sheet with a frame every 0.5 s, then get_frame on the fastest move, the hero moment and the end frame. Score each line 1–10 (6 = template, 8 = agency work) and fix the lowest first.
+
+- **Style:** can someone name the style from one frame? Is every signature feature there?
+- **Idea:** a hook in 0.5 s, a clear hero moment, a satisfying end frame?
+- **Motion:** eases chosen by role, overlap and stagger, anticipation and follow-through; no dead or jittery stretch?
+- **Design and type:** hierarchy, grid, palette, empty space; type set properly?
+- **Finish:** texture, grain and glow only where the style wants them; no banding, jagged edges, shimmering thin lines, or elements cut off by the frame edge?
+- **Sound:** do the hits land on the sounds? Does the music fit the look?
+- **Technical:** the chosen fonts loaded (no fallback face), no blank frames, nothing popping in, the right size and length?
+
+Write 3–5 fixes in order of impact, each with a timecode and a number (an ease, frames, px, a hex). At least one must lift the idea, not only polish it. Apply them, render again and look again.

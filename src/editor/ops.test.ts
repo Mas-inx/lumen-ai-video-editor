@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { createClip } from './defaults'
 import { createEmptyProject } from './new-project'
-import { clipEnd, clipsOnTrack, deleteClips, normalizeProject, removeRange, splitClip } from './ops'
+import { clipEnd, clipsOnTrack, deleteClips, maxTransition, normalizeProject, removeRange, splitClip, framesIn, transitionAt, transitionLead } from './ops'
+import { transitionSpot } from './placement'
 import type { Clip, ClipKind } from './types'
 
 function setup() {
@@ -15,6 +16,48 @@ function setup() {
   const on = (trackName: string) => clipsOnTrack(p, track(trackName)).map((c) => [c.start, clipEnd(c)])
   return { p, track, add, on }
 }
+
+describe('transitions on a cut', () => {
+  it('play before it, across it or after it', () => {
+    const { p, add } = setup()
+    const a = add('Main', 'video', 0, 60)
+    const b = add('Main', 'video', 60, 90)
+    const at = (frame: number) => {
+      const under = frame < 60 ? a : b
+      const t = transitionAt(p, under, frame)
+      return t ? `${t.from === a ? 'a' : 'b'}>${t.to === b ? 'b' : 'a'} ${t.progress.toFixed(2)}` : null
+    }
+    b.transitionIn = { kind: 'dissolve', duration: 20 }
+    expect([at(59), at(60), at(70), at(79), at(80)]).toEqual([null, 'a>b 0.00', 'a>b 0.50', 'a>b 0.95', null])
+    // New clips objects, as an edit makes them: what leads into what is worked out again.
+    p.clips = { ...p.clips, [b.id]: (b.transitionIn = { kind: 'dissolve', duration: 20, align: 'center' }) && b }
+    expect(transitionLead(b.transitionIn!)).toBe(10)
+    expect([at(49), at(50), at(60), at(69), at(70)]).toEqual([null, 'a>b 0.00', 'a>b 0.50', 'a>b 0.95', null])
+    p.clips = { ...p.clips, [b.id]: (b.transitionIn = { kind: 'dissolve', duration: 20, align: 'before' }) && b }
+    expect([at(39), at(40), at(50), at(59), at(60)]).toEqual([null, 'a>b 0.00', 'a>b 0.50', 'a>b 0.95', null])
+    // It can't run past either clip.
+    expect([maxTransition(p, b, 'before'), maxTransition(p, b, 'center'), maxTransition(p, b, 'after')]).toEqual([60, 120, 90])
+  })
+
+  it('land where they are dropped', () => {
+    const { p, add } = setup()
+    const a = add('Main', 'video', 0, 60)
+    const b = add('Main', 'video', 60, 90)
+    const alone = add('Overlay', 'video', 300, 30)
+    // On the end of the first clip, on the cut, on the start of the second.
+    expect(transitionSpot(p, a, 45, 4)).toEqual({ clipId: b.id, align: 'before' })
+    expect(transitionSpot(p, a, 57, 4)).toEqual({ clipId: b.id, align: 'center' })
+    expect(transitionSpot(p, b, 62, 4)).toEqual({ clipId: b.id, align: 'center' })
+    expect(transitionSpot(p, b, 80, 4)).toEqual({ clipId: b.id, align: 'after' })
+    // The first clip has no cut at its start, the last none at its end: the one they have is used.
+    expect(transitionSpot(p, a, 5, 4)).toEqual({ clipId: b.id, align: 'before' })
+    expect(transitionSpot(p, b, 140, 4)).toEqual({ clipId: b.id, align: 'after' })
+    // Picked from the panel, with no pointer: the clip's own start, or else its end.
+    expect(transitionSpot(p, b)).toEqual({ clipId: b.id, align: 'after' })
+    expect(transitionSpot(p, a)).toEqual({ clipId: b.id, align: 'before' })
+    expect(transitionSpot(p, alone, 310, 4)).toBeNull()
+  })
+})
 
 describe('splitClip', () => {
   it('splits source, keeps motion continuous and resets the join', () => {
@@ -157,5 +200,20 @@ describe('removeRange', () => {
     add('Overlay', 'video', 0, 50)
     removeRange(p, 20, 20)
     expect(on('Overlay')).toEqual([[0, 50]])
+  })
+})
+
+describe('framesIn', () => {
+  it('counts the last frame of media whose length was rounded to the millisecond', () => {
+    // 40 frames at 30 fps is 1.3333… s, stored as 1.333: still 40 frames, not 39.
+    expect(framesIn(1.333, 30)).toBe(40)
+    expect(framesIn(3.333, 30)).toBe(100)
+    expect(framesIn(1.667, 30)).toBe(50)
+    expect(framesIn(2, 30)).toBe(60)
+    expect(framesIn(10.01, 59.94)).toBe(600)
+    expect(framesIn(0.017, 60)).toBe(1)
+    // Footage that really ends part-way through a frame keeps only its whole frames.
+    expect(framesIn(1.32, 30)).toBe(39)
+    expect(framesIn(0.99, 30)).toBe(29)
   })
 })

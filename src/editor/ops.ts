@@ -8,7 +8,7 @@ import { uid } from '@/lib/id'
 import { createClip, createTrack, TRACK_HEIGHTS } from './defaults'
 import { ANIMATABLE, propAt } from './keyframes'
 import { consumed, consumedAt, sourceFrameAt, speedAt, splitInPoints } from './timing'
-import type { AnimatableProp, Clip, ClipKind, Frame, Project, Track } from './types'
+import type { AnimatableProp, Clip, ClipKind, Frame, Project, Track, Transition } from './types'
 
 export const clipEnd = (c: Pick<Clip, 'start' | 'duration'>) => c.start + c.duration
 
@@ -33,6 +33,13 @@ export function trackAccepts(track: Pick<Track, 'kind'>, kind: ClipKind) {
   return track.kind === 'audio' ? kind === 'audio' : kind !== 'audio'
 }
 
+/**
+ * Whole frames in `seconds` of media. Durations are kept to the millisecond,
+ * so 40 frames at 30 fps is stored as 1.333 s — a hair under 40 frames. A frame
+ * that ends within that rounding still counts; flooring alone lost the last one.
+ */
+export const framesIn = (seconds: number, fps: number) => Math.floor((seconds + 0.0005) * fps + 1e-6)
+
 /** Source length in project frames (Infinity for stills, titles and adjustment layers). */
 export function sourceFrames(p: Project, clip: Pick<Clip, 'assetId' | 'sequenceId'>): number {
   if (clip.sequenceId) {
@@ -46,7 +53,7 @@ export function sourceFrames(p: Project, clip: Pick<Clip, 'assetId' | 'sequenceI
   if (!clip.assetId) return Infinity
   const asset = p.assets[clip.assetId]
   if (!asset || asset.duration === undefined) return Infinity
-  return Math.floor(asset.duration * p.settings.fps)
+  return framesIn(asset.duration, p.settings.fps)
 }
 
 export function cloneClip(c: Clip): Clip {
@@ -486,6 +493,60 @@ export function adjacentBefore(p: Project, clip: Clip): Clip | undefined {
     if (c.trackId === clip.trackId && c.id !== clip.id && clipEnd(c) === clip.start) return c
   }
   return undefined
+}
+
+/** Frames of a transition that play before its cut. */
+export const transitionLead = (tr: Transition) => (tr.align === 'before' ? tr.duration : tr.align === 'center' ? Math.floor(tr.duration / 2) : 0)
+
+/** The longest a transition can be on the cut before `clip`: it can't run past either clip. */
+export function maxTransition(p: Project, clip: Clip, align: Transition['align']) {
+  const prev = adjacentBefore(p, clip)
+  if (align === 'before') return prev ? prev.duration : clip.duration
+  if (align === 'center') return 2 * Math.min(prev ? prev.duration : clip.duration, clip.duration)
+  return clip.duration
+}
+
+/** For each clip that a transition starts on before its end: the clip it leads into. Rebuilt when the clips change. */
+const leadCache = new WeakMap<Record<string, Clip>, Map<string, Clip>>()
+function leadsInto(p: Project) {
+  let map = leadCache.get(p.clips)
+  if (!map) {
+    map = new Map()
+    for (const c of Object.values(p.clips)) {
+      if (!c.transitionIn || transitionLead(c.transitionIn) <= 0) continue
+      const prev = adjacentBefore(p, c)
+      if (prev) map.set(prev.id, c)
+    }
+    leadCache.set(p.clips, map)
+  }
+  return map
+}
+
+export interface TransitionAt {
+  from: Clip
+  to: Clip
+  tr: Transition
+  /** 0 at its first frame, towards 1 at its last. */
+  progress: number
+}
+
+/** The transition playing at `frame`, where `clip` is the clip on its track under that frame. */
+export function transitionAt(p: Project, clip: Clip, frame: number): TransitionAt | null {
+  const own = clip.transitionIn
+  if (own) {
+    const lead = transitionLead(own)
+    if (frame < clip.start + own.duration - lead) {
+      const prev = adjacentBefore(p, clip)
+      if (prev) return { from: prev, to: clip, tr: own, progress: (frame - (clip.start - lead)) / own.duration }
+    }
+  }
+  const next = leadsInto(p).get(clip.id)
+  const tr = next?.transitionIn
+  if (next && tr) {
+    const lead = transitionLead(tr)
+    if (frame >= next.start - lead) return { from: clip, to: next, tr, progress: (frame - (next.start - lead)) / tr.duration }
+  }
+  return null
 }
 
 /** All edit points (clip starts/ends) across the project, sorted. */

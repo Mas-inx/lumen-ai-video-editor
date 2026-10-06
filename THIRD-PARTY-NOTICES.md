@@ -56,9 +56,10 @@ Lumen is released under the [MIT license](LICENSE). It is built on, and its inst
 - **Electron and Chromium** — the installer includes Electron (MIT) and Chromium, whose licenses are listed in `LICENSES.chromium.html` next to `Lumen.exe`. That includes FFmpeg as built for Chromium (LGPL 2.1).
 - **RNNoise** (BSD-3-Clause) — noise reduction, compiled to WebAssembly by `@shiguredo/rnnoise-wasm`.
 - **Whisper** — the speech model (`onnx-community/whisper-base`, a conversion of OpenAI's Whisper, MIT) is downloaded from Hugging Face the first time you transcribe on your device. It isn't part of the installer.
-- **Subject cut-outs** — MODNet (`Xenova/modnet`, Apache-2.0) for people and BiRefNet lite (`onnx-community/BiRefNet_lite-ONNX`, MIT) for any subject are downloaded from Hugging Face the first time you cut out a subject. They aren't part of the installer.
+- **Subject cut-outs** — MODNet (`Xenova/modnet`, Apache-2.0) for people and IS-Net general use (`imgly/isnet-general-onnx`, MIT; the model is from DIS, Apache-2.0) for any subject are downloaded from Hugging Face the first time you cut out a subject. They aren't part of the installer.
 - **Fonts** — Geist, Geist Mono, Bricolage Grotesque, Instrument Serif, Caveat, Fraunces, Archivo, Syne and Space Grotesk, under the SIL Open Font License 1.1, via Fontsource.
 - **GSAP** — used by HyperFrames motion graphics under GreenSock's [standard no-charge license](https://gsap.com/standard-license).
 - **Mediabunny** — MPL-2.0; used unmodified. Source and documentation: [mediabunny.dev](https://mediabunny.dev/).
+- **Motion-graphic style rules** — the style rules in the built-in skills (`motion-graphic-styles`, `motion-graphic-styles-textured`, and the parts of the motion, sound and Blender skills that go with them) are adapted from [mg-styles-15](https://github.com/Vincentwei1021/mg-styles-15) by Vincentwei1021 (MIT). None of its code or assets are included.
 
 Blender, Claude Code, Codex and the AI services Lumen can connect to are separate products that you install or sign up for yourself; they are not distributed with Lumen.

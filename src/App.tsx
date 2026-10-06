@@ -1,3 +1,4 @@
+import { LoaderCircle } from 'lucide-react'
 import { useEffect } from 'react'
 import { Group, Panel, useDefaultLayout } from 'react-resizable-panels'
 import { Toaster } from 'sonner'
@@ -12,6 +13,7 @@ import { ExportDialog } from '@/features/export/ExportDialog'
 import { RenderQueueDialog } from '@/features/export/RenderQueue'
 import { MulticamDialog } from '@/features/multicam/MulticamDialog'
 import { AboutDialog } from '@/features/shell/AboutDialog'
+import { GraphicsDialog } from '@/features/shell/GraphicsDialog'
 import { AgentApprovals } from '@/features/integrations/AgentApprovals'
 import { IntegrationsHub } from '@/features/integrations/IntegrationsHub'
 import { PreviewPanel } from '@/features/preview/PreviewPanel'
@@ -27,6 +29,7 @@ import { Timeline } from '@/features/timeline/Timeline'
 import { startAi } from '@/integrations/ai'
 import { startBridgeClient } from '@/integrations/bridge'
 import { startIntegrations } from '@/integrations/store'
+import { startIngestClient } from '@/project/ingest'
 import { startUpdates } from '@/lib/updates'
 
 export function App() {
@@ -38,6 +41,7 @@ export function App() {
     // Blender, HyperFrames and MCP live in the desktop app's main process.
     startIntegrations()
     startBridgeClient()
+    startIngestClient()
     startAi()
     startUpdates()
   }, [])
@@ -57,6 +61,7 @@ export function App() {
         <ExportDialog />
         <ShortcutsDialog />
         <AboutDialog />
+        <GraphicsDialog />
         <PasteAttributesDialog />
         <VersionHistoryDialog />
         <RenameTimelineDialog />
@@ -68,6 +73,7 @@ export function App() {
           position="bottom-center"
           offset={20}
           gap={8}
+          icons={{ loading: <LoaderCircle className="size-4 animate-spin" /> }}
           toastOptions={{
             unstyled: true,
             classNames: {
@@ -75,7 +81,7 @@ export function App() {
               title: 'font-medium text-fg',
               description: 'text-xs text-fg-3 whitespace-pre-line',
               actionButton: 'ml-auto shrink-0 rounded-md bg-white/[0.08] px-2 py-1 text-xs font-medium text-fg hover:bg-white/[0.14]',
-              icon: 'text-accent-2',
+              icon: 'relative grid size-5 shrink-0 place-items-center text-accent-2',
             },
           }}
         />

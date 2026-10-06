@@ -38,6 +38,8 @@ export interface TrackEdit {
   clipId: string
   /** Track one of the clip's masks rather than the clip itself. */
   maskId?: string
+  /** The clip is the footage itself: what is boxed in it gets a new title pinned to it. */
+  newTitle?: boolean
   box: { x: number; y: number; w: number; h: number }
 }
 
@@ -85,6 +87,8 @@ interface UIState {
   exportOpen: boolean
   shortcutsOpen: boolean
   aboutOpen: boolean
+  /** The graphics card and encoder check. */
+  graphicsOpen: boolean
   /** clipId → timestamp; drives the "AI just touched this" shimmer */
   aiTouched: Record<string, number>
   /** Bumps to ask the timeline to zoom-to-fit */
@@ -119,6 +123,7 @@ interface UIState {
   setExportOpen: (v: boolean) => void
   setShortcutsOpen: (v: boolean) => void
   setAboutOpen: (v: boolean) => void
+  setGraphicsOpen: (v: boolean) => void
   markAiTouched: (ids: string[]) => void
   requestFit: () => void
 }
@@ -154,6 +159,7 @@ export const useUI = create<UIState>()(
       exportOpen: false,
       shortcutsOpen: false,
       aboutOpen: false,
+      graphicsOpen: false,
       aiTouched: {},
       fitRequest: 0,
 
@@ -196,6 +202,7 @@ export const useUI = create<UIState>()(
       setExportOpen: (exportOpen) => set({ exportOpen }),
       setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
       setAboutOpen: (aboutOpen) => set({ aboutOpen }),
+      setGraphicsOpen: (graphicsOpen) => set({ graphicsOpen }),
       markAiTouched: (ids) =>
         set((s) => {
           const now = Date.now()

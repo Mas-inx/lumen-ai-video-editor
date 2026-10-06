@@ -86,7 +86,8 @@ function setup(): Gpu | null {
  * size with the subject in white. Returns false when WebGL isn't available.
  */
 export function applyMatte(layer: HTMLCanvasElement, matte: HTMLCanvasElement, invert = false): boolean {
-  if (gpu === undefined) gpu = setup()
+  // Set up on first use — and again after the graphics driver was reset, which loses the context.
+  if (gpu === undefined || gpu?.gl.isContextLost()) gpu = setup()
   if (!gpu || gpu.gl.isContextLost()) return false
   const { gl, canvas } = gpu
   const W = layer.width

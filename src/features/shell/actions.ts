@@ -5,6 +5,7 @@
 import { toast } from 'sonner'
 import { copyClips, pasteClips } from '@/editor/clipboard'
 import type { EditMode } from '@/editor/commands'
+import { clipCues, cueText, cueTone } from '@/editor/cues'
 import { adjacentBefore, clipEnd, clipsAt, editPoints, projectDuration, withGroups } from '@/editor/ops'
 import { playback, usePlayback } from '@/editor/playback'
 import { dispatch, getProject, useEditor } from '@/editor/store'
@@ -13,7 +14,7 @@ import { useUI } from '@/editor/ui-store'
 import { importDropped, pickAndImport } from '@/project/media-import'
 import { openProject, saveProject, saveProjectAs, showHome } from '@/project/session'
 import { openTimeline } from '@/editor/timeline-nav'
-import { AnalysisCancelled, initialTrackBox, scenesInClip, stabilizeClip, withProgress } from '@/project/analysis-actions'
+import { AnalysisCancelled, initialTrackBox, NOTHING_TO_FOLLOW, scenesInClip, stabilizeClip, trackingSource, withProgress } from '@/project/analysis-actions'
 import { deleteRenders, renderPreviews } from '@/engine/render-cache'
 import { analyzeBeats, beatsOf, cutToBeats } from '@/project/beats'
 import { onSegmentProgress, type MatteProgress, type Subject } from '@/project/segment'
@@ -253,9 +254,27 @@ export const actions = {
     const f = frame()
     if (f < clip.start || f >= clipEnd(clip)) return void toast('Put the playhead over the clip, on a frame where what it should follow is visible')
     if (!maskId && clip.kind === 'adjustment') return void toast('Adjustment layers don’t move — track one of their masks instead')
+    const p = getProject()
+    // Tracking reads the video under the clip. Asked for on the footage itself, with nothing under it,
+    // it follows something in that footage: with the clip lying over it, or else with a new title.
+    let target = clip
+    let newTitle = false
+    if (!trackingSource(p, clip, f, Boolean(maskId))) {
+      const footage = clip.kind === 'video' && !clip.sequenceId && p.assets[clip.assetId ?? '']?.kind === 'video'
+      if (!footage) return void toast('Nothing to follow here', { description: NOTHING_TO_FOLLOW })
+      const order = new Map(p.tracks.map((t, i) => [t.id, i]))
+      const level = order.get(clip.trackId) ?? 0
+      const above = Object.values(p.clips)
+        .filter((c) => c.kind !== 'audio' && c.kind !== 'adjustment' && (order.get(c.trackId) ?? 0) < level && f >= c.start && f < clipEnd(c) && p.tracks.find((t) => t.id === c.trackId)?.kind === 'video')
+        .sort((a, b) => (order.get(b.trackId) ?? 0) - (order.get(a.trackId) ?? 0))[0]
+      if (above) {
+        target = above
+        toast(`“${above.name}” will follow what you box`, { description: 'It’s the clip over this footage. Select another clip first to make that one follow instead.' })
+      } else newTitle = true
+    }
     playback.pause()
-    ui().select([clip.id])
-    ui().setTrackEdit({ clipId: clip.id, maskId, box: initialTrackBox(getProject(), clip, maskId, f) })
+    ui().select([target.id])
+    ui().setTrackEdit({ clipId: target.id, maskId, newTitle, box: initialTrackBox(p, target, maskId, f) })
   },
 
   // ── In & out points ──
@@ -336,6 +355,20 @@ export const actions = {
     } catch (err) {
       toast.error('Couldn’t find the beat', { id, description: err instanceof Error ? err.message : String(err) })
     }
+  },
+
+  /** Markers where a clip's cues fall (the lines said, cuts and sounds its sender listed), for building the soundtrack. */
+  cueMarkers(clipId: string) {
+    const p = getProject()
+    const clip = p.clips[clipId]
+    if (!clip) return
+    const cues = clipCues(clip, clip.assetId ? p.assets[clip.assetId] : undefined, p.settings.fps)
+    if (!cues.length) return void toast.message('This clip has no cues')
+    const colors = { speech: 'lime', cut: 'sky', sound: 'emerald', action: 'amber' } as const
+    useEditor.getState().transaction('Cue markers', 'user', () => {
+      for (const c of cues) dispatch('marker.add', { frame: clip.start + c.frame, label: cueText(c.cue).slice(0, 80), color: colors[cueTone(c.cue.kind)] })
+    })
+    toast.success(`Added ${cues.length} marker${cues.length > 1 ? 's' : ''} at the cues`)
   },
 
   /** Markers on a music clip's downbeats (the first beat of each bar). */

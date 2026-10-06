@@ -11,7 +11,7 @@
  */
 import { PEAKS_PER_SECOND } from '@/editor/defaults'
 import { propAt } from '@/editor/keyframes'
-import { adjacentAfter, adjacentBefore, clipEnd } from '@/editor/ops'
+import { adjacentAfter, adjacentBefore, clipEnd, transitionLead } from '@/editor/ops'
 import { sequenceView } from '@/editor/sequences'
 import { isRamped, sourceFrameAt, speedAt } from '@/editor/timing'
 import type { Asset, Clip, Project } from '@/editor/types'
@@ -297,22 +297,42 @@ export function clipGainAt(clip: Clip, local: number) {
  * equal-power crossfade. The incoming clip fades in over the transition; the
  * outgoing one plays on past its end, into its handle, fading out.
  */
-export function crossfades(project: Project, clip: Clip): { fadeIn: number; tail: number } {
-  const fadeIn = clip.transitionIn && adjacentBefore(project, clip) ? Math.min(clip.transitionIn.duration, clip.duration) : 0
+export interface Crossfades {
+  /** Frames from the clip's start over which it is still fading in. */
+  fadeIn: number
+  /** Frames it plays on past its end, fading out. */
+  tail: number
+  /** Frames of its fade-in that fell before its start (a transition that begins ahead of the cut): it comes in part-way up. */
+  inLead?: number
+  /** Frames before its end where its fade-out already starts. */
+  outLead?: number
+}
+
+export function crossfades(project: Project, clip: Clip): Crossfades {
+  const own = clip.transitionIn && adjacentBefore(project, clip) ? clip.transitionIn : null
+  const inLead = own ? Math.min(transitionLead(own), own.duration) : 0
+  const fadeIn = own ? Math.min(own.duration - inLead, clip.duration) : 0
   const next = adjacentAfter(project, clip)
-  const tail = next?.transitionIn ? Math.min(next.transitionIn.duration, next.duration) : 0
-  return { fadeIn, tail }
+  const after = next?.transitionIn
+  const outLead = after ? Math.min(transitionLead(after), clip.duration) : 0
+  const tail = next && after ? Math.min(after.duration - transitionLead(after), next.duration) : 0
+  return { fadeIn, tail, ...(inLead ? { inLead } : {}), ...(outLead ? { outLead } : {}) }
 }
 
 /** Gain at a local frame including crossfades; past the clip's end (in its handle) it fades out. */
-function mixGainAt(clip: Clip, local: number, xf: { fadeIn: number; tail: number }) {
+function mixGainAt(clip: Clip, local: number, xf: Crossfades) {
+  const outLead = xf.outLead ?? 0
+  const inLead = xf.inLead ?? 0
+  // The whole fade-out: from `outLead` frames before the end to `tail` frames past it.
+  const out = xf.tail + outLead
   if (local >= clip.duration) {
     if (!xf.tail) return 0
-    const t = Math.min(1, (local - clip.duration) / xf.tail)
+    const t = Math.min(1, (local - clip.duration + outLead) / out)
     return clipGainAt(clip, clip.duration - 1e-6) * Math.cos((t * Math.PI) / 2)
   }
   let g = clipGainAt(clip, local)
-  if (xf.fadeIn && local < xf.fadeIn) g *= Math.sin((Math.max(0, local / xf.fadeIn) * Math.PI) / 2)
+  if (outLead && local > clip.duration - outLead) g *= Math.cos((((local - (clip.duration - outLead)) / out) * Math.PI) / 2)
+  if (xf.fadeIn && local < xf.fadeIn) g *= Math.sin((Math.max(0, (local + inLead) / (xf.fadeIn + inLead)) * Math.PI) / 2)
   return g
 }
 
@@ -397,7 +417,7 @@ function scheduleClip(ctx: BaseAudioContext, dest: AudioNode, project: Project, 
 
   // Gain automation from the start of the scheduled part to its end.
   const animated = Boolean(clip.keyframes.volume?.length)
-  if (!animated && !clip.audio.fadeIn && !clip.audio.fadeOut && !xf.fadeIn && !xf.tail) {
+  if (!animated && !clip.audio.fadeIn && !clip.audio.fadeOut && !xf.fadeIn && !xf.tail && !xf.outLead) {
     gain.gain.setValueAtTime(clipGainAt(clip, localAt(a)), when)
   } else {
     const steps = Math.max(2, Math.min(24000, Math.ceil(dur * 60)))
@@ -481,7 +501,7 @@ function voices(ctx: BaseAudioContext, project: Project, graph: MixGraph, clock:
       const a = Math.max(w[0], clock.from)
       if (w[1] > a) {
         const local = (T: number) => (T - offset) * fps - clip.start
-        if (!clip.keyframes.volume?.length && !clip.audio.fadeIn && !clip.audio.fadeOut && !xf.fadeIn && !xf.tail) gain.gain.value = clipGainAt(clip, 0)
+        if (!clip.keyframes.volume?.length && !clip.audio.fadeIn && !clip.audio.fadeOut && !xf.fadeIn && !xf.tail && !xf.outLead) gain.gain.value = clipGainAt(clip, 0)
         else {
           const dur = w[1] - a
           const steps = Math.max(2, Math.min(24000, Math.ceil(dur * 60)))

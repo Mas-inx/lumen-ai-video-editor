@@ -7,7 +7,7 @@
  */
 import { propAt } from '@/editor/keyframes'
 import { followOffset, stabilizeAt, type Correction } from '@/editor/motion'
-import { adjacentBefore, clipEnd } from '@/editor/ops'
+import { clipEnd, transitionAt } from '@/editor/ops'
 import { is3dEffect, is3dTransition } from '@/editor/presets'
 import { angleTrackOf, angleTracks, sequenceView } from '@/editor/sequences'
 import { sourceFrameAt, speedAt } from '@/editor/timing'
@@ -137,6 +137,12 @@ function stage3D(W: number, H: number, project: Project) {
 
 /** Source time (seconds) a clip shows at a frame relative to its start — speed ramps, reverse and freeze frames included. */
 export function clipSourceTime(clip: Clip, local: number, fps: number) {
+  // Before its first frame (a transition that starts ahead of the cut) a clip shows the footage
+  // just ahead of its in-point, as far as there is any.
+  if (local < 0 && !clip.freeze) {
+    const step = speedAt(clip, 0) * local
+    return Math.max(0, sourceFrameAt(clip, 0) + (clip.reverse ? -step : step)) / fps
+  }
   return sourceFrameAt(clip, local) / fps
 }
 
@@ -153,11 +159,9 @@ export function clipsDrawnAt(project: Project, frame: number): { clip: Clip; loc
   for (let i = visual.length - 1; i >= 0; i--) {
     const clip = Object.values(project.clips).find((c) => c.trackId === visual[i].id && frame >= c.start && frame < clipEnd(c))
     if (!clip) continue
-    const local = frame - clip.start
-    const tr = clip.transitionIn
-    const prev = tr && local < tr.duration ? adjacentBefore(project, clip) : undefined
-    if (prev) out.push({ clip: prev, local: frame - prev.start })
-    out.push({ clip, local })
+    const t = transitionAt(project, clip, frame)
+    if (t) out.push({ clip: t.from, local: frame - t.from.start }, { clip: t.to, local: frame - t.to.start })
+    else out.push({ clip, local: frame - clip.start })
   }
   return out
 }
@@ -203,10 +207,8 @@ function drawTracks(ctx: CanvasRenderingContext2D, project: Project, frame: numb
   for (let i = visual.length - 1; i >= 0; i--) {
     const clip = byTrack.get(visual[i].id)?.find((c) => frame >= c.start && frame < clipEnd(c))
     if (!clip) continue
-    const local = frame - clip.start
-    const tr = clip.transitionIn
-    const prev = tr && local < tr.duration ? adjacentBefore(project, clip) : undefined
-    if (tr && prev) drawTransition(ctx, project, prev, clip, frame, tr, local / tr.duration, bounds)
+    const t = transitionAt(project, clip, frame)
+    if (t) drawTransition(ctx, project, t.from, t.to, frame, t.tr, t.progress, bounds)
     else drawClip(ctx, project, clip, frame, {}, bounds)
   }
 }
@@ -1041,10 +1043,8 @@ export function mediaDrawnAt(project: Project, frame: number, prefix = '', level
   for (let i = visual.length - 1; i >= 0; i--) {
     const clip = byTrack.get(visual[i].id)?.find((c) => frame >= c.start && frame < clipEnd(c))
     if (!clip) continue
-    const local = frame - clip.start
-    const tr = clip.transitionIn
-    const prev = tr && local < tr.duration ? adjacentBefore(project, clip) : undefined
-    for (const [c, l] of prev ? ([[prev, frame - prev.start], [clip, local]] as const) : ([[clip, local]] as const)) {
+    const t = transitionAt(project, clip, frame)
+    for (const [c, l] of t ? ([[t.from, frame - t.from.start], [t.to, frame - t.to.start]] as const) : ([[clip, frame - clip.start]] as const)) {
       if (c.sequenceId) {
         const view = sequenceView(project, c.sequenceId)
         if (!view || view === project || level >= MAX_DEPTH) continue

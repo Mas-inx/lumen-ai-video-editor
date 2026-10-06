@@ -18,6 +18,7 @@ shared/
   integrations.ts   integrations contract (types + IPC channel names)
   ai.ts             Copilot brains, effort scale, agent events, instructions
   skills.ts         SKILL.md parsing (the same format as Claude's skills)
+  ingest.ts         frame ingest: the request contract, qualities and the master's codec strings
 src/
   editor/           the document and its rules (framework-free, unit-tested)
     types.ts          project model — integer frames at the project's fps
@@ -32,6 +33,7 @@ src/
     easing.ts         28 named easing curves and cubic-bezier, for keyframes and presets
     motion-presets.ts camera moves, entrances, exits and emphasis, baked into keyframes
     beat-grid.ts      a music clip's beats on the timeline, through its trims and speed
+    cues.ts           what happens in a silent clip (a sender's cue sheet), through its trims and speed
     color-math.ts     tone curves (monotone cubic), colour wheels, HSL bands
     lut.ts            .cube LUT parsing (3D and 1D, custom domains)
     clipboard.ts      copy / paste of clips and their media, across projects
@@ -61,9 +63,14 @@ src/
     upscale.ts        contrast-adaptive sharpening when a lower resolution is scaled up
     preview-res.ts    the preview's resolution, stepping down while playing when it has to
     matte-gl.ts       subject mattes applied as alpha on the GPU
+    encoders.ts       choosing an encoder that works here: real test encodes, fallbacks, what failed
+    codec-strings.ts  codec strings at the level a size and frame rate need
+    codec-repair.ts   H.264 files whose header misstates the video: the decoder config restated from the SPS
+    graphics-report.ts  the graphics cards, what they accelerate, and every encoder tried
   project/          session (new/open/save/recover, versions, collect), import, proxies, transcription, Whisper worker,
                     subtitle files, and the footage tools wired to the editor (analysis-actions.ts); subject
-                    mattes (segment.ts + its worker) and text behind subject (subject.ts); beat analysis (beats.ts)
+                    mattes (segment.ts + its worker) and text behind subject (subject.ts); beat analysis (beats.ts);
+                    frame ingest (ingest.ts, its encoder worker and the colour conversion)
   integrations/     AI brains, Blender / HyperFrames / MCP clients
     agent-tools.ts    the tool registry every AI uses
     skills.ts         built-in skills (skills/*.md) and which tools point at them
@@ -83,6 +90,8 @@ electron/
   updater.ts        updates from GitHub Releases (electron-updater)
   render-cache.ts   rendered preview chunks on disk, per project, capped at 8 GB
   offscreen.ts      offscreen windows that render exact pixels at any display scaling
+  ingest.ts         the frame-ingest receiver: loopback HTTP, a two-frame queue per clip
+  gpu.ts            which graphics card to run on (decided before Chromium starts) and what it reports
   app-ipc.ts        file / project / export / window-capture / update IPC for the editor page only
   integrations/     Blender, HyperFrames, MCP host, Lumen's MCP server, media generation, skills, the web
     ai/               AI providers and OpenCode routing, effort, local agents, the Copilot's tool loop, chats
@@ -105,6 +114,27 @@ electron/
 - **Playback.** Inside a rendered chunk, the preview shows the chunk's frames (decoded ahead with Mediabunny) instead of compositing. Chunks rendered below full size are scaled up with contrast-adaptive sharpening in WebGL.
 - **The bar** under the ruler marks chunks that may not play in real time (yellow) and rendered ones (green). While the editor is idle, heavy chunks render in the background, and any edit or playback stops that at once.
 
+## Encoders
+
+Graphics cards bring different encoders with different limits, and a driver can accept settings and then fail. So nothing is taken on trust ([`src/engine/encoders.ts`](../src/engine/encoders.ts)):
+
+- **Tried for real.** Before an export, the encoder gets three frames at the export's size, frame rate and bitrate. An encoder that errors, produces nothing or never answers has failed. Results are remembered for the session.
+- **A chain to fall down.** The codec asked for on the graphics card, then on the processor, then the other codecs the container carries (H.264 first). HEVC only exists on graphics cards.
+- **Mid-export failures.** An error from the encoder, or 60 seconds without it taking a frame, marks it failed; the file is emptied and the export starts again on the next encoder. A failed disk write is told apart and not retried.
+- **Levels** follow the frame rate as well as the size ([`codec-strings.ts`](../src/engine/codec-strings.ts)).
+- **Decoding** falls back too: if the card's decoder throws on a file during an export, that file is read on the processor from then on.
+- **Damaged stretches.** When neither decoder can read a group of frames while the rest of the file decodes, that stretch is noted and the frame before it is held through it ([`decode.ts`](../src/engine/decode.ts)). A stream is fed packets well ahead of the frame it shows, so just before a damaged stretch the reader hands the decoder only the packets up to it. The export's result lists what was held.
+- **Misstated files.** Old Chromium builds (FiveM's browser) write the H.264 configuration record's constraint byte with its bits reversed, and Chromium refuses the codec string made from it. [`codec-repair.ts`](../src/engine/codec-repair.ts) sits under Mediabunny and restates such a config from the file's own SPS before a decoder sees it.
+
+## Frame ingest
+
+Another app sends a shot as raw frames over loopback HTTP and Lumen makes the master. The contract is in [INGEST.md](INGEST.md).
+
+- **Receiver** (main process): checks each frame's size as it arrives and queues at most two per clip. A `PUT` is answered once its frame has room, so a fast sender waits instead of filling memory.
+- **Encoder** (a worker in the editor): long-polls the receiver for frames through `lumen-media://ingest/…`, so frames never cross the editor's thread. It converts RGBA to Y′CbCr with exact BT.709 maths, encodes VP9 4:4:4 with a fixed quantizer and muxes MP4. The file's bytes go back to the page, which writes them through the same streamed writer as exports.
+- **Why VP9 4:4:4, 8-bit:** it is software-encoded and software-decoded everywhere, so the picture is identical on every graphics card, and Chromium converts 8-bit 4:4:4 back to RGB exactly on the GPU. 10-bit takes a coarser path and measured worse.
+- **Lossless** codes RGB directly (VP9's identity matrix) with quantizer 0, because 8-bit Y′CbCr has no code for some RGB colours. It decodes bit-exactly in Lumen's export path, in the preview and in ffmpeg.
+
 ## Timelines and nesting
 
 A project holds several timelines. The open one lives in the project's top-level `settings`, `tracks`, `clips`, `markers`, `range` and `master`, so every command, panel and tool edits it unchanged; the others wait in `project.sequences`. `sequence.open` swaps them — an ordinary command, so undo steps back through it — and each timeline keeps its own playhead.
@@ -123,7 +153,8 @@ Scene detection, multicam sync, tracking and stabilization decode media with Med
 - **Multicam:** every recording's sound becomes an onset envelope (rises in loudness, 100 per second); FFT cross-correlation against the reference finds the offset, refined within ±30 ms at 1 kHz.
 - **Tracking:** a patch is matched frame to frame by normalized cross-correlation, coarse at half size then refined to a fraction of a pixel, following its speed and slowly updating its template. Results map through the footage's placement (fit, transform, stabilization) into what follows: `clip.follow` or `mask.follow`, offsets applied at render time.
 - **Beats:** onsets are spectral flux at about 11 kHz. The tempo comes from their autocorrelation, leaning towards 120 BPM. Beats are tracked by dynamic programming (Ellis), and downbeats are found from low-frequency flux. The grid is stored on the media, drawn on the waveform, and used as snap targets.
-- **Subject mattes:** transformers.js runs background removal in a worker: MODNet for people, or BiRefNet lite for any subject on WebGPU.
+- **Transitions** belong to the clip after the cut (`transitionIn`), with an `align` saying where they sit: before the cut, centred on it, or after it. `transitionAt` in [`ops.ts`](../src/editor/ops.ts) answers which transition plays at a frame for the compositor, the export and the render cache; before its own start, the second clip is drawn from the footage ahead of its in-point.
+- **Subject mattes:** transformers.js runs background removal in a worker: MODNet for people, or IS-Net for any subject on WebGPU. If the graphics card fails on a model, the processor takes over for it.
   - Frames are 768 px wide and steadied frame to frame.
   - The matte is saved as a grayscale H.264 video (a PNG for a still): a hidden media item linked to its footage, and removed with it.
   - The compositor turns it into alpha on the GPU, the same way in preview and export.
@@ -170,6 +201,8 @@ Scene detection, multicam sync, tracking and stabilization decode media with Med
   - **Display scaling:** Windows clamps a window to the work area in DIPs. So for a scale k, the window is sized at 1/k with a device scale factor of k and a zoom of 1/k. That gives exact, centred pixels at any display scaling.
 - **MCP host.** Any MCP server by URL (Streamable HTTP, SSE fallback) or command (stdio). One-click catalog: Higgsfield, Runway and Replicate (OAuth), fal.ai (API key), Blender MCP. OAuth runs in the browser with a loopback redirect; tokens and header keys are encrypted with the OS keychain. Tools get forms generated from their JSON Schema; image and audio results land in the project.
 - **Lumen's MCP server.** A Streamable HTTP endpoint on `127.0.0.1:47910/mcp`, token-protected, refusing browser origins, forwarding every request to the editor page, which runs it through the same command system.
+  - **Long calls.** Clients stop waiting after 25 to 60 seconds. A call still working after 20 seconds answers `running` with a call id while the work carries on, and `get_tool_result` collects it ([`long-calls.ts`](../electron/integrations/long-calls.ts)).
+  - **Streaming.** Tool calls answer as a stream with a keep-alive comment every five seconds and progress notifications; everything else is plain JSON.
 - **ElevenLabs.** Voiceovers (character timings become a transcript), Scribe transcription, sound effects and music through the REST API.
 
 ## Projects

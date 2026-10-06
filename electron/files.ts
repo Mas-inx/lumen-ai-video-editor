@@ -5,6 +5,7 @@ import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { BrowserWindow, dialog, net, protocol, shell } from 'electron'
 import type { MediaFileInfo, MediaFolder } from '../shared/app'
+import { serveIngest } from './ingest'
 import { allowPath, ensureDir, fileUrl, isInside, MEDIA_SCHEME, mediaPath, mediaRoot, mediaUrl, userDir } from './integrations/paths'
 
 /**
@@ -126,7 +127,10 @@ async function serveModel(req: Request): Promise<Response> {
 
 async function serve(req: Request): Promise<Response> {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS })
-  if (new URL(req.url).hostname === 'models') return serveModel(req)
+  const host = new URL(req.url).hostname
+  if (host === 'models') return serveModel(req)
+  // Frames on their way from the ingest receiver to the editor's encoder.
+  if (host === 'ingest') return serveIngest(req)
   const abs = mediaPath(req.url)
   if (!abs) return new Response('Not found', { status: 404, headers: CORS })
   let size: number

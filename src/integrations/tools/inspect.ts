@@ -4,6 +4,7 @@
  * silence analysis, the undo history and the catalog of valid ids.
  */
 import { BLEND_MODES, EASINGS } from '@/editor/commands'
+import { clipCues, cueText } from '@/editor/cues'
 import { MOTION_PRESETS } from '@/editor/motion-presets'
 import { FONTS } from '@/editor/defaults'
 import { propAt } from '@/editor/keyframes'
@@ -74,6 +75,7 @@ function mediaLine(p: Project, a: Asset) {
     ...(a.fps ? { fps: round(a.fps, 3) } : {}),
     ...(a.kind === 'video' ? { has_audio: a.hasAudio !== false } : {}),
     ...(a.transcript?.length ? { transcribed: true } : {}),
+    ...(a.cues?.length ? { cues: a.cues.length } : {}),
     ...(a.favorite ? { favorite: true } : {}),
     ...(a.tags?.length ? { tags: a.tags } : {}),
     ...(a.alpha ? { transparent: true } : {}),
@@ -161,6 +163,25 @@ function slice(buffer: AudioBuffer, from: number, to: number) {
   return Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c).subarray(a, Math.max(a, b)))
 }
 
+/** A clip's cues at timeline seconds (and where each sits in the media). */
+function cuesOf(c: Clip, asset: Asset, fps: number) {
+  const cues = clipCues(c, asset, fps)
+  if (!cues.length) return {}
+  return {
+    cues: cues.slice(0, 300).map(({ frame, cue }) => ({
+      at_seconds: round((c.start + frame) / fps, 3),
+      source_seconds: cue.at,
+      kind: cue.kind,
+      what: cueText(cue),
+      ...(cue.who ? { who: cue.who } : {}),
+      ...(cue.seconds ? { seconds: cue.seconds } : {}),
+      // The sender's own fields (its scene frame, a voice, a sound's name).
+      ...(cue.data ? { data: cue.data } : {}),
+    })),
+    ...(cues.length > 300 ? { cues_more: cues.length - 300 } : {}),
+  }
+}
+
 export const INSPECT_TOOLS: AgentTool[] = [
   {
     name: 'get_clips_at',
@@ -181,7 +202,7 @@ export const INSPECT_TOOLS: AgentTool[] = [
   {
     name: 'get_clip',
     description:
-      'Full details of one or more clips — every property (transform, color grade, audio mix, keyframes, effects, animation, transition, text style, speed, look, blend), with times in seconds and the media each uses. Read a clip before a precise edit so you only change what you mean to.',
+      'Full details of one or more clips — every property (transform, color grade, audio mix, keyframes, effects, animation, transition, text style, speed, look, blend), with times in seconds and the media each uses. A clip that came with a cue sheet (a GS Cinematic Studio render) also lists its cues: what happens in it — lines said, cuts, footsteps, effects — at timeline seconds, for placing voices and sounds, since the clip itself is silent. Read a clip before a precise edit so you only change what you mean to.',
     inputSchema: obj({ clip_ids: list('Clip ids', { type: 'string' }, { minItems: 1, maxItems: 50 }) }, ['clip_ids']),
     run: async (a) => {
       const p = getProject()
@@ -204,6 +225,7 @@ export const INSPECT_TOOLS: AgentTool[] = [
                   source_in_seconds: round(c.inPoint / fps, 3),
                   source_out_seconds: round((c.inPoint + consumed(c)) / fps, 3),
                   asset: { id: asset.id, name: asset.name, kind: asset.kind, duration_seconds: asset.duration ?? null },
+                  ...cuesOf(c, asset, fps),
                 }
               : {}),
           }

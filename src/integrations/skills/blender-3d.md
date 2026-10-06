@@ -63,6 +63,22 @@ Avoid them unless the brief asks. The motion-design-craft rules (typography, eas
 - Turn on motion blur for fast moves (the title renderer does). For loops, make the first and last frames match.
 - For music, land the hit (a slam, a reveal) on a beat. detect_beats gives the beat times.
 
+## Soft product look
+
+The C4D / Octane ident style: soft, tactile, satisfying to watch. Use it when the brief is a "3D render" look, a product ident or a soothing loop. It needs render_blender_script.
+
+- **Palette:** 2–3 candy pastels plus cream. Give the hero value contrast: a light candy hero on a deeper, cooler bed (pink #FF5AA6 on ink teal #08222B), not pastel on pastel.
+- **Three materials, no more.** `principled()` returns `(mat, bsdf)`:
+  - gummy: roughness 0.15, coat 0.45, subsurface on (`bsdf.inputs["Subsurface Weight"].default_value = 1`, scale about 0.1);
+  - glossy plastic: roughness 0.3, coat 1;
+  - one accent: chrome (metallic 1, roughness 0.05) or frosted glass.
+- **Shapes:** inflated, heavily bevelled forms (pills, spheres, puffy letters). No sharp edges.
+- **Light and lens:** one very large, slightly warm key (area light, size 5 or more), emissive cards for reflections, a matte backdrop (roughness 0.85) that curves from floor to wall. 50–85 mm at f/1.8–2.8, focused on the hero.
+- **Motion:** a field of repeated objects (a grid of 50–200 pills) ripples as a wave: delay each one's phase by its distance from the source. The hero drops in, squashes 15–25% on contact and wobbles to rest in about 0.6 s (scale z by `1 - 0.2 * exp(-6*t) * cos(2*pi*3*t)`, x and y by the inverse), pushing the field away in a ring that spreads outward.
+- **Camera:** a long-tail ease: 80% of the move in the first 20% of the time, then a very slow settle (`1 - (1 - t) ** 7`). End on a clean hero frame held about 1 s.
+- **Method:** write every motion as a function of `t` in `animate(t, frame)`, not as a physics simulation. Put contacts on beats and give each a soft thud or pop.
+- **Avoid:** hard light, sharp edges, noticeable glare or bloom, `draft` quality for the final (it has no motion blur). Add type afterwards as a 2D overlay.
+
 ## Render settings
 
 - Use `draft` while iterating, `standard` for most deliverables, `high` for hero shots.

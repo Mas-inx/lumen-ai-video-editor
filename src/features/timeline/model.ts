@@ -21,6 +21,8 @@ export interface ClipPreview {
   inPoint: number
 }
 
+import type { TransitionSpot } from '@/editor/placement'
+
 export interface DropGhost {
   trackId: string | null
   start: number
@@ -43,6 +45,8 @@ interface DragState {
   bladeFrame: number | null
   dropGhost: DropGhost | null
   dropTargetClip: string | null
+  /** A transition being dragged over a cut: the clip after the cut and where the transition would sit. */
+  dropTransition: TransitionSpot | null
   /** Reordering tracks: the content-space y of the insertion line. */
   trackDropY: number | null
   /** A keyframe being dragged along its clip: where it was and where it would land (clip-relative frames). */
@@ -59,6 +63,7 @@ export const useDrag = create<DragState>(() => ({
   bladeFrame: null,
   dropGhost: null,
   dropTargetClip: null,
+  dropTransition: null,
   trackDropY: null,
   keyDrag: null,
 }))

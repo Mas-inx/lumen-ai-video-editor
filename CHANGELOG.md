@@ -4,8 +4,61 @@ Every notable change to Lumen, newest first. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-10-07
+
+Frames straight from other apps, exports that find a working encoder on any graphics card, and transitions you can place anywhere on a cut.
+
+### Added
+
+- **Transitions sit where you put them on a cut:** over the end of the first clip, centred on the cut, or over the start of the second.
+  - Drag a transition to where two clips touch. The timeline shows where it will land as you move: *Before*, *On the cut* or *After*.
+  - Click a transition on the timeline to move it with *Position*, change its length or swap it.
+  - In the Transitions panel, select the two clips either side of a cut (or one clip next to it) and click.
+  - A transition that starts before the cut shows the second clip from the footage ahead of its in-point, and the sound crossfades over the same stretch.
+  - `clip_setTransition` takes `align`: `before`, `center` or `after`.
+- **Track something in the clip you're on.** *Track motion* on a piece of footage with nothing under it used to end in an error. Now you box what to follow and a title is pinned to it, ready to reword. If a title or picture already lies over the footage, that one follows instead.
+- **Two motion-graphic style skills** for the Copilot, ten skills built in now: fifteen named looks (flat vector, line art, isometric, Bauhaus, collage, liquid, synthwave, pixel art, HUD and more), each with the rules that make it read as that style and what breaks it. The motion design, HyperFrames, sound and Blender skills gained a structure for a whole piece, a review checklist, canvas techniques and sound-to-picture timing. The style rules are adapted from [mg-styles-15](https://github.com/Vincentwei1021/mg-styles-15) (MIT).
+- **Frame ingest.** Another app on this computer can send Lumen finished frames over loopback, and Lumen encodes each shot once into a master clip in the media library. It was built for GS Cinematic Studio filming GTA V; any renderer or capture tool can use it. See [docs/INGEST.md](docs/INGEST.md).
+  - Switch it on in *Integrations › Frame ingest*, which shows the address and token to copy. Agents use `ingest_start` and `ingest_status`.
+  - Masters keep full colour resolution (VP9 4:4:4). Three qualities: *Master* (visually lossless, the default), *Lossless* (every pixel exactly as sent) and *Compact*.
+  - They are encoded and decoded on the processor, so they look the same on every graphics card.
+  - Frames are raw RGBA or BGRA, top-down or bottom-up, or PNG, at any even size up to 8K and any frame rate.
+  - Large clips arrive with a small proxy, so they play smoothly at once.
+  - A sender that is faster than the encoder waits; nothing piles up in memory.
+  - **Cues.** A sender can say what happens in a clip (lines said, cuts, footsteps, effects), since a master has no sound. They show along the bottom of the clip on the timeline, *Add markers at the cues* puts them on the ruler, and `get_clip` gives them to agents at timeline seconds. GS Cinematic Studio sends its cue sheet with every render.
+- **Graphics and encoding** (Lumen menu): which graphics card Lumen runs on, what it speeds up, and every video encoder tried with real frames at 1080p 60 and 4K 60.
+  - On a computer with two cards you can ask for the fastest one.
+  - A card whose driver Chromium distrusts can be used anyway.
+  - *Copy report* gives a text report to paste when asking for help; the `graphics_report` tool gives agents the same.
+- `export_video` takes `hardware: false` to encode on the processor, and says what encoded the file.
+
+### Changed
+
+- **Cutting out *any subject* uses a different model** (IS-Net, about 170 MB, downloaded once). The one before could not run on Windows graphics cards at all.
+- **Full screen** covers the whole window, so menus, tooltips and messages still show while you're in it.
+- **Exports choose an encoder that really works.** Before an export, the encoder is tried with a few frames at the export's size, because some drivers accept settings and then fail.
+  - If the graphics card's encoder isn't there or fails, the processor's takes over. If a codec has no working encoder at all (HEVC only exists on graphics cards), the export moves to H.264.
+  - If an encoder fails or stops answering part-way through, the export starts again on the next one by itself, and the result says what happened.
+  - *Hardware* off now really means the processor. Before, it meant "no preference".
+  - The Export dialog says what will encode the file.
+- **Codec levels follow the frame rate.** 4K at 60 fps is now asked for as H.264 level 5.2, HEVC 5.1 and AV1 5.1, not the levels 4K at 30 gets.
+- **Render previews** use the same tested choice, so they work on a computer with no graphics-card H.264 encoder.
+- **Long tool calls through Lumen's MCP server no longer time out.** Clients gave up after about 25 to 60 seconds and reported a network error while the work carried on.
+  - A call still working after 20 seconds now answers `running` with a `call_id`, and the new `get_tool_result` tool collects the result.
+  - Tool calls answer as a stream with a keep-alive every few seconds, and send progress notes.
+  - Tools that wait on a render wait at most 15 seconds there and hand back their job id.
+
 ### Fixed
 
+- The full-screen button in the program monitor did nothing once you were in full screen: only `Esc` got you out. It now switches back.
+- *Text behind subject* and cut-outs with *any subject* failed with "Too many storage buffers in shader". If a graphics card can't run a cut-out model, the processor now takes over where it can, and the message says what happened in plain words.
+- The spinner on progress messages sat in the corner of the message instead of beside its text.
+- A clip could lose its last frame on the timeline: media lengths are kept to the millisecond, and 40 frames at 30 fps (1.333 s) counted as 39.
+- Subject cut-outs and the sharpening upscaler stopped working until a restart if the graphics driver was reset. They now set themselves up again.
+- If the graphics card's video decoder fails on a file during an export, the processor's decoder takes over for that file.
+- **An export no longer fails because part of a video can't be decoded** (a damaged or cut-short file). The preview played such files while the export stopped with "Decoding error". Now the picture before the damaged part is held through it, and the export says which file and where. Thumbnails and `get_media_frames` skip such parts too.
+- **Videos rendered in FiveM's browser now import and play.** Its H.264 encoder writes one byte of the file's header backwards, and Chromium refused such files without looking at the video (black frames, "can't decode"). Lumen now reads the profile from the video itself. This covers every MP4 GS Cinematic Studio has written.
+- `import_media_file` now says why a file couldn't be imported (the codec, or what the file reader made of it) instead of "No importable media found". It also takes a single `path`.
 - Version history could lose a version when two were saved in the same millisecond: the second overwrote the first.
 
 ## [1.3.0] — 2026-10-03

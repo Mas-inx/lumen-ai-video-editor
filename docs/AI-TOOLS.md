@@ -1,20 +1,21 @@
 # Lumen AI tools
 
-Every AI that works in Lumen — the Copilot's API models, your own Claude Code or Codex, and any agent connected to Lumen's MCP server — uses this same set of **119 tools**. This page is generated from the tool registry ([`src/integrations/agent-tools.ts`](../src/integrations/agent-tools.ts) and [`src/integrations/tools/`](../src/integrations/tools)).
+Every AI that works in Lumen — the Copilot's API models, your own Claude Code or Codex, and any agent connected to Lumen's MCP server — uses this same set of **122 tools**. This page is generated from the tool registry ([`src/integrations/agent-tools.ts`](../src/integrations/agent-tools.ts) and [`src/integrations/tools/`](../src/integrations/tools)).
 
 - **Times:** the helper tools take seconds; editor commands take integer frames at the project's fps (see `get_project`).
 - **Pictures:** `get_frame`, `get_contact_sheet`, `get_media_frames` and `get_editor_screenshot` return an image block along with JSON — over MCP as `image` content, and to the Copilot's models as real images.
 - **Undo:** every edit is a normal undo step, marked as made by the AI in History. `batch_edit` makes several edits one step that applies completely or not at all.
 - **Skills:** tool descriptions point at the skill for that kind of work; an AI loads it with `use_skill` first. Agents on the MCP server get the skill list when they connect.
+- **Long calls:** through Lumen's MCP server, a call still working after about 20 seconds answers `{"status":"running","call_id":…}` while the work carries on; `get_tool_result` (a tool of the server itself) collects the result. Tools that wait on a render wait at most 15 seconds there and hand back their job id.
 - **Safety:** tools that run code (Blender scripts) wait for the user's approval; exports and saves go where the user chooses; the web tools only reach public addresses.
 
 ## Contents
 
 - [See](#see) — 4 tools
 - [Hear and read](#hear-and-read) — 8 tools
-- [Act](#act) — 10 tools
+- [Act](#act) — 11 tools
 - [Smart edits](#smart-edits) — 9 tools
-- [Generate and import](#generate-and-import) — 16 tools
+- [Generate and import](#generate-and-import) — 18 tools
 - [Timelines and footage](#timelines-and-footage) — 8 tools
 - [Web and skills](#web-and-skills) — 6 tools
 - [Editor commands](#editor-commands) — 58 tools
@@ -83,7 +84,7 @@ Everything under one moment of the timeline, on every track (top layer first): e
 
 ### `get_clip`
 
-Full details of one or more clips — every property (transform, color grade, audio mix, keyframes, effects, animation, transition, text style, speed, look, blend), with times in seconds and the media each uses. Read a clip before a precise edit so you only change what you mean to.
+Full details of one or more clips — every property (transform, color grade, audio mix, keyframes, effects, animation, transition, text style, speed, look, blend), with times in seconds and the media each uses. A clip that came with a cue sheet (a GS Cinematic Studio render) also lists its cues: what happens in it — lines said, cuts, footsteps, effects — at timeline seconds, for placing voices and sounds, since the clip itself is silent. Read a clip before a precise edit so you only change what you mean to.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
@@ -229,7 +230,7 @@ Save the project file. If it has never been saved — or as_new_file is true —
 
 ### `export_video`
 
-Export the edit to a video (or audio) file. The user chooses where to save it in a Save dialog — nothing is written without them — and sees progress with a Cancel button. Waits for the export and returns the file path. Renders the open timeline (or timeline_id) whole unless from_seconds / to_seconds are given. loudness_lufs normalizes the mix to a target (−14 for YouTube and Spotify, −16 for Apple and podcasts, −23 for broadcast), with peaks held under −1 dBFS. png exports a folder of numbered frames; transparent keeps the alpha channel (png, or webm with vp9). captions_file saves the captions as .srt / .vtt next to the video; burn_captions false leaves them out of the picture. queue true adds it to the render queue instead of rendering now (see render_queue).
+Export the edit to a video (or audio) file. The user chooses where to save it in a Save dialog — nothing is written without them — and sees progress with a Cancel button. Waits for the export and returns the file path. The encoder is tried first and Lumen falls back by itself (graphics card, then processor, then another codec the file type carries); the result says what encoded it. Renders the open timeline (or timeline_id) whole unless from_seconds / to_seconds are given. loudness_lufs normalizes the mix to a target (−14 for YouTube and Spotify, −16 for Apple and podcasts, −23 for broadcast), with peaks held under −1 dBFS. png exports a folder of numbered frames; transparent keeps the alpha channel (png, or webm with vp9). captions_file saves the captions as .srt / .vtt next to the video; burn_captions false leaves them out of the picture. queue true adds it to the render queue instead of rendering now (see render_queue).
 
 | Parameter | Type | Description |
 | --- | --- | --- |
@@ -243,10 +244,17 @@ Export the edit to a video (or audio) file. The user chooses where to save it in
 | `fps` | `24` · `25` · `30` · `50` · `60` | Frame rate (default: the project’s) |
 | `quality` | integer | 10–100 (default 72; 85+ is master quality) |
 | `codec` | `avc` · `hevc` · `av1` · `vp9` | Video codec (default: the best this machine encodes for the format) |
+| `hardware` | boolean | Encode on the graphics card when it works (default true). false encodes on the processor: slower, the same on every computer |
 | `from_seconds` | number | Start of the part to export |
 | `to_seconds` | number | End of the part to export |
 | `file_name` | string | Suggested file name (default: the project name) |
 | `loudness_lufs` | number | Normalize the mix to this integrated loudness in LUFS (e.g. -14); omit to keep the mix as it is |
+
+### `graphics_report`
+
+What this computer’s graphics can do for Lumen: the graphics cards and which one is in use, what Chromium accelerates on it, WebGL, which video decoders it has, and every video encoder tried for real at 1080p 60 and 4K 60 (graphics card and processor). Use it when an export is slow or fails, or before promising a codec. Takes a few seconds.
+
+_No parameters._
 
 ## Smart edits
 
@@ -346,7 +354,7 @@ Cut the subject out of a video or image clip with on-device AI segmentation (the
 
 ## Generate and import
 
-New media from Blender, HyperFrames, OpenAI, Gemini and ElevenLabs, or from files and links.
+New media from Blender, HyperFrames, OpenAI, Gemini and ElevenLabs, from files and links, or sent frame by frame by another app (see [Frame ingest](INGEST.md)).
 
 ### `render_3d_title`
 
@@ -364,7 +372,7 @@ Render a real 3D title in Blender (extruded, bevelled, studio-lit, motion-blurre
 | `quality` | `draft` · `standard` · `high` | Render quality |
 | `place` | boolean | Put the finished clip on the timeline at the playhead (default true). |
 | `at_seconds` | number | Where to place it, in seconds from the start of the timeline (default: the playhead). |
-| `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600). If it is still running, poll get_job. |
+| `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600; through Lumen’s MCP server at most 15). If it is still running, poll get_job. |
 
 ### `render_3d_background`
 
@@ -380,7 +388,7 @@ Render a seamless-looping abstract 3D background in Blender (glossy forms, depth
 | `quality` | `draft` · `standard` · `high` | Render quality |
 | `place` | boolean | Put the finished clip on the timeline at the playhead (default true). |
 | `at_seconds` | number | Where to place it, in seconds from the start of the timeline (default: the playhead). |
-| `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600). If it is still running, poll get_job. |
+| `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600; through Lumen’s MCP server at most 15). If it is still running, poll get_job. |
 
 ### `render_blender_script`
 
@@ -395,7 +403,7 @@ Render any Blender scene you write in Python (bpy) and add it to the project. Th
 | `quality` | `draft` · `standard` · `high` | Render quality |
 | `place` | boolean | Put the finished clip on the timeline at the playhead (default true). |
 | `at_seconds` | number | Where to place it, in seconds from the start of the timeline (default: the playhead). |
-| `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600). If it is still running, poll get_job. |
+| `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600; through Lumen’s MCP server at most 15). If it is still running, poll get_job. |
 
 ### `blender_live`
 
@@ -424,7 +432,7 @@ Fonts: editorial (Fraunces), serif (Instrument Serif), display (Bricolage Grotes
 | `duration_seconds` | number | Clip length (default: long enough to read it) |
 | `place` | boolean | Put the finished clip on the timeline at the playhead (default true). |
 | `at_seconds` | number | Where to place it, in seconds from the start of the timeline (default: the playhead). |
-| `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600). If it is still running, poll get_job. |
+| `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600; through Lumen’s MCP server at most 15). If it is still running, poll get_job. |
 
 ### `render_hyperframes_html`
 
@@ -437,7 +445,7 @@ Render your own HyperFrames composition (HTML + CSS + GSAP) to a transparent cli
 | `duration_seconds` | number | Length to render (default: the composition’s own duration) |
 | `place` | boolean | Put the finished clip on the timeline at the playhead (default true). |
 | `at_seconds` | number | Where to place it, in seconds from the start of the timeline (default: the playhead). |
-| `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600). If it is still running, poll get_job. |
+| `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600; through Lumen’s MCP server at most 15). If it is still running, poll get_job. |
 
 ### `generate_image`
 
@@ -451,7 +459,7 @@ Generate an image with the user’s OpenAI (GPT Image) or Google (Gemini image) 
 | `aspect` | `16:9` · `9:16` · `1:1` | Shape (default: the project’s) |
 | `place` | boolean | Put the finished clip on the timeline at the playhead (default true). |
 | `at_seconds` | number | Where to place it, in seconds from the start of the timeline (default: the playhead). |
-| `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600). If it is still running, poll get_job. |
+| `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600; through Lumen’s MCP server at most 15). If it is still running, poll get_job. |
 
 ### `generate_video`
 
@@ -466,7 +474,7 @@ Generate a video clip with the user’s OpenAI or Google (Veo) key — whichever
 | `seconds` | number | Length in seconds (each model allows a few lengths, e.g. Veo: 4, 6 or 8) |
 | `place` | boolean | Put the finished clip on the timeline at the playhead (default true). |
 | `at_seconds` | number | Where to place it, in seconds from the start of the timeline (default: the playhead). |
-| `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600). If it is still running, poll get_job. |
+| `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600; through Lumen’s MCP server at most 15). If it is still running, poll get_job. |
 
 ### `list_voices`
 
@@ -487,7 +495,7 @@ Speak text with an ElevenLabs voice and add it to the project. It comes with a t
 | `model` | `eleven_multilingual_v2` · `eleven_flash_v2_5` | Voice model |
 | `place` | boolean | Put the finished clip on the timeline at the playhead (default true). |
 | `at_seconds` | number | Where to place it, in seconds from the start of the timeline (default: the playhead). |
-| `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600). If it is still running, poll get_job. |
+| `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600; through Lumen’s MCP server at most 15). If it is still running, poll get_job. |
 
 ### `generate_sound_effect`
 
@@ -500,7 +508,7 @@ Generate a sound effect with ElevenLabs from a description (up to 30 s) and add 
 | `loop` | boolean | Seamless loop |
 | `place` | boolean | Put the finished clip on the timeline at the playhead (default true). |
 | `at_seconds` | number | Where to place it, in seconds from the start of the timeline (default: the playhead). |
-| `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600). If it is still running, poll get_job. |
+| `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600; through Lumen’s MCP server at most 15). If it is still running, poll get_job. |
 
 ### `generate_music`
 
@@ -513,7 +521,7 @@ Compose music with ElevenLabs from a prompt and add it to the project (paid Elev
 | `instrumental` | boolean | No vocals (default true) |
 | `place` | boolean | Put the finished clip on the timeline at the playhead (default true). |
 | `at_seconds` | number | Where to place it, in seconds from the start of the timeline (default: the playhead). |
-| `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600). If it is still running, poll get_job. |
+| `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600; through Lumen’s MCP server at most 15). If it is still running, poll get_job. |
 
 ### `add_sound_effect`
 
@@ -545,6 +553,22 @@ Download an image, video or audio file from a URL (e.g. a generation result) int
 | `place` | boolean | Also put it on the timeline at the playhead (default false) |
 | `at_seconds` | number | Where to place it, in seconds from the start of the timeline (default: the playhead). |
 
+### `ingest_start`
+
+Start Lumen’s frame-ingest receiver and get its address: { url, token, formats }. Another app on this computer then sends a shot’s frames losslessly and Lumen encodes them once into a master clip in the media library (not on the timeline). For GS Cinematic Studio, pass url and token to its render_export as lumen_url and lumen_token, then use ingest_status to find the clip and place_asset to put it on the timeline. quality sets how masters are compressed when the sender doesn’t say: master (visually lossless, the default), lossless (every pixel, about 4× larger) or compact.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `quality` | `master` · `lossless` · `compact` | How masters are compressed by default |
+
+### `ingest_status`
+
+The clips Lumen’s frame-ingest receiver has been sent, newest first, with status (receiving, assembling, done, error), how many frames arrived, what the sender said about each (meta), and for finished clips the asset_id in the media library and its cues: what happens in the clip and when (lines said, cuts, footsteps), since it has no sound of its own. Use it to find what arrived, then place_asset; get_clip then gives the cues at timeline seconds.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `limit` | integer | How many clips to list (default 10) |
+
 ### `get_job`
 
 Status of a render or generation job. Waits up to wait_seconds for it to finish.
@@ -552,7 +576,7 @@ Status of a render or generation job. Waits up to wait_seconds for it to finish.
 | Parameter | Type | Description |
 | --- | --- | --- |
 | `job_id` **(required)** | string | Job id |
-| `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600). If it is still running, poll get_job. |
+| `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600; through Lumen’s MCP server at most 15). If it is still running, poll get_job. |
 
 ## Timelines and footage
 
@@ -812,7 +836,7 @@ Duplicate clips; each copy is placed right after its original on the same track.
 
 ### `clip_setTransition`
 
-Set or clear the transition that plays from the previous clip into this one. Durations are in frames.
+Set or clear the transition on the cut before this clip (from the previous clip into this one). align says where it sits on the cut: "after" (default) starts at the cut, over the start of this clip; "center" straddles the cut; "before" ends at the cut, over the end of the previous clip. Durations are in frames.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
@@ -1139,7 +1163,7 @@ Register a media asset in the project library.
 
 ### `asset_update`
 
-Rename or favorite an asset, attach its transcript (timed phrases in seconds), or point it at a new file (relink: source, duration, size, audio).
+Rename or favorite an asset, attach its transcript (timed phrases in seconds) or its cues (what happens in it and when: { at, kind, label }), or point it at a new file (relink: source, duration, size, audio).
 
 | Parameter | Type | Description |
 | --- | --- | --- |

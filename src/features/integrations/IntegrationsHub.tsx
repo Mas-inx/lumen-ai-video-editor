@@ -1,4 +1,4 @@
-import { ArrowRight, AudioLines, BookOpen, Box, Check, Clapperboard, Copy, ExternalLink, Eye, EyeOff, LoaderCircle, LogOut, Plug, Plus, RefreshCw, Server, Sparkles, Terminal, Trash, Unplug, Waypoints } from 'lucide-react'
+import { ArrowRight, AudioLines, BookOpen, Box, Clapperboard, ExternalLink, Film, LoaderCircle, LogOut, Plug, Plus, RefreshCw, Server, Sparkles, Terminal, Trash, Unplug, Waypoints } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { MCP_CATALOG, type McpCatalogEntry, type McpServerConfig, type McpServerState, type McpTool } from '@shared/integrations'
@@ -18,10 +18,12 @@ import { useGenerate } from '@/features/assets/generate-store'
 import { LocalAgentsPane, ModelsPane } from './AiPanes'
 import { ElevenLabsPane } from './ElevenLabsPane'
 import { SkillsPane } from './SkillsPane'
-import { Card, IconTile, STATUS_LABEL, StatusDot } from './parts'
+import { useIngest } from '@/project/ingest'
+import { IngestPane } from './IngestPane'
+import { Card, CopyField, IconTile, PaneHeader, STATUS_LABEL, StatusDot } from './parts'
 import { ToolList, ToolRunner } from './ToolRunner'
 
-type Selection = 'ai-models' | 'local-agents' | 'skills' | 'blender' | 'hyperframes' | 'elevenlabs' | 'agents' | 'add' | `server:${string}` | `catalog:${string}`
+type Selection = 'ai-models' | 'local-agents' | 'skills' | 'blender' | 'hyperframes' | 'elevenlabs' | 'agents' | 'ingest' | 'add' | `server:${string}` | `catalog:${string}`
 
 export function IntegrationsHub() {
   const open = useIntegrations((s) => s.hubOpen)
@@ -62,6 +64,8 @@ function Sidebar({ selected, onSelect }: { selected: Selection; onSelect: (s: Se
   const available = useIntegrations((s) => s.available)
   const eleven = useIntegrations((s) => s.elevenlabs)
   const bridge = useBridge((s) => s.status)
+  const ingest = useIngest((s) => s.state)
+  const receiving = ingest?.clips.filter((c) => c.status === 'receiving' || c.status === 'assembling').length ?? 0
   const providers = useAi((s) => s.providers)
   const localAgents = useAi((s) => s.localAgents)
   const configured = Object.values(servers)
@@ -132,6 +136,16 @@ function Sidebar({ selected, onSelect }: { selected: Selection; onSelect: (s: Se
 
       <NavLabel>For AI agents</NavLabel>
       <NavItem active={selected === 'agents'} onClick={() => onSelect('agents')} icon={<IconTile tone="lumen" size="sm"><Waypoints /></IconTile>} label="Lumen MCP server" hint={bridge.running ? 'On' : 'Off'} status={bridge.running ? 'ready' : undefined} />
+
+      <NavLabel>From other apps</NavLabel>
+      <NavItem
+        active={selected === 'ingest'}
+        onClick={() => onSelect('ingest')}
+        icon={<IconTile tone="lumen" size="sm"><Film /></IconTile>}
+        label="Frame ingest"
+        hint={receiving ? `Receiving ${receiving === 1 ? 'a clip' : `${receiving} clips`}` : ingest?.running ? 'On' : 'Off'}
+        status={ingest?.running ? 'ready' : undefined}
+      />
     </nav>
   )
 }
@@ -202,6 +216,7 @@ function Detail({ selected, onSelect }: { selected: Selection; onSelect: (s: Sel
   if (selected === 'hyperframes') return <HyperFramesPane />
   if (selected === 'elevenlabs') return <ElevenLabsPane />
   if (selected === 'agents') return <AgentsPane />
+  if (selected === 'ingest') return <IngestPane />
   if (selected === 'add') return <AddServerPane onAdded={(id) => onSelect(`server:${id}`)} />
   if (selected.startsWith('server:')) {
     const server = servers[selected.slice(7)]
@@ -209,19 +224,6 @@ function Detail({ selected, onSelect }: { selected: Selection; onSelect: (s: Sel
   }
   const entry = MCP_CATALOG.find((c) => `catalog:${c.id}` === selected)
   return entry ? <CatalogPane entry={entry} onAdded={(id) => onSelect(`server:${id}`)} /> : null
-}
-
-function PaneHeader({ icon, title, subtitle, right }: { icon: ReactNode; title: ReactNode; subtitle: ReactNode; right?: ReactNode }) {
-  return (
-    <div className="mb-6 flex items-start gap-4">
-      {icon}
-      <div className="min-w-0 flex-1">
-        <h2 className="text-xl font-semibold tracking-tight text-fg">{title}</h2>
-        <p className="mt-0.5 text-sm leading-relaxed text-fg-3">{subtitle}</p>
-      </div>
-      {right}
-    </div>
-  )
 }
 
 function DesktopOnly() {
@@ -668,36 +670,6 @@ function AddServerPane({ onAdded }: { onAdded: (id: string) => void }) {
 }
 
 // ─── Lumen's own MCP server ──────────────────────────────────────────────
-
-function CopyField({ label, value, secret }: { label: string; value: string; secret?: boolean }) {
-  const [shown, setShown] = useState(!secret)
-  const [copied, setCopied] = useState(false)
-  return (
-    <div>
-      <div className="mb-1.5 text-xs font-medium text-fg-2">{label}</div>
-      <div className="flex items-center gap-1 rounded-lg bg-black/30 py-1 pr-1 pl-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)]">
-        <code className="min-w-0 flex-1 truncate font-mono text-xs text-fg-2">{shown ? value : '•'.repeat(Math.min(32, value.length))}</code>
-        {secret && (
-          <button type="button" aria-label={shown ? 'Hide' : 'Show'} onClick={() => setShown(!shown)} className="grid size-7 place-items-center rounded-md text-fg-4 hover:bg-white/[0.06] hover:text-fg-2">
-            {shown ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
-          </button>
-        )}
-        <button
-          type="button"
-          aria-label="Copy"
-          onClick={() => {
-            void navigator.clipboard.writeText(value)
-            setCopied(true)
-            setTimeout(() => setCopied(false), 1400)
-          }}
-          className="grid size-7 place-items-center rounded-md text-fg-4 hover:bg-white/[0.06] hover:text-fg-2"
-        >
-          {copied ? <Check className="size-3.5 text-ok" /> : <Copy className="size-3.5" />}
-        </button>
-      </div>
-    </div>
-  )
-}
 
 function AgentsPane() {
   const status = useBridge((s) => s.status)

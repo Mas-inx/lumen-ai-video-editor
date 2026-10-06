@@ -5,6 +5,8 @@ import { APP_IPC } from '../shared/app'
 import { registerAppIpc } from './app-ipc'
 import { abortAllExports } from './export'
 import { registerMediaProtocol } from './files'
+import { applyGraphicsSettings } from './gpu'
+import { initIngest, stopIngest } from './ingest'
 import { registerIntegrationIpc } from './integrations/ipc'
 import { registerJobListener } from './integrations/jobs'
 import { disconnectAll } from './integrations/mcp'
@@ -29,6 +31,9 @@ protocol.registerSchemesAsPrivileged([
 
 // Automated tests run against their own profile, never the user's.
 if (process.env.LUMEN_USER_DATA) app.setPath('userData', process.env.LUMEN_USER_DATA)
+
+// Which graphics card to run on has to be decided before Chromium starts.
+applyGraphicsSettings()
 
 // One editor at a time: opening a .lumen file while Lumen runs hands it to the open window.
 if (!app.requestSingleInstanceLock()) app.quit()
@@ -73,6 +78,7 @@ function createWindow() {
 
   registerJobListener(win)
   initBridge(win, isTrustedUrl)
+  initIngest(win)
   guardClose(win)
   // Show the editor as soon as its page has loaded. 'ready-to-show' alone isn't
   // enough: it waits for a visible first paint, but the start screen fades in with
@@ -157,4 +163,5 @@ app.on('before-quit', () => {
   abortAllExports()
   void disconnectAll()
   void stopBridge(false)
+  void stopIngest(false)
 })

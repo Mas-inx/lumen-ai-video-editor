@@ -5,6 +5,8 @@
  * user picked (or that a project it opened references).
  */
 
+import type { IngestClip, IngestQuality, IngestResult, IngestSession, IngestState } from './ingest'
+
 /** A media file on disk the editor may read, served as `url` (lumen-media://file/…). */
 export interface MediaFileInfo {
   path: string
@@ -155,6 +157,7 @@ export const APP_IPC = {
   exportFrame: 'lumen:export:frame',
   exportSidecar: 'lumen:export:sidecar',
   exportWrite: 'lumen:export:write',
+  exportRestart: 'lumen:export:restart',
   exportFinish: 'lumen:export:finish',
   exportAbort: 'lumen:export:abort',
   exportProgress: 'lumen:export:progress',
@@ -165,12 +168,59 @@ export const APP_IPC = {
   updateCheck: 'lumen:update:check',
   updateInstall: 'lumen:update:install',
 
+  ingestState: 'lumen:ingest:state',
+  ingestSetEnabled: 'lumen:ingest:set-enabled',
+  ingestRegenerate: 'lumen:ingest:regenerate',
+  ingestOptions: 'lumen:ingest:options',
+  ingestPickFolder: 'lumen:ingest:pick-folder',
+  ingestAttach: 'lumen:ingest:attach',
+  ingestOpen: 'lumen:ingest:open',
+  ingestProgress: 'lumen:ingest:progress',
+  ingestComplete: 'lumen:ingest:complete',
+  ingestFail: 'lumen:ingest:fail',
+  gpuInfo: 'lumen:app:gpu-info',
+  graphicsSet: 'lumen:app:graphics-set',
+  relaunch: 'lumen:app:relaunch',
+
   /** main → renderer */
   openRequest: 'lumen:project:open-request',
   saveBeforeClose: 'lumen:project:save-before-close',
   updateEvent: 'lumen:update:event',
   collectProgress: 'lumen:project:collect-progress',
+  ingestEvent: 'lumen:ingest:event',
+  ingestClip: 'lumen:ingest:clip',
 } as const
+
+/** A graphics card as Chromium sees it. */
+export interface GpuDevice {
+  vendor: string
+  name: string
+  driver?: string
+  /** The one Lumen is drawing and encoding with. */
+  active: boolean
+}
+
+/**
+ * Which graphics card Lumen asks for on computers with two (it only matters there):
+ * system — whatever Windows picks, usually the power-saving one; high-performance —
+ * the fast one; power-saving — the integrated one.
+ */
+export type GpuChoice = 'system' | 'high-performance' | 'power-saving'
+
+export interface GraphicsSettings {
+  gpu: GpuChoice
+  /** Use the card even where Chromium has stopped trusting its driver. */
+  ignoreBlocklist: boolean
+}
+
+export interface GpuInfo {
+  devices: GpuDevice[]
+  /** Chromium's own word on each feature: 'enabled', 'disabled_software', 'unavailable_off'… */
+  features: Record<string, string>
+  settings: GraphicsSettings
+  /** The settings changed since Lumen started; they apply after a restart. */
+  restartNeeded: boolean
+}
 
 /** A rendered preview of a stretch of a project's timeline. */
 export interface RenderFile {
@@ -260,6 +310,8 @@ export interface AppAPI {
     writeFrame(id: string, index: number, data: Uint8Array): Promise<void>
     /** Captions (.srt / .vtt) saved next to a file exported this session. Returns the caption file's path. */
     sidecar(exportPath: string, extension: 'srt' | 'vtt', text: string): Promise<string>
+    /** Empties the file to write it again from the start (another encoder takes over). */
+    restart(id: string): Promise<void>
     finish(id: string): Promise<{ path: string; size: number }>
     /** Stops an export and deletes the partial file. */
     abort(id: string): Promise<void>
@@ -269,6 +321,34 @@ export interface AppAPI {
   window: {
     /** A JPEG (base64) of the editor window as the user sees it, at most `maxWidth` wide. */
     capture(maxWidth: number): Promise<string>
+  }
+  /** Frame ingest: clips another app on this computer sends frame by frame. */
+  ingest: {
+    state(): Promise<IngestState>
+    /** Starts or stops the receiver. `persist` false starts it for this session only (an agent asked). */
+    setEnabled(on: boolean, persist?: boolean): Promise<IngestState>
+    regenerateToken(): Promise<IngestState>
+    setOptions(opts: { quality?: IngestQuality; folder?: string | null }): Promise<IngestState>
+    /** A folder picker for where masters are written. */
+    pickFolder(): Promise<IngestState>
+    /** The editor's encoder is listening for clips. */
+    attach(): Promise<IngestState>
+    /** Opens a clip's files and frame feed for the encoder. */
+    open(clipId: string, wantProxy: boolean): Promise<IngestSession>
+    progress(clipId: string, encoded: number): void
+    /** The clip's file is written. False if the sender deleted the clip meanwhile (then nothing is added). */
+    complete(clipId: string, result: IngestResult): Promise<boolean>
+    fail(clipId: string, message: string): Promise<void>
+    onState(cb: (state: IngestState) => void): () => void
+    onClip(cb: (clip: IngestClip) => void): () => void
+  }
+  system: {
+    /** The graphics cards Chromium found and what it accelerates on them. */
+    gpu(): Promise<GpuInfo>
+    /** Saves graphics settings; they apply the next time Lumen starts. */
+    setGraphics(patch: Partial<GraphicsSettings>): Promise<GpuInfo>
+    /** Closes and reopens Lumen at once — save the project first. */
+    relaunch(): void
   }
   updates: {
     state(): Promise<UpdateState>

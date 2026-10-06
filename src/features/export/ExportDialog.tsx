@@ -21,12 +21,13 @@ import {
   canAlpha,
   CODEC_LABEL,
   CODECS_FOR,
-  codecSupport,
+  encoderSupport,
   ExportCancelled,
   FORMAT_INFO,
   LOUDNESS_TARGETS,
   runExport,
   videoBitrate,
+  type CodecAvailability,
   type ExportFormat,
   type ExportProgress,
   type ExportResult,
@@ -122,7 +123,9 @@ export function ExportDialog() {
   // The loudness target is a delivery habit, so it's remembered between exports.
   const [loudness, setLoudness] = useRemembered<string>('lumen.export.loudness', 'off')
   const target = LOUDNESS_TARGETS.find((t) => t.id === loudness)
-  const [support, setSupport] = useState<Partial<Record<ExportVideoCodec, boolean>>>({})
+  // Which encoders this computer has for each codec, once known: its graphics card's and the processor's.
+  const [encoders, setEncoders] = useState<Partial<Record<ExportVideoCodec, CodecAvailability>>>({})
+  const support = Object.fromEntries(Object.entries(encoders).map(([c, e]) => [c, e.hardware || e.software])) as Partial<Record<ExportVideoCodec, boolean>>
   const [state, setState] = useState<State>({ kind: 'idle' })
   const [preview, setPreview] = useState<string>()
   const abort = useRef<AbortController | null>(null)
@@ -169,17 +172,29 @@ export function ExportDialog() {
   useEffect(() => {
     if (!open || !info.video || gif || png) return
     let alive = true
-    void codecSupport(out.width, out.height, fps, hw).then((s) => alive && setSupport(s))
+    void encoderSupport(out.width, out.height, fps).then((s) => alive && setEncoders(s))
     return () => {
       alive = false
     }
-  }, [open, out.width, out.height, fps, hw, info.video, gif, png])
+  }, [open, out.width, out.height, fps, info.video, gif, png])
 
   useEffect(() => {
     if (!codecs.length) return
     if (format === 'webm' && alpha && support.vp9 !== false) return void setCodec('vp9')
     if (!codecs.includes(codec) || support[codec] === false) setCodec(codecs.find((c) => support[c] !== false) ?? codecs[0])
-  }, [format, support, alpha]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [format, encoders, alpha]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // What will really encode this, said plainly.
+  const here = encoders[codec]
+  const encoderHint = !here
+    ? 'Use the GPU encoder when available'
+    : hw
+      ? here.hardware
+        ? 'The graphics card encodes — fastest'
+        : 'No graphics-card encoder for this here — the processor will encode'
+      : here.software
+        ? 'The processor encodes — slower, works everywhere'
+        : 'Only graphics cards encode this codec, so the graphics card will'
 
   const seconds = duration / projectFps
   const videoBits = info.video && !gif && !png ? videoBitrate(out.width, out.height, fps, codec, quality) : 0
@@ -372,7 +387,7 @@ export function ExportDialog() {
             <Row label="Hardware">
               <Switch aria-label="Hardware encoding" checked={hw} onChange={setHw} />
               <span className="flex items-center gap-1 text-xs text-fg-3">
-                <Cpu className="size-3.5" /> Use the GPU encoder when available
+                <Cpu className="size-3.5 shrink-0" /> {encoderHint}
               </span>
             </Row>
           )}
@@ -433,6 +448,16 @@ export function ExportDialog() {
                 <Captions className="size-3 shrink-0" /> {state.result.sidecar}
               </div>
             )}
+            {state.result.encoder?.note && (
+              <div className="flex items-center gap-1 truncate text-2xs text-fg-4" title={state.result.encoder.note}>
+                <Cpu className="size-3 shrink-0" /> {state.result.encoder.note}
+              </div>
+            )}
+            {state.result.warnings?.map((w) => (
+              <div key={w} className="flex items-center gap-1 truncate text-2xs text-warn" title={w}>
+                <CircleAlert className="size-3 shrink-0" /> {w}
+              </div>
+            ))}
           </div>
         ) : state.kind === 'error' ? (
           <div className="flex min-w-0 flex-1 items-start gap-2 text-xs text-danger">

@@ -12,6 +12,7 @@ import { dispatch, getProject, rollbackTo, savepoint, useEditor } from '@/editor
 import { useUI } from '@/editor/ui-store'
 import { openSequenceName, withSequenceOpen } from '@/editor/sequences'
 import { timelineCues } from '@/editor/subtitles'
+import { graphicsReport } from '@/engine/graphics-report'
 import { canAlpha, CODECS_FOR, codecSupport, ExportCancelled, exportRunning, FORMAT_INFO, runExport, type ExportFormat, type ExportSettings, type ExportVideoCodec } from '@/engine/export'
 import { queueExport } from '@/engine/render-queue'
 import { desktop } from '@/lib/platform'
@@ -229,7 +230,7 @@ export const CONTROL_TOOLS: AgentTool[] = [
   {
     name: 'export_video',
     description:
-      'Export the edit to a video (or audio) file. The user chooses where to save it in a Save dialog — nothing is written without them — and sees progress with a Cancel button. Waits for the export and returns the file path. Renders the open timeline (or timeline_id) whole unless from_seconds / to_seconds are given. loudness_lufs normalizes the mix to a target (−14 for YouTube and Spotify, −16 for Apple and podcasts, −23 for broadcast), with peaks held under −1 dBFS. png exports a folder of numbered frames; transparent keeps the alpha channel (png, or webm with vp9). captions_file saves the captions as .srt / .vtt next to the video; burn_captions false leaves them out of the picture. queue true adds it to the render queue instead of rendering now (see render_queue).',
+      'Export the edit to a video (or audio) file. The user chooses where to save it in a Save dialog — nothing is written without them — and sees progress with a Cancel button. Waits for the export and returns the file path. The encoder is tried first and Lumen falls back by itself (graphics card, then processor, then another codec the file type carries); the result says what encoded it. Renders the open timeline (or timeline_id) whole unless from_seconds / to_seconds are given. loudness_lufs normalizes the mix to a target (−14 for YouTube and Spotify, −16 for Apple and podcasts, −23 for broadcast), with peaks held under −1 dBFS. png exports a folder of numbered frames; transparent keeps the alpha channel (png, or webm with vp9). captions_file saves the captions as .srt / .vtt next to the video; burn_captions false leaves them out of the picture. queue true adds it to the render queue instead of rendering now (see render_queue).',
     inputSchema: obj({
       format: oneOf('File type (default mp4)', ['mp4', 'mov', 'webm', 'gif', 'png', 'wav', 'm4a']),
       timeline_id: str('Export this timeline instead of the open one (ids from list_timelines)'),
@@ -241,6 +242,7 @@ export const CONTROL_TOOLS: AgentTool[] = [
       fps: int('Frame rate (default: the project’s)', { enum: [24, 25, 30, 50, 60] }),
       quality: int('10–100 (default 72; 85+ is master quality)', { minimum: 10, maximum: 100 }),
       codec: oneOf('Video codec (default: the best this machine encodes for the format)', ['avc', 'hevc', 'av1', 'vp9']),
+      hardware: bool('Encode on the graphics card when it works (default true). false encodes on the processor: slower, the same on every computer'),
       from_seconds: num('Start of the part to export', { minimum: 0 }),
       to_seconds: num('End of the part to export', { minimum: 0 }),
       file_name: str('Suggested file name (default: the project name)'),
@@ -272,7 +274,7 @@ export const CONTROL_TOOLS: AgentTool[] = [
       const transparent = a.transparent === true
       if (transparent && format !== 'png' && format !== 'webm') throw new Error('Transparency needs format png or webm.')
       if (format === 'mp4' || format === 'mov' || format === 'webm') {
-        const support = await codecSupport(width, height, fps, true)
+        const support = await codecSupport(width, height, fps)
         const wanted = (transparent ? 'vp9' : text(a, 'codec')) as ExportVideoCodec | undefined
         const options = CODECS_FOR[format]
         if (wanted && !options.includes(wanted)) throw new Error(`${info.label} can’t carry ${wanted}; use one of ${options.join(', ')}.`)
@@ -288,7 +290,7 @@ export const CONTROL_TOOLS: AgentTool[] = [
         height,
         fps,
         quality: Math.round(clampNum(number(a, 'quality') ?? 72, 10, 100)),
-        hardware: true,
+        hardware: a.hardware !== false,
         range: [fromF, toF],
         ...(number(a, 'loudness_lufs') !== undefined ? { loudness: { lufs: clampNum(number(a, 'loudness_lufs')!, -36, -6), peak: -1 } } : {}),
         ...(transparent && canAlpha(format, codec) ? { alpha: true } : format === 'png' ? { alpha: false } : {}),
@@ -323,7 +325,9 @@ export const CONTROL_TOOLS: AgentTool[] = [
           ...(res.sidecar ? { captions_file: res.sidecar } : {}),
           size_mb: Math.round((res.size / 1e6) * 10) / 10,
           format,
-          ...(info.video ? { size: `${width}x${height}`, fps, codec } : {}),
+          ...(info.video ? { size: `${width}x${height}`, fps, codec: res.encoder?.codec ?? codec } : {}),
+          ...(res.encoder ? { encoded_on: res.encoder.hardware ? 'graphics card' : 'processor', ...(res.encoder.note ? { note: res.encoder.note } : {}) } : {}),
+          ...(res.warnings?.length ? { warnings: res.warnings } : {}),
           seconds_of_video: seconds(toF - fromF),
           render_seconds: Math.round((performance.now() - t0) / 100) / 10,
         }
@@ -334,6 +338,24 @@ export const CONTROL_TOOLS: AgentTool[] = [
         }
         toast.error('Export failed', { id, description: err instanceof Error ? err.message : String(err), duration: 8000 })
         throw err
+      }
+    },
+  },
+  {
+    name: 'graphics_report',
+    description:
+      'What this computer’s graphics can do for Lumen: the graphics cards and which one is in use, what Chromium accelerates on it, WebGL, which video decoders it has, and every video encoder tried for real at 1080p 60 and 4K 60 (graphics card and processor). Use it when an export is slow or fails, or before promising a codec. Takes a few seconds.',
+    inputSchema: obj({}),
+    run: async () => {
+      const r = await graphicsReport()
+      return {
+        graphics_cards: (r.gpu?.devices ?? []).map((d) => ({ vendor: d.vendor, name: d.name, driver: d.driver, in_use: d.active })),
+        asked_for: r.gpu?.settings.gpu,
+        chromium: r.gpu ? Object.fromEntries(['gpu_compositing', 'webgl', 'video_decode', 'video_encode'].map((k) => [k, r.gpu!.features[k]])) : undefined,
+        webgl: r.webgl,
+        encoders: r.encoders.map((e) => ({ codec: e.codec, size: e.size, graphics_card: e.hardware, processor: e.software, ...(e.hardwareError ? { graphics_card_error: e.hardwareError } : {}), ...(e.softwareError ? { processor_error: e.softwareError } : {}) })),
+        decoders_4k: r.decoders,
+        note: 'Exports try the graphics card’s encoder first and fall back by themselves: to the processor, then to another codec the file type carries.',
       }
     },
   },

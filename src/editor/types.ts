@@ -52,6 +52,22 @@ export interface SpeechSegment {
   text: string
 }
 
+/** Something that happens in a clip with no sound of its own (a line said, a cut, footsteps), told by the app that made it. */
+export interface AssetCue {
+  /** Seconds from the start of the media. */
+  at: number
+  /** speech, line, sfx, walk, cut, marker… whatever the sender calls it. */
+  kind: string
+  /** What it is, in words: the line, the sound, the shot's name. */
+  label: string
+  /** How long it lasts, when the sender knows. */
+  seconds?: number
+  /** Who says or does it. */
+  who?: string
+  /** Everything else the sender said about it. */
+  data?: Record<string, string | number | boolean>
+}
+
 export interface Asset {
   id: string
   name: string
@@ -76,6 +92,8 @@ export interface Asset {
   tags?: string[]
   /** A small copy of a heavy video that the preview plays instead (exports always use the original). */
   proxy?: { path: string; url: string; width: number; height: number }
+  /** What happens in it and when, from the app that made it (see editor/cues.ts). */
+  cues?: AssetCue[]
   /** The music's beat grid, once detected (source seconds). */
   beats?: { bpm: number; times: number[]; downbeats: number[]; confidence: number }
   /** A subject matte made from another media item (kept with the project, not listed in the Media panel). */
@@ -309,9 +327,17 @@ export type TransitionKind =
   | 'shatter'
   | 'spin'
 
+/**
+ * Where a transition sits on its cut: ending at it (over the end of the first
+ * clip), centred on it, or starting at it (over the start of the second).
+ */
+export type TransitionAlign = 'before' | 'center' | 'after'
+
 export interface Transition {
   kind: TransitionKind
   duration: Frame
+  /** Default 'after'. */
+  align?: TransitionAlign
 }
 
 export type EffectKind =

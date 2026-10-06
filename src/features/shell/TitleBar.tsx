@@ -2,6 +2,7 @@ import {
   ArrowDownToLine,
   Captions,
   Check,
+  Cpu,
   ChevronDown,
   Clock,
   Download,
@@ -196,6 +197,9 @@ function AppMenu() {
         <MenuSeparator />
         <MenuItem icon={<Keyboard />} shortcut="?" onSelect={() => setShortcutsOpen(true)}>
           Keyboard shortcuts
+        </MenuItem>
+        <MenuItem icon={<Cpu />} disabled={!desktop} onSelect={() => useUI.getState().setGraphicsOpen(true)}>
+          Graphics and encoding…
         </MenuItem>
         {updateReady ? (
           <MenuItem icon={<RefreshCw />} onSelect={() => void installUpdate()}>

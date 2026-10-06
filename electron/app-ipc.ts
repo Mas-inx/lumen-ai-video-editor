@@ -1,11 +1,14 @@
-import { BrowserWindow, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { APP_IPC, type MediaFolder } from '../shared/app'
 import path from 'node:path'
 import { collectProject } from './collect'
-import { abortExport, beginExport, beginFile, finishExport, forgetPicked, openPicked, pickExport, writeExport, writeFrame, writeSidecar, type ExportRequest } from './export'
+import { abortExport, beginExport, beginFile, finishExport, forgetPicked, openPicked, pickExport, restartExport, writeExport, writeFrame, writeSidecar, type ExportRequest } from './export'
 import { mediaRoot } from './integrations/paths'
 import { listVersions } from './versions'
 import { openPath, pickMedia, register, relink, reveal, saveMedia, urlForPath } from './files'
+import { gpuInfo, setGraphicsSettings } from './gpu'
+import { attachEditor, completeClip, failClip, ingestState, openSession, pickIngestFolder, regenerateIngestToken, reportProgress, setIngestOptions, startIngest, stopIngest } from './ingest'
+import type { IngestResult } from '../shared/ingest'
 import { listRenders, removeRenders, renderUsage, writeRender } from './render-cache'
 import { closeNow, confirmDiscard, forgetRecent, openProject, openVersion, readRecovery, recentProjects, saveProject, saveProjectAs, setProjectState, snapshotVersion, writeRecovery } from './project'
 import { checkForUpdates, installUpdate, updateState } from './updater'
@@ -89,6 +92,7 @@ export function registerAppIpc(isTrustedUrl: (url: string) => boolean, getStartu
   handle(APP_IPC.exportWrite, (_win, id: unknown, position: unknown, data: unknown) => writeExport(str(id), Number(position), data as Uint8Array))
   handle(APP_IPC.exportFrame, (_win, id: unknown, index: unknown, data: unknown) => writeFrame(str(id), Number(index), data as Uint8Array))
   handle(APP_IPC.exportSidecar, (_win, file: unknown, ext: unknown, text: unknown) => writeSidecar(str(file), str(ext), str(text)))
+  handle(APP_IPC.exportRestart, (_win, id: unknown) => restartExport(str(id)))
   handle(APP_IPC.exportFinish, (_win, id: unknown) => finishExport(str(id)))
   handle(APP_IPC.exportAbort, (_win, id: unknown) => abortExport(str(id)))
   on(APP_IPC.exportProgress, (win, value: unknown) => {
@@ -103,6 +107,27 @@ export function registerAppIpc(isTrustedUrl: (url: string) => boolean, getStartu
     const width = Math.round(Math.min(2560, Math.max(320, typeof maxWidth === 'number' && Number.isFinite(maxWidth) ? maxWidth : 1600)))
     const scaled = image.getSize().width > width ? image.resize({ width, quality: 'good' }) : image
     return scaled.toJPEG(82).toString('base64')
+  })
+
+  handle(APP_IPC.ingestState, () => ingestState())
+  handle(APP_IPC.ingestSetEnabled, (_win, on: unknown, persist: unknown) => (on ? startIngest(persist !== false) : stopIngest(persist !== false)))
+  handle(APP_IPC.ingestRegenerate, () => regenerateIngestToken())
+  handle(APP_IPC.ingestOptions, (_win, opts: unknown) => setIngestOptions((opts ?? {}) as { quality?: unknown; folder?: unknown }))
+  handle(APP_IPC.ingestPickFolder, (win) => pickIngestFolder(win))
+  handle(APP_IPC.ingestAttach, () => attachEditor())
+  handle(APP_IPC.ingestOpen, (_win, clipId: unknown, wantProxy: unknown) => openSession(str(clipId), wantProxy === true))
+  handle(APP_IPC.ingestComplete, (_win, clipId: unknown, result: unknown) => completeClip(str(clipId), (result ?? {}) as IngestResult))
+  handle(APP_IPC.ingestFail, (_win, clipId: unknown, message: unknown) => failClip(str(clipId), str(message)))
+  on(APP_IPC.ingestProgress, (_win, clipId: unknown, encoded: unknown) => reportProgress(str(clipId), Number(encoded)))
+  handle(APP_IPC.gpuInfo, () => gpuInfo())
+  handle(APP_IPC.graphicsSet, (_win, patch: unknown) => {
+    setGraphicsSettings((patch ?? {}) as Record<string, never>)
+    return gpuInfo()
+  })
+  // The editor saves first, so this closes without the unsaved-changes prompt.
+  on(APP_IPC.relaunch, (win) => {
+    app.relaunch()
+    closeNow(win)
   })
 
   handle(APP_IPC.updateState, () => updateState())

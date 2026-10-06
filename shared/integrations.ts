@@ -392,6 +392,8 @@ export interface BridgeRequest {
   method: 'tools' | 'call' | 'instructions'
   tool?: string
   args?: Record<string, unknown>
+  /** The longest a tool should wait on a job before answering, in seconds (callers over HTTP can't wait long). */
+  maxWait?: number
 }
 
 /** An MCP tool definition as the editor serves it. */

@@ -6,7 +6,7 @@ import { ContextContent, ContextItem, ContextSeparator, ContextSub } from '@/com
 import { AiSparkle } from '@/components/brand'
 import { useClipboard } from '@/editor/clipboard'
 import { clipEnd, findFreeStart, isMagneticTrack, magneticLayout, projectDuration, sourceFrames, trackAccepts } from '@/editor/ops'
-import { applyEffect, applyLook, applyTransition, assetFrames, placeAsset, placeSequence, placeTitle } from '@/editor/placement'
+import { applyEffect, applyLook, applyTransition, assetFrames, placeAsset, placeSequence, placeTitle, transitionSpot } from '@/editor/placement'
 import { angleTracks } from '@/editor/sequences'
 import { openTimeline } from '@/editor/timeline-nav'
 import { onPlayhead, usePlayback } from '@/editor/playback'
@@ -232,7 +232,16 @@ export function Timeline() {
     if (!payload && !files) return
     e.preventDefault()
     e.dataTransfer.dropEffect = 'copy'
-    if (payload && (payload.type === 'effect' || payload.type === 'look' || payload.type === 'transition')) {
+    if (payload?.type === 'transition') {
+      // The cut nearest the pointer, and which side of it: the lane shows where it will sit.
+      const { clipId, frame } = hitTest(e)
+      const project = getProject()
+      const clip = clipId ? project.clips[clipId] : undefined
+      const spot = clip ? transitionSpot(project, clip, frame, Math.max(1, Math.round((12 / pps) * fps))) : null
+      useDrag.setState({ dropTransition: spot, dropTargetClip: null, dropGhost: null })
+      return
+    }
+    if (payload && (payload.type === 'effect' || payload.type === 'look')) {
       const { clipId } = hitTest(e)
       const clip = clipId ? getProject().clips[clipId] : undefined
       const ok = clip && clip.kind !== 'audio' && (payload.type !== 'look' || clip.kind !== 'text')
@@ -243,7 +252,7 @@ export function Timeline() {
     useDrag.setState({ dropGhost: ghost, dropTargetClip: null, previews: makeRoom(ghost, hitTest(e).frame) })
   }
 
-  const clearDrop = () => useDrag.setState({ dropGhost: null, dropTargetClip: null, previews: {} })
+  const clearDrop = () => useDrag.setState({ dropGhost: null, dropTargetClip: null, dropTransition: null, previews: {} })
 
   const onDrop = async (e: DragEvent) => {
     e.preventDefault()
@@ -303,9 +312,14 @@ export function Timeline() {
       case 'look':
         if (clipId) applyLook(payload.lookId, [clipId])
         break
-      case 'transition':
-        if (clipId) applyTransition(payload.kind, clipId)
+      case 'transition': {
+        const project = getProject()
+        const clip = clipId ? project.clips[clipId] : undefined
+        const spot = clip ? transitionSpot(project, clip, frame, Math.max(1, Math.round((12 / pps) * fps))) : null
+        if (spot) applyTransition(payload.kind, spot.clipId, 'user', spot.align)
+        else toast('Transitions go on a cut', { description: 'Drop it where two clips touch on a track: on the end of the first, on the cut, or on the start of the second.' })
         break
+      }
     }
   }
 
@@ -590,6 +604,7 @@ function TimelineMenu({ clipId, frame }: { clipId: string | null; frame: number 
             )}
           </ContextSub>
         )}
+        {clip.assetId && getProject().assets[clip.assetId]?.cues?.length ? <ContextItem onSelect={() => actions.cueMarkers(clip.id)}>Add markers at the cues</ContextItem> : null}
         {(clip.kind === 'audio' || clip.kind === 'video') && clip.assetId && (
           <ContextSub label="Beat">
             <ContextItem onSelect={() => void actions.detectBeats(clip.id)}>{getProject().assets[clip.assetId]?.beats ? 'Show the beat again' : 'Find the beat'}</ContextItem>

@@ -6,7 +6,7 @@
  * Media is read straight from disk over lumen-media:// with byte ranges, so
  * multi-gigabyte files never have to be loaded into memory.
  */
-import { ALL_FORMATS, AudioBufferSink, CanvasSink, Input, UrlSource, type InputVideoTrack, type WrappedCanvas } from 'mediabunny'
+import { ALL_FORMATS, AudioBufferSink, CanvasSink, EncodedPacketSink, Input, UrlSource, type EncodedPacket, type InputVideoTrack, type WrappedCanvas } from 'mediabunny'
 
 export type MediaKind = 'video' | 'audio' | 'image'
 
@@ -23,7 +23,15 @@ export interface ProbeResult {
   audioCodec?: string | null
 }
 
-export class MediaError extends Error {}
+/** A file Lumen can't use. `detail` says why in technical terms (the codec string, the parser's error) for agents and logs. */
+export class MediaError extends Error {
+  constructor(
+    message: string,
+    readonly detail?: string,
+  ) {
+    super(message)
+  }
+}
 
 /** Opens a media file for reading (byte ranges over lumen-media://). */
 export const openInput = (url: string) =>
@@ -65,7 +73,11 @@ export async function probeMedia(url: string, mime: string): Promise<ProbeResult
     const audioOk = audio ? await audio.canDecode() : false
     if (video && kind !== 'audio') {
       if (!(await video.canDecode())) {
-        throw new MediaError(`This video uses ${video.codec ? video.codec.toUpperCase() : 'a codec'} that this computer can’t decode.`)
+        const codec = await video.getCodecParameterString().catch(() => null)
+        throw new MediaError(
+          `This video uses ${video.codec ? video.codec.toUpperCase() : 'a codec'} that this computer can’t decode.`,
+          `no decoder for ${codec ?? video.codec ?? 'an unknown codec'} at ${video.codedWidth}×${video.codedHeight}`,
+        )
       }
       const duration = await input.computeDuration()
       const fps = await video
@@ -99,7 +111,7 @@ export async function probeMedia(url: string, mime: string): Promise<ProbeResult
       const buffer = await decodeWithBrowser(url)
       if (buffer) return { kind: 'audio', duration: round3(buffer.duration), hasAudio: true }
     }
-    throw new MediaError('Lumen can’t read this file. It may be damaged or in a format that isn’t supported.')
+    throw new MediaError('Lumen can’t read this file. It may be damaged or in a format that isn’t supported.', err instanceof Error ? err.message : String(err))
   } finally {
     input.dispose()
   }
@@ -178,7 +190,7 @@ async function buildFilmstrip(key: string, url: string, duration: number) {
     const sink = new CanvasSink(track, { width, height, fit: 'cover', poolSize: 2 })
     let i = 0
     let lastNotify = 0
-    for await (const wrapped of sink.canvasesAtTimestamps(times)) {
+    const take = async (wrapped: WrappedCanvas | null) => {
       if (wrapped) strip.frames[i] = await createImageBitmap(wrapped.canvas)
       i++
       const now = performance.now()
@@ -186,6 +198,12 @@ async function buildFilmstrip(key: string, url: string, duration: number) {
         lastNotify = now
         filmstripListeners.forEach((fn) => fn(key))
       }
+    }
+    try {
+      for await (const wrapped of sink.canvasesAtTimestamps(times)) await take(wrapped)
+    } catch {
+      // Part of the file can't be decoded: the rest one frame at a time, leaving that part out.
+      while (i < times.length) await take(await sink.getCanvas(times[i]).catch(() => null))
     }
     strip.done = true
     filmstripListeners.forEach((fn) => fn(key))
@@ -208,16 +226,19 @@ export async function framesAt(url: string, times: number[], maxWidth: number, m
     const height = Math.max(2, Math.round(track.displayHeight * scale))
     const sink = new CanvasSink(track, { width, height, fit: 'fill', poolSize: 2 })
     const out: (HTMLCanvasElement | null)[] = []
-    for await (const wrapped of sink.canvasesAtTimestamps(times)) {
-      if (!wrapped) {
-        out.push(null)
-        continue
-      }
+    const take = (wrapped: WrappedCanvas | null) => {
+      if (!wrapped) return void out.push(null)
       const copy = document.createElement('canvas')
       copy.width = width
       copy.height = height
       copy.getContext('2d')!.drawImage(wrapped.canvas, 0, 0)
       out.push(copy)
+    }
+    try {
+      for await (const wrapped of sink.canvasesAtTimestamps(times)) take(wrapped)
+    } catch {
+      // Part of the file can't be decoded: the rest one frame at a time, leaving that part out.
+      while (out.length < times.length) take(await sink.getCanvas(times[out.length]).catch(() => null))
     }
     return out
   } finally {
@@ -242,6 +263,39 @@ export function filmstripFrame(strip: Filmstrip, t: number): ImageBitmap | null 
 
 // ─── Frame-exact video reads (export) ────────────────────────────────────
 
+/** Files the graphics card's decoder failed on this session: read on the processor from then on. */
+const softwareDecoded = new Set<string>()
+
+/** A stretch of a file that no decoder can read, in source seconds: a damaged or incomplete group of frames. */
+export interface Damage {
+  from: number
+  to: number
+}
+
+/** Damaged stretches found this session, per file. */
+const damaged = new Map<string, Damage[]>()
+
+/** The stretches of a file that turned out to be undecodable while it was read this session. */
+export const damageIn = (url: string): Damage[] => damaged.get(url) ?? []
+
+/** Damaged stretches a reader has shown a held picture for since they were last collected. */
+const shownHeld = new Map<Damage, string>()
+
+/** The damaged stretches that were shown (as a held picture) since the last call: an export reports them. */
+export function collectHeld(): { url: string; damage: Damage }[] {
+  const out = [...shownHeld].map(([damage, url]) => ({ url, damage }))
+  shownHeld.clear()
+  return out
+}
+
+/**
+ * A stream is fed packets well ahead of the frame it shows (Mediabunny queues up
+ * to 40), so it has to stop this many seconds short of a damaged stretch.
+ */
+const FEED_AHEAD = 6
+const META = { metadataOnly: true } as const
+const MAX_DAMAGE = 32
+
 /**
  * Reads the frames of one video file in presentation order. `frameAt(t)` returns
  * the frame showing at source time t; calls with increasing t stream through the
@@ -250,42 +304,202 @@ export function filmstripFrame(strip: Filmstrip, t: number): ImageBitmap | null 
 export class VideoReader {
   private input: Input
   private sink: Promise<CanvasSink | null>
-  private iter: AsyncGenerator<WrappedCanvas, void, unknown> | null = null
+  private iter: AsyncGenerator<WrappedCanvas | null, void, unknown> | null = null
+  /** The stream stops short of a damaged stretch (only the packets before it are decoded). */
+  private bounded = false
   private current: WrappedCanvas | null = null
   private upcoming: WrappedCanvas | null | undefined = undefined
   private ended = false
   private lastT = -Infinity
+  /** Decoding on the processor, because the graphics card's decoder failed on this file. */
+  private software: boolean
+  private track: InputVideoTrack | null = null
+  /** The picture shown through each damaged stretch: the last one before it. */
+  private held = new Map<Damage, OffscreenCanvas | null>()
 
-  constructor(url: string, maxWidth: number, maxHeight: number) {
+  constructor(
+    private readonly url: string,
+    private readonly maxWidth: number,
+    private readonly maxHeight: number,
+  ) {
+    this.software = softwareDecoded.has(url)
     this.input = openInput(url)
-    this.sink = this.input.getPrimaryVideoTrack().then(async (track: InputVideoTrack | null) => {
+    this.sink = this.openSink()
+  }
+
+  private openSink() {
+    return this.input.getPrimaryVideoTrack().then(async (track: InputVideoTrack | null) => {
       if (!track || !(await track.canDecode())) return null
-      const scale = Math.min(1, maxWidth / track.displayWidth, maxHeight / track.displayHeight)
+      this.track = track
+      const scale = Math.min(1, this.maxWidth / track.displayWidth, this.maxHeight / track.displayHeight)
       const width = Math.max(2, Math.round(track.displayWidth * scale))
       const height = Math.max(2, Math.round(track.displayHeight * scale))
-      return new CanvasSink(track, { width, height, fit: 'fill', poolSize: 4 })
+      return new CanvasSink(track, { width, height, fit: 'fill', poolSize: 4, ...(this.software ? { decoderOptions: { hardwareAcceleration: 'prefer-software' as const } } : {}) })
     })
   }
 
+  private async stop() {
+    await this.iter?.return().catch(() => {})
+    this.iter = null
+    this.current = null
+    this.upcoming = undefined
+  }
+
+  private async reopen() {
+    await this.stop()
+    this.sink = this.openSink()
+  }
+
+  /** The damaged stretch a stream at `t` would run into: it is fed packets well ahead of the frame it shows. */
+  private damageAhead(t: number) {
+    return damageIn(this.url).find((d) => t < d.from && t >= d.from - FEED_AHEAD)
+  }
+
+  /** When each frame from the one showing at `t` up to `end` is shown, in order. */
+  private async timesBefore(t: number, end: number) {
+    const times: number[] = []
+    if (!this.track) return times
+    const packets = new EncodedPacketSink(this.track)
+    let p = (await packets.getPacket(Math.max(0, t), META)) ?? (await packets.getFirstPacket(META))
+    while (p && times.length < 4096) {
+      if (p.timestamp < end - 1e-4) times.push(p.timestamp)
+      // Packets come in decoding order, so one past the end doesn't mean the rest are.
+      else if (p.type === 'key') break
+      p = await packets.getNextPacket(p, META)
+    }
+    return times.sort((a, b) => a - b)
+  }
+
   private async restart(t: number) {
-    await this.iter?.return()
+    await this.iter?.return().catch(() => {})
     const sink = await this.sink
-    this.iter = sink ? sink.canvases(Math.max(0, t)) : null
+    const ahead = this.damageAhead(t)
+    this.bounded = Boolean(ahead)
+    // Close before damage, the decoder gets the packets up to it and no more; a plain stream would be fed the damaged ones.
+    this.iter = !sink ? null : ahead ? sink.canvasesAtTimestamps(await this.timesBefore(t, ahead.from)) : sink.canvases(Math.max(0, t))
     this.current = null
     this.upcoming = undefined
     this.ended = !this.iter
   }
 
-  async frameAt(t: number): Promise<HTMLCanvasElement | OffscreenCanvas | null> {
-    if (!this.iter || t < this.lastT - 1e-6 || t - this.lastT > 4) await this.restart(t)
+  /**
+   * The frame at `t`. Two things can go wrong, and neither stops an export:
+   * - The graphics card's decoder fails on this file (some cards refuse streams
+   *   others play): the processor's decoder takes over, for this file, from now on.
+   * - Part of the file can't be decoded at all (damaged, or cut short): the last
+   *   picture before it is held through that part, as a player would.
+   */
+  async frameAt(t: number, attempt = 0): Promise<HTMLCanvasElement | OffscreenCanvas | null> {
+    const hit = damageIn(this.url).find((d) => t >= d.from - 1e-4 && t < d.to - 1e-4)
+    if (hit) return this.heldFrame(hit)
+    try {
+      return await this.read(t)
+    } catch (err) {
+      if (!this.software) {
+        this.software = true
+        await this.reopen()
+        try {
+          const frame = await this.read(t)
+          softwareDecoded.add(this.url)
+          return frame
+        } catch {
+          // The processor fails too (or has no decoder for this codec), so it isn't the card.
+          this.software = false
+          await this.reopen()
+        }
+      }
+      if (attempt >= 3 || !(await this.findDamage(t))) throw err
+      return this.frameAt(t, attempt + 1)
+    }
+  }
+
+  /**
+   * Looks from `t` on for a group of frames that can't be decoded while the
+   * rest of the file can, and notes it. False when the trouble isn't that.
+   */
+  private async findDamage(t: number): Promise<boolean> {
+    const known = damageIn(this.url)
+    const sink = await this.sink
+    const track = this.track
+    if (!sink || !track || known.length >= MAX_DAMAGE) return false
+    await this.stop()
+    const packets = new EncodedPacketSink(track)
+    const end = await track.computeDuration().catch(() => t)
+    /** Decodes one group on its own: its last frame needs every packet in it and none of the next. */
+    const decodes = async (key: EncodedPacket, next: EncodedPacket | null) => {
+      let at = next ? next.timestamp - 1e-4 : end
+      const owner = await packets.getKeyPacket(at, META)
+      if (owner?.sequenceNumber !== key.sequenceNumber) at = key.timestamp
+      return sink.getCanvas(Math.max(0, at)).then(
+        () => true,
+        () => false,
+      )
+    }
+    let key = (await packets.getKeyPacket(Math.max(0, t), META)) ?? (await packets.getFirstPacket(META))
+    let found: Damage | null = null
+    let bad: EncodedPacket | null = null
+    let elsewhere = false
+    // A stream decodes ahead, so the trouble may be a few groups on from the frame that failed.
+    for (let i = 0; i < 4 && key && !found; i++) {
+      const next: EncodedPacket | null = await packets.getNextKeyPacket(key, META)
+      if (await decodes(key, next)) {
+        elsewhere = true
+        key = next
+      } else {
+        found = { from: key.timestamp, to: next ? next.timestamp : Infinity }
+        bad = key
+      }
+    }
+    if (!found || !bad || known.some((d) => Math.abs(d.from - found.from) < 1e-4)) return false
+    // It has to be this stretch and not the decoder: something else in the file must decode.
+    if (!elsewhere && found.from > 0) {
+      const before = await packets.getKeyPacket(found.from - 1e-4, META)
+      elsewhere = Boolean(before && before.sequenceNumber !== bad.sequenceNumber && (await decodes(before, bad)))
+    }
+    if (!elsewhere && Number.isFinite(found.to)) {
+      const after = await packets.getKeyPacket(found.to, META)
+      elsewhere = Boolean(after && after.sequenceNumber !== bad.sequenceNumber && (await decodes(after, await packets.getNextKeyPacket(after, META))))
+    }
+    if (!elsewhere) return false
+    damaged.set(this.url, [...known, found].sort((a, b) => a.from - b.from))
+    console.warn(`[decode] ${found.from.toFixed(3)}–${Number.isFinite(found.to) ? found.to.toFixed(3) : 'end'} s can’t be decoded; holding the frame before it`, this.url)
+    return true
+  }
+
+  /** What a damaged stretch shows: the last picture before it, or with none (it starts the file) the first after it. */
+  private async heldFrame(d: Damage): Promise<OffscreenCanvas | null> {
+    shownHeld.set(d, this.url)
+    const kept = this.held.get(d)
+    if (kept !== undefined) return kept
+    await this.stop()
+    const sink = await this.sink
+    let frame: WrappedCanvas | null = null
+    if (sink && d.from > 0) frame = await sink.getCanvas(Math.max(0, d.from - 1e-3)).catch(() => null)
+    if (sink && !frame && Number.isFinite(d.to)) frame = await sink.getCanvas(d.to).catch(() => null)
+    let copy: OffscreenCanvas | null = null
+    if (frame) {
+      // Its own copy: the sink reuses its canvases.
+      copy = new OffscreenCanvas(frame.canvas.width, frame.canvas.height)
+      copy.getContext('2d')!.drawImage(frame.canvas, 0, 0)
+    }
+    this.held.set(d, copy)
+    return copy
+  }
+
+  private async read(t: number): Promise<HTMLCanvasElement | OffscreenCanvas | null> {
+    if (!this.iter || t < this.lastT - 1e-6 || t - this.lastT > 4 || Boolean(this.damageAhead(t)) !== this.bounded) await this.restart(t)
     this.lastT = t
     if (!this.iter) return null
     const eps = 1e-4
     while (!this.ended) {
       if (this.upcoming === undefined) {
         const r = await this.iter.next()
-        this.upcoming = r.done ? null : r.value
-        if (r.done) this.ended = true
+        if (r.done) {
+          this.upcoming = null
+          this.ended = true
+        } else if (r.value) this.upcoming = r.value
+        // No picture at that time: on to the next.
+        else continue
       }
       if (this.upcoming && this.upcoming.timestamp <= t + eps) {
         this.current = this.upcoming

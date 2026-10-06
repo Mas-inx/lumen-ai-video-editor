@@ -36,11 +36,13 @@ import {
   rollEdit,
   slideClip,
   slipClip,
+  framesIn,
   sourceFrames,
   splitClips,
   trackAccepts,
   trimClip,
   ungroupClips,
+  maxTransition,
 } from './ops'
 import {
   angleTracks,
@@ -237,7 +239,7 @@ const textStyle = z.object({
 
 const animSpec = z.object({ preset: animPreset, duration: z.number().int().min(1).max(600) })
 const subjectMatte = z.object({ assetId: z.string().min(1), from: z.number().min(0), invert: z.boolean().optional() })
-const transition = z.object({ kind: transitionKind, duration: z.number().int().min(2).max(300) })
+const transition = z.object({ kind: transitionKind, duration: z.number().int().min(2).max(300), align: z.enum(['before', 'center', 'after']).optional() })
 
 export const clipPatch = z
   .object({
@@ -327,6 +329,15 @@ const assetSource = z.discriminatedUnion('type', [
   }),
 ])
 
+const assetCue = z.object({
+  at: z.number().min(0),
+  kind: z.string().min(1),
+  label: z.string(),
+  seconds: z.number().positive().optional(),
+  who: z.string().optional(),
+  data: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+})
+
 const asset = z.object({
   id,
   name: z.string().min(1),
@@ -345,6 +356,7 @@ const asset = z.object({
   favorite: z.boolean().optional(),
   tags: z.array(z.string()).optional(),
   proxy: z.object({ path: z.string(), url: z.string(), width: z.number(), height: z.number() }).optional(),
+  cues: z.array(assetCue).optional(),
   matteOf: z
     .object({ assetId: z.string(), subject: z.enum(['person', 'any']), from: z.number(), to: z.number(), box: z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() }).optional() })
     .optional(),
@@ -581,7 +593,7 @@ export const commands = {
         nestedName = seq.name
       }
       const inPoint = i.inPoint ?? 0
-      const available = i.sequenceId ? sourceFrames(p, { sequenceId: i.sequenceId }) - inPoint : source?.duration !== undefined ? Math.floor(source.duration * p.settings.fps) - inPoint : Infinity
+      const available = i.sequenceId ? sourceFrames(p, { sequenceId: i.sequenceId }) - inPoint : source?.duration !== undefined ? framesIn(source.duration, p.settings.fps) - inPoint : Infinity
       const duration = Math.max(1, Math.min(i.duration, available))
       let start: number
       if (i.mode === 'free' || isMagneticTrack(p, track.id)) start = findFreeStart(p, track.id, i.start, duration)
@@ -782,13 +794,17 @@ export const commands = {
   }),
 
   'clip.setTransition': command({
-    description: 'Set or clear the transition that plays from the previous clip into this one. Durations are in frames.',
+    description:
+      'Set or clear the transition on the cut before this clip (from the previous clip into this one). align says where it sits on the cut: "after" (default) starts at the cut, over the start of this clip; "center" straddles the cut; "before" ends at the cut, over the end of the previous clip. Durations are in frames.',
     input: z.object({ id, transition: transition.nullable() }),
     title: (i) => (i.transition ? 'Add transition' : 'Remove transition'),
     run(p, i) {
       const clip = getClip(p, i.id)
       assertEditable(p, clip)
-      clip.transitionIn = i.transition ? { ...i.transition, duration: Math.min(i.transition.duration, clip.duration) } : null
+      if (!i.transition) return void (clip.transitionIn = null)
+      const { align, ...rest } = i.transition
+      const duration = Math.max(1, Math.min(rest.duration, maxTransition(p, clip, align)))
+      clip.transitionIn = { ...rest, duration, ...(align && align !== 'after' ? { align } : {}) }
     },
   }),
 
@@ -1378,7 +1394,7 @@ export const commands = {
 
   'asset.update': command({
     description:
-      'Rename or favorite an asset, attach its transcript (timed phrases in seconds), or point it at a new file (relink: source, duration, size, audio).',
+      'Rename or favorite an asset, attach its transcript (timed phrases in seconds) or its cues (what happens in it and when: { at, kind, label }), or point it at a new file (relink: source, duration, size, audio).',
     input: z.object({
       id,
       patch: z
@@ -1396,6 +1412,7 @@ export const commands = {
           source: assetSource,
           proxy: z.object({ path: z.string(), url: z.string(), width: z.number(), height: z.number() }).nullable(),
           beats: z.object({ bpm: z.number(), times: z.array(z.number()), downbeats: z.array(z.number()), confidence: z.number() }),
+          cues: z.array(assetCue),
         })
         .partial(),
     }),
@@ -1543,7 +1560,7 @@ export const commands = {
         if (asset.kind !== 'video') throw new CommandError(`“${asset.name}” isn’t video — every angle needs pictures`)
         const name = a.name ?? asset.name
         const start = Math.round((a.offset - first) * fps)
-        const duration = Math.max(1, Math.floor((asset.duration ?? 1) * fps))
+        const duration = Math.max(1, framesIn(asset.duration ?? 1, fps))
         const video = createTrack('video', { name: `Cam ${n + 1} · ${name}`, height: TRACK_HEIGHTS.video })
         tracks.push(video)
         const pic = createClip({ kind: 'video', trackId: video.id, start, duration, assetId: asset.id, name, audio: { detached: true } })

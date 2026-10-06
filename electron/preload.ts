@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { AgentEvent } from '../shared/ai'
 import { APP_IPC, type AppAPI, type CollectProgress, type UpdateState } from '../shared/app'
+import type { IngestClip, IngestState } from '../shared/ingest'
 import { IPC, type BridgeRequest, type BridgeState, type IntegrationsAPI, type Job, type McpServerState } from '../shared/integrations'
 
 // The only surface the renderer sees: typed methods, never raw ipcRenderer.
@@ -153,12 +154,32 @@ const appApi: AppAPI = {
     write: (id, position, data) => invoke(APP_IPC.exportWrite, id, position, data),
     writeFrame: (id, index, data) => invoke(APP_IPC.exportFrame, id, index, data),
     sidecar: (exportPath, extension, text) => invoke(APP_IPC.exportSidecar, exportPath, extension, text),
+    restart: (id) => invoke(APP_IPC.exportRestart, id),
     finish: (id) => invoke(APP_IPC.exportFinish, id),
     abort: (id) => invoke(APP_IPC.exportAbort, id),
     progress: (value) => ipcRenderer.send(APP_IPC.exportProgress, value),
   },
   window: {
     capture: (maxWidth) => invoke(APP_IPC.captureWindow, maxWidth),
+  },
+  ingest: {
+    state: () => invoke(APP_IPC.ingestState),
+    setEnabled: (on, persist) => invoke(APP_IPC.ingestSetEnabled, on, persist),
+    regenerateToken: () => invoke(APP_IPC.ingestRegenerate),
+    setOptions: (opts) => invoke(APP_IPC.ingestOptions, opts),
+    pickFolder: () => invoke(APP_IPC.ingestPickFolder),
+    attach: () => invoke(APP_IPC.ingestAttach),
+    open: (clipId, wantProxy) => invoke(APP_IPC.ingestOpen, clipId, wantProxy),
+    progress: (clipId, encoded) => ipcRenderer.send(APP_IPC.ingestProgress, clipId, encoded),
+    complete: (clipId, result) => invoke(APP_IPC.ingestComplete, clipId, result),
+    fail: (clipId, message) => invoke(APP_IPC.ingestFail, clipId, message),
+    onState: (cb) => subscribe<IngestState>(APP_IPC.ingestEvent, cb),
+    onClip: (cb) => subscribe<IngestClip>(APP_IPC.ingestClip, cb),
+  },
+  system: {
+    gpu: () => invoke(APP_IPC.gpuInfo),
+    setGraphics: (patch) => invoke(APP_IPC.graphicsSet, patch),
+    relaunch: () => ipcRenderer.send(APP_IPC.relaunch),
   },
   updates: {
     state: () => invoke(APP_IPC.updateState),

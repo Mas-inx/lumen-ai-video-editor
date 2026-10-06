@@ -44,6 +44,21 @@ Audio is half the film. Viewers forgive soft pictures; they leave over bad sound
 - **Sound effects** (`generate_sound_effect` / `add_sound_effect`): describe the source, material, distance and length, e.g. "short soft whoosh, airy, close, 0.4 s".
 - **Voiceover** (`list_voices`, `generate_voiceover`): pick a voice that fits the brand. Write for the ear: short sentences, natural rhythm, punctuation for pauses.
 
+## Sound for motion graphics
+
+A graphic with no sound feels unfinished; a sound a few frames off feels wrong.
+
+- **One cue sheet.** List every visual hit with its timeline time (the clip's start plus the time inside the graphic). Place every sound from that list.
+- **Place by the loudest point, not the start.** `at_seconds` is where the sound begins:
+  - `pop`, `click`, `hit`, `impact`, `ding`, `shutter`: start on the hit, or 1 frame before it.
+  - `whoosh` is loudest about 0.45 s in, `swoosh` about 0.9 s: start them that long before the middle of the move.
+  - `riser` peaks at 3.9 s: start it 3.9 s before the hit, and put an `impact` or `hit` on the hit.
+  - Generated effects: ask for the length of the move and say where the accent falls ("0.6 s whoosh, loudest at the end").
+- **Weight.** The hero moment gets the layered sound (a riser into it, an impact on it). Other hits stay about 6 dB quieter. Never put more than 3 effects on one frame. Vary a run of repeated hits: alternate `pop` and `click`, or drop later ones by 2–3 dB.
+- **Music that fits.** Put the tempo in the prompt so beats fall on the cues: BPM = 60 ÷ the seconds between regular hits (0.5 s gives 120). Give the structure in seconds: "builds to 6 s, drop at 6 s, final chord at 8.5 s, 10 s long". Then detect_beats and slide the music so a downbeat sits on the hero moment, or move the cues onto the beats and render again.
+- **Level.** Effects sit about 2 dB above the music bed; the music dips about 3 dB under the big hits.
+- **Genre.** Take it from the style's "Sound" line in motion-graphic-styles.
+
 ## Check
 
 Listen in context: analyze_audio for loudness and silences, and play the section. Make sure no music fights the voice and no levels jump between cuts.

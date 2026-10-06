@@ -16,7 +16,7 @@ import { addCaptions, duckMusic, findPauses, reframe, removePauses, silentCuts, 
 import { SFX } from '@/engine/sfx'
 import { desktop } from '@/lib/platform'
 import { sfxAsset } from '@/project/audio-library'
-import { importMediaFiles } from '@/project/media-import'
+import { importMediaFiles, type ImportFailure } from '@/project/media-import'
 import { isDirty, useSession } from '@/project/session'
 import { canTranscribe, ensureTranscripts, transcribeMedia, transcribers, type Transcriber } from '@/project/transcribe'
 import { useAi } from './ai'
@@ -26,15 +26,16 @@ import { CONTROL_TOOLS } from './tools/control'
 import { emitToolImages } from './tools/events'
 import { FOOTAGE_TOOLS } from './tools/footage'
 import { INSPECT_TOOLS } from './tools/inspect'
-import { bool, num, obj, oneOf, str, withImages, WithImages, type AgentTool, type ToolImage } from './tools/kit'
+import { bool, num, obj, oneOf, str, waitSeconds, withImages, WithImages, type AgentTool, type ToolContext, type ToolImage } from './tools/kit'
 import { VISION_TOOLS } from './tools/vision'
 import { BEAT_TOOLS } from './tools/beats'
 import { SKILL_TOOLS } from './tools/skills'
 import { SUBJECT_TOOLS } from './tools/subject'
+import { INGEST_TOOLS } from './tools/ingest'
 import { WEB_TOOLS } from './tools/web'
 
 const PLACE = bool('Put the finished clip on the timeline at the playhead (default true).')
-const WAIT = num('Seconds to wait for the render before returning (default 90, max 600). If it is still running, poll get_job.', { minimum: 0, maximum: 600 })
+const WAIT = num('Seconds to wait for the render before returning (default 90, max 600; through Lumen’s MCP server at most 15). If it is still running, poll get_job.', { minimum: 0, maximum: 600 })
 const AT = num('Where to place it, in seconds from the start of the timeline (default: the playhead).', { minimum: 0 })
 
 // ─── Jobs ────────────────────────────────────────────────────────────────
@@ -79,11 +80,10 @@ function jobReport(job: Job | undefined, placedClip?: string | null) {
 }
 
 /** Starts a render, optionally waits for it, and places the result. */
-async function runJob(start: () => Promise<Job>, args: Record<string, unknown>) {
+async function runJob(start: () => Promise<Job>, args: Record<string, unknown>, ctx?: ToolContext) {
   const at = typeof args.at_seconds === 'number' ? Math.round(args.at_seconds * getProject().settings.fps) : usePlayback.getState().frame
   const job = await start()
-  const wait = Math.min(600, Math.max(0, typeof args.wait_seconds === 'number' ? args.wait_seconds : 90))
-  const finished = await waitForJob(job.id, wait)
+  const finished = await waitForJob(job.id, waitSeconds(args, ctx, 90))
   let clip: string | null = null
   if (finished?.status === 'done' && args.place !== false) {
     const [assetId] = useIntegrations.getState().imported[job.id] ?? []
@@ -249,7 +249,7 @@ const INTEGRATION_TOOLS: AgentTool[] = [
       },
       ['text'],
     ),
-    run: (a) =>
+    run: (a, ctx) =>
       runJob(
         () =>
           renderBlender({
@@ -260,6 +260,7 @@ const INTEGRATION_TOOLS: AgentTool[] = [
             prompt: String(a.text),
           }),
         a,
+        ctx,
       ),
   },
   {
@@ -276,7 +277,7 @@ const INTEGRATION_TOOLS: AgentTool[] = [
       at_seconds: AT,
       wait_seconds: WAIT,
     }),
-    run: (a) =>
+    run: (a, ctx) =>
       runJob(
         () =>
           renderBlender({
@@ -287,6 +288,7 @@ const INTEGRATION_TOOLS: AgentTool[] = [
             transparent: false,
           }),
         a,
+        ctx,
       ),
   },
   {
@@ -305,7 +307,7 @@ const INTEGRATION_TOOLS: AgentTool[] = [
       },
       ['script', 'description'],
     ),
-    run: async (a) => {
+    run: async (a, ctx) => {
       const ok = await requestApproval({ title: 'Render an AI-written Blender scene?', detail: String(a.description), code: String(a.script), requester: 'An AI agent' })
       if (!ok) throw new Error('The user declined to run this script.')
       return runJob(
@@ -321,6 +323,7 @@ const INTEGRATION_TOOLS: AgentTool[] = [
             prompt: String(a.description),
           }),
         a,
+        ctx,
       )
     },
   },
@@ -360,7 +363,7 @@ const INTEGRATION_TOOLS: AgentTool[] = [
       },
       ['template', 'params'],
     ),
-    run: (a) =>
+    run: (a, ctx) =>
       runJob(
         () =>
           renderMotion({
@@ -370,6 +373,7 @@ const INTEGRATION_TOOLS: AgentTool[] = [
             prompt: JSON.stringify(a.params),
           }),
         a,
+        ctx,
       ),
   },
   {
@@ -387,7 +391,7 @@ const INTEGRATION_TOOLS: AgentTool[] = [
       },
       ['html', 'name'],
     ),
-    run: (a) => runJob(() => renderMotion({ template: 'custom', params: {}, html: String(a.html), name: String(a.name), duration: typeof a.duration_seconds === 'number' ? a.duration_seconds : undefined }), a),
+    run: (a, ctx) => runJob(() => renderMotion({ template: 'custom', params: {}, html: String(a.html), name: String(a.name), duration: typeof a.duration_seconds === 'number' ? a.duration_seconds : undefined }), a, ctx),
   },
   {
     name: 'list_voices',
@@ -413,18 +417,18 @@ const INTEGRATION_TOOLS: AgentTool[] = [
       },
       ['text'],
     ),
-    run: async (a) => {
+    run: async (a, ctx) => {
       const voices = useIntegrations.getState().voices
       const voice = voices.find((v) => v.id === a.voice_id) ?? voices[0]
       if (!voice && typeof a.voice_id !== 'string') throw new Error('No ElevenLabs voices — connect ElevenLabs in Lumen first.')
-      return runJob(() => elevenSpeak({ text: String(a.text), voiceId: String(a.voice_id ?? voice!.id), voiceName: voice?.name, modelId: typeof a.model === 'string' ? a.model : undefined }), a)
+      return runJob(() => elevenSpeak({ text: String(a.text), voiceId: String(a.voice_id ?? voice!.id), voiceName: voice?.name, modelId: typeof a.model === 'string' ? a.model : undefined }), a, ctx)
     },
   },
   {
     name: 'generate_sound_effect',
     description: 'Generate a sound effect with ElevenLabs from a description (up to 30 s) and add it to the project.',
     inputSchema: obj({ prompt: str('Describe the sound'), duration_seconds: num('0.5–30 (default: automatic)', { minimum: 0.5, maximum: 30 }), loop: bool('Seamless loop'), place: PLACE, at_seconds: AT, wait_seconds: WAIT }, ['prompt']),
-    run: (a) => runJob(() => elevenSfx({ prompt: String(a.prompt), durationSeconds: typeof a.duration_seconds === 'number' ? a.duration_seconds : undefined, loop: Boolean(a.loop) }), a),
+    run: (a, ctx) => runJob(() => elevenSfx({ prompt: String(a.prompt), durationSeconds: typeof a.duration_seconds === 'number' ? a.duration_seconds : undefined, loop: Boolean(a.loop) }), a, ctx),
   },
   {
     name: 'generate_music',
@@ -433,7 +437,7 @@ const INTEGRATION_TOOLS: AgentTool[] = [
       { prompt: str('Genre, mood, instruments, structure'), length_seconds: num('3–600 (default 30)', { minimum: 3, maximum: 600 }), instrumental: bool('No vocals (default true)'), place: PLACE, at_seconds: AT, wait_seconds: WAIT },
       ['prompt'],
     ),
-    run: (a) => runJob(() => elevenMusic({ prompt: String(a.prompt), lengthSeconds: typeof a.length_seconds === 'number' ? a.length_seconds : 30, instrumental: a.instrumental !== false }), a),
+    run: (a, ctx) => runJob(() => elevenMusic({ prompt: String(a.prompt), lengthSeconds: typeof a.length_seconds === 'number' ? a.length_seconds : 30, instrumental: a.instrumental !== false }), a, ctx),
   },
   {
     name: 'transcribe_media',
@@ -539,9 +543,9 @@ const INTEGRATION_TOOLS: AgentTool[] = [
       },
       ['prompt'],
     ),
-    run: async (a) => {
+    run: async (a, ctx) => {
       const pick = await pickGenerator('image', a.provider, a.model)
-      return runJob(() => generateImage({ provider: pick.provider, model: pick.model, prompt: String(a.prompt), aspect: (typeof a.aspect === 'string' ? a.aspect : projectAspect()) as '16:9' | '9:16' | '1:1' }), a)
+      return runJob(() => generateImage({ provider: pick.provider, model: pick.model, prompt: String(a.prompt), aspect: (typeof a.aspect === 'string' ? a.aspect : projectAspect()) as '16:9' | '9:16' | '1:1' }), a, ctx)
     },
   },
   {
@@ -560,10 +564,10 @@ const INTEGRATION_TOOLS: AgentTool[] = [
       },
       ['prompt'],
     ),
-    run: async (a) => {
+    run: async (a, ctx) => {
       const pick = await pickGenerator('video', a.provider, a.model)
       const aspect = typeof a.aspect === 'string' ? a.aspect : projectAspect() === '9:16' ? '9:16' : '16:9'
-      return runJob(() => generateVideo({ provider: pick.provider, model: pick.model, prompt: String(a.prompt), aspect: aspect as '16:9' | '9:16', seconds: typeof a.seconds === 'number' ? a.seconds : 8 }), { wait_seconds: 20, ...a })
+      return runJob(() => generateVideo({ provider: pick.provider, model: pick.model, prompt: String(a.prompt), aspect: aspect as '16:9' | '9:16', seconds: typeof a.seconds === 'number' ? a.seconds : 8 }), { wait_seconds: 20, ...a }, ctx)
     },
   },
   {
@@ -583,9 +587,16 @@ const INTEGRATION_TOOLS: AgentTool[] = [
     inputSchema: obj({ paths: { type: 'array', items: { type: 'string' }, description: 'Absolute file or folder paths' }, place: bool('Also put them on the timeline at the playhead (default false)'), at_seconds: AT }, ['paths']),
     run: async (a) => {
       if (!desktop) throw new Error('Needs the desktop app.')
-      const paths = Array.isArray(a.paths) ? a.paths.map(String) : []
-      const assets = await importMediaFiles(await desktop.files.register(paths))
-      if (!assets.length) throw new Error('No importable media found at those paths.')
+      // Agents also send one path, as `paths` or as `path`.
+      const given = a.paths ?? a.path
+      const paths = Array.isArray(given) ? given.map(String) : typeof given === 'string' ? [given] : []
+      if (!paths.length) throw new Error('Give `paths`: a list of absolute file or folder paths.')
+      const files = await desktop.files.register(paths)
+      if (!files.length) throw new Error(`Nothing at ${paths.length === 1 ? 'that path' : 'those paths'} is a media file Lumen imports — check that it exists and is a video, audio or image file (mp4, mov, webm, mkv, mp3, wav, png, jpg…).`)
+      const failures: ImportFailure[] = []
+      const assets = await importMediaFiles(files, failures)
+      const why = failures.map((f) => `${f.name}: ${f.reason}${f.detail ? ` (${f.detail})` : ''}`).join(' · ')
+      if (!assets.length) throw new Error(`Couldn’t import ${failures.length === 1 ? 'the file' : 'any of the files'}. ${why}`)
       let at = typeof a.at_seconds === 'number' ? Math.round(a.at_seconds * getProject().settings.fps) : usePlayback.getState().frame
       const clips: string[] = []
       if (a.place) {
@@ -597,14 +608,14 @@ const INTEGRATION_TOOLS: AgentTool[] = [
           }
         }
       }
-      return { asset_ids: assets.map((x) => x.id), ...(clips.length ? { clip_ids: clips } : {}) }
+      return { asset_ids: assets.map((x) => x.id), ...(clips.length ? { clip_ids: clips } : {}), ...(failures.length ? { not_imported: why } : {}) }
     },
   },
   {
     name: 'get_job',
     description: 'Status of a render or generation job. Waits up to wait_seconds for it to finish.',
     inputSchema: obj({ job_id: str('Job id'), wait_seconds: WAIT }, ['job_id']),
-    run: async (a) => jobReport(await waitForJob(String(a.job_id), Math.min(600, Number(a.wait_seconds ?? 30)))),
+    run: async (a, ctx) => jobReport(await waitForJob(String(a.job_id), waitSeconds(a, ctx, 30))),
   },
   {
     name: 'import_media_url',
@@ -690,16 +701,16 @@ function mcpAgentTools(servers: Record<string, McpServerState>): AgentTool[] {
 
 let cache: AgentTool[] | null = null
 export function agentTools(servers: Record<string, McpServerState> = useIntegrations.getState().servers): AgentTool[] {
-  cache ??= [...INTEGRATION_TOOLS, ...VISION_TOOLS, ...INSPECT_TOOLS, ...CONTROL_TOOLS, ...FOOTAGE_TOOLS, ...WEB_TOOLS, ...SKILL_TOOLS, ...BEAT_TOOLS, ...SUBJECT_TOOLS, ...editorTools()]
+  cache ??= [...INTEGRATION_TOOLS, ...VISION_TOOLS, ...INSPECT_TOOLS, ...CONTROL_TOOLS, ...FOOTAGE_TOOLS, ...WEB_TOOLS, ...SKILL_TOOLS, ...BEAT_TOOLS, ...SUBJECT_TOOLS, ...INGEST_TOOLS, ...editorTools()]
   const mcp = mcpAgentTools(servers)
   return mcp.length ? [...cache, ...mcp] : cache
 }
 
-export async function runAgentTool(name: string, args: Record<string, unknown>): Promise<BridgeToolResult> {
+export async function runAgentTool(name: string, args: Record<string, unknown>, ctx?: ToolContext): Promise<BridgeToolResult> {
   const tool = agentTools().find((t) => t.name === name)
   if (!tool) return { content: [{ type: 'text', text: `Unknown tool: ${name}. Call get_project to start; the tool list names every tool.` }], isError: true }
   try {
-    const out = await tool.run(args ?? {})
+    const out = await tool.run(args ?? {}, ctx)
     const result = out instanceof WithImages ? out.json : out
     const structured = result && typeof result === 'object' && !Array.isArray(result) ? (result as Record<string, unknown>) : { result }
     const content: BridgeToolResult['content'] = [{ type: 'text', text: JSON.stringify(result, null, 2) }]

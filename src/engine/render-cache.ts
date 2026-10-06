@@ -15,10 +15,10 @@
  *   red when it needs rendering to play smoothly, yellow when it probably
  *   plays, and nothing for simple cuts.
  */
-import { BufferTarget, CanvasSource, canEncodeVideo, Mp4OutputFormat, Output } from 'mediabunny'
+import { BufferTarget, CanvasSource, Mp4OutputFormat, Output } from 'mediabunny'
 import { toast } from 'sonner'
 import { create } from 'zustand'
-import { clipEnd, projectDuration } from '@/editor/ops'
+import { clipEnd, projectDuration, transitionLead } from '@/editor/ops'
 import { usePlayback } from '@/editor/playback'
 import { is3dEffect, is3dTransition } from '@/editor/presets'
 import { getProject, useEditor } from '@/editor/store'
@@ -26,6 +26,7 @@ import type { Asset, Clip, Project, Sequence } from '@/editor/types'
 import { useUI, type RenderRes } from '@/editor/ui-store'
 import { APP_VERSION, desktop } from '@/lib/platform'
 import { clipsDrawnAt, renderFrame } from './compositor'
+import { markEncoderFailed, workingEncoder, type EncoderPlan } from './encoders'
 import { needsGpuGrade } from './gl-grade'
 import { withVideoFrames } from './media'
 import { useAutoRes } from './preview-res'
@@ -110,10 +111,12 @@ function clipsIn(project: Project, f0: number, f1: number) {
     }
     for (let i = lo; i < list.length; i++) {
       const c = list[i]
-      if (c.start >= f1) break
       const tr = c.transitionIn
+      // A transition may start ahead of its cut: the clip after it is drawn before its own start.
+      const lead = tr ? transitionLead(tr) : 0
+      if (c.start - lead >= f1) break
       // The clip before a transition is drawn past its end, into the transition.
-      if (tr && c.start < f1 && c.start + tr.duration > f0) {
+      if (tr && c.start - lead < f1 && c.start + tr.duration - lead > f0) {
         const prev = list[i - 1]
         if (prev && clipEnd(prev) === c.start && clipEnd(prev) <= f0) out.push(prev)
       }
@@ -300,7 +303,9 @@ async function loadFiles(projectId: string) {
 
 let controller: AbortController | null = null
 let canvas: HTMLCanvasElement | null = null
-let encoderChecked: Promise<boolean> | null = null
+
+/** A rendered chunk's bitrate: generous, so previews look like the real thing. */
+const renderBitrate = (width: number, height: number, fps: number) => Math.round(20_000_000 * ((width * height) / 2_073_600) * Math.pow(fps / 30, 0.75))
 
 /** Gives the editor its turn: rendering runs between frames at background priority. */
 function yieldToEditor() {
@@ -314,7 +319,7 @@ async function whilePlaying(signal: AbortSignal) {
   while (usePlayback.getState().playing && !signal.aborted) await new Promise((r) => setTimeout(r, 250))
 }
 
-async function renderChunk(project: Project, index: number, key: string, res: RenderRes, feeder: FrameFeeder, signal: AbortSignal) {
+async function renderChunk(project: Project, index: number, key: string, res: RenderRes, feeder: FrameFeeder, signal: AbortSignal, plan: EncoderPlan) {
   const { width, height } = renderSize(project, res)
   const fps = project.settings.fps
   const [f0, f1] = chunkSpan(project, index)
@@ -326,13 +331,13 @@ async function renderChunk(project: Project, index: number, key: string, res: Re
   const ctx = canvas.getContext('2d', { alpha: false })!
   const target = new BufferTarget()
   const output = new Output({ format: new Mp4OutputFormat({ fastStart: 'in-memory' }), target })
-  const pixels = width * height
   const source = new CanvasSource(canvas, {
     codec: 'avc',
-    bitrate: Math.round(20_000_000 * (pixels / 2_073_600) * Math.pow(fps / 30, 0.75)),
+    bitrate: plan.bitrate,
+    fullCodecString: plan.codecString,
     keyFrameInterval: 1,
     latencyMode: 'quality',
-    hardwareAcceleration: 'prefer-hardware',
+    hardwareAcceleration: plan.acceleration,
   })
   output.addVideoTrack(source, { frameRate: fps })
   await output.start()
@@ -370,11 +375,6 @@ export async function renderPreviews(range: [number, number], label: string, opt
     if (background) return
     cancelRender()
   }
-  encoderChecked ??= canEncodeVideo('avc', { width: 1280, height: 720, bitrate: 4e6 }).catch(() => false)
-  if (!(await encoderChecked)) {
-    if (!background) toast.error('This computer can’t encode H.264 video, so previews can’t be rendered.')
-    return
-  }
   const project = getProject()
   const len = chunkFrames(project.settings.fps)
   const first = Math.max(0, Math.floor(range[0] / len))
@@ -400,17 +400,35 @@ export async function renderPreviews(range: [number, number], label: string, opt
   await document.fonts.ready
   const res = useUI.getState().renderRes
   const { width, height } = renderSize(project, res)
+  const fps = project.settings.fps
+  // The graphics card's H.264 encoder when it works at this size, else the processor's.
+  let plan = await workingEncoder('avc', width, height, fps, renderBitrate(width, height, fps))
   const feeder = new FrameFeeder(project, width, height)
-  let failed: unknown = null
+  let failed: unknown = plan ? null : new Error('This computer can’t encode H.264 video at this size, so previews can’t be rendered. Try a lower render resolution.')
   try {
-    for (const index of todo) {
+    for (const index of plan ? todo : []) {
       await whilePlaying(ctl.signal)
       if (ctl.signal.aborted) break
       const now = getProject()
       const key = chunkKey(now, index, res)
       const started = useRenders.getState().job
       if (started && controller === ctl) useRenders.setState({ job: { ...started, current: index } })
-      if (key && !useRenders.getState().files[key]) await renderChunk(now, index, key, res, feeder, ctl.signal)
+      if (key && !useRenders.getState().files[key]) {
+        try {
+          await renderChunk(now, index, key, res, feeder, ctl.signal, plan!)
+        } catch (err) {
+          if (err instanceof DOMException && err.name === 'AbortError') throw err
+          // Maybe the encoder gave up on the real thing: try this chunk on the other one.
+          const other = await workingEncoder('avc', width, height, fps, renderBitrate(width, height, fps), plan!.acceleration)
+          if (!other) throw err
+          // If that fails too, the encoder wasn't the problem and the first error stands.
+          await renderChunk(now, index, key, res, feeder, ctl.signal, other).catch(() => {
+            throw err
+          })
+          markEncoderFailed(plan!, width, height, fps, err instanceof Error ? err.message : String(err))
+          plan = other
+        }
+      }
       const job = useRenders.getState().job
       if (job && controller === ctl) useRenders.setState({ job: { ...job, done: job.done + 1, current: null } })
     }

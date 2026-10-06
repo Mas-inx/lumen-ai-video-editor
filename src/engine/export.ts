@@ -6,7 +6,6 @@
 import {
   AudioBufferSource,
   canEncodeAudio,
-  canEncodeVideo,
   CanvasSource,
   Mp4OutputFormat,
   MovOutputFormat,
@@ -26,13 +25,28 @@ import type { Project } from '@/editor/types'
 import { desktop } from '@/lib/platform'
 import { prepareAudio, renderMix, type MixOptions } from './audio-engine'
 import { renderFrame } from './compositor'
+import { collectHeld } from './decode'
+import {
+  chooseEncoder,
+  clearEncoderTest,
+  CODEC_NAME,
+  describeEncoder,
+  encoderSupport,
+  fallbackNote,
+  markEncoderFailed,
+  type EncoderAttempt,
+  type EncoderPlan,
+  type EncoderRequest,
+  type ExportVideoCodec,
+} from './encoders'
 import { LoudnessMeter } from './loudness'
 import { withVideoFrames } from './media'
 import { FrameFeeder } from './stills'
 import { encodeWav } from './wav'
 
+export { CODECS_FOR, encoderSupport, videoBitrate, type CodecAvailability, type ExportVideoCodec } from './encoders'
+
 export type ExportFormat = 'mp4' | 'mov' | 'webm' | 'gif' | 'png' | 'wav' | 'm4a'
-export type ExportVideoCodec = 'avc' | 'hevc' | 'av1' | 'vp9'
 
 export interface ExportSettings {
   format: ExportFormat
@@ -43,6 +57,7 @@ export interface ExportSettings {
   fps: number
   /** 10..100 */
   quality: number
+  /** Try the graphics card's encoder first (the processor's is the fallback, and the other way round when off). */
   hardware: boolean
   /** Project frames [start, end) to export; defaults to the whole timeline. */
   range?: [number, number]
@@ -61,6 +76,10 @@ export interface ExportResult {
   size: number
   /** The subtitle file saved beside it. */
   sidecar?: string
+  /** What encoded the picture. `note` says why when it isn't what was asked for. */
+  encoder?: { codec: ExportVideoCodec; hardware: boolean; note?: string }
+  /** What a viewer should know: footage that couldn't be decoded in places and shows a held picture there. */
+  warnings?: string[]
 }
 
 /** Loudness targets people deliver to. */
@@ -112,13 +131,6 @@ export const FORMAT_INFO: Record<ExportFormat, { label: string; extension: strin
 /** Formats that can keep a transparent background. */
 export const canAlpha = (format: ExportFormat, codec: ExportVideoCodec) => format === 'png' || (format === 'webm' && codec === 'vp9')
 
-/** Video codecs each container can carry, best first. */
-export const CODECS_FOR: Record<'mp4' | 'mov' | 'webm', ExportVideoCodec[]> = {
-  mp4: ['avc', 'hevc', 'av1'],
-  mov: ['avc', 'hevc'],
-  webm: ['vp9', 'av1'],
-}
-
 export const CODEC_LABEL: Record<ExportVideoCodec, string> = {
   avc: 'H.264 — plays everywhere',
   hevc: 'HEVC (H.265) — smaller files',
@@ -126,29 +138,15 @@ export const CODEC_LABEL: Record<ExportVideoCodec, string> = {
   vp9: 'VP9 — open, widely supported',
 }
 
-const EFFICIENCY: Record<ExportVideoCodec, number> = { avc: 1, hevc: 0.62, vp9: 0.68, av1: 0.5 }
-
-/** Target bitrate (bits/s) for a size, frame rate, codec and quality (10..100). */
-export function videoBitrate(width: number, height: number, fps: number, codec: ExportVideoCodec, quality: number) {
-  const pixels = width * height
-  const base = 12_000_000 * (pixels / 2_073_600) * Math.pow(fps / 30, 0.75)
-  const q = 0.35 + (Math.max(10, Math.min(100, quality)) / 100) * 1.25
-  return Math.round(base * EFFICIENCY[codec] * q)
-}
-
-export async function codecSupport(width: number, height: number, fps: number, hardware: boolean) {
+/**
+ * Which codecs this computer can encode at a size: true when the graphics card
+ * or the processor has an encoder for it (the export tries them for real and
+ * falls back by itself, so either is enough).
+ */
+export async function codecSupport(width: number, height: number, fps: number) {
+  const support = await encoderSupport(width, height, fps)
   const out: Partial<Record<ExportVideoCodec, boolean>> = {}
-  await Promise.all(
-    (['avc', 'hevc', 'av1', 'vp9'] as const).map(async (c) => {
-      out[c] = await canEncodeVideo(c as VideoCodec, {
-        width,
-        height,
-        frameRate: fps,
-        bitrate: videoBitrate(width, height, fps, c, 70),
-        hardwareAcceleration: hardware ? 'prefer-hardware' : 'no-preference',
-      }).catch(() => false)
-    }),
-  )
+  for (const codec of Object.keys(support) as ExportVideoCodec[]) out[codec] = support[codec].hardware || support[codec].software
   return out
 }
 
@@ -226,8 +224,20 @@ export async function runExport(project: Project, settings: ExportSettings, hand
   }
 }
 
+/** The stretches of footage this export couldn't decode and showed a held picture for. */
+function damageWarnings(project: Project): string[] {
+  return collectHeld().map(({ url, damage: d }) => {
+    const name = Object.values(project.assets).find((a) => a.source.type === 'file' && a.source.url === url)?.name ?? 'A video'
+    const length = Number.isFinite(d.to) ? `${(d.to - d.from).toFixed(2)} s` : 'the rest of it'
+    return `“${name}” can’t be decoded for ${length} from ${d.from.toFixed(2)} s in (the file is damaged there). The picture before it is held.`
+  })
+}
+
 async function exportOnce(source: Project, settings: ExportSettings, handle: ExportHandle, onProgress: (p: ExportProgress) => void, signal: AbortSignal): Promise<ExportResult> {
-  const res = await renderTo(source, settings, handle, onProgress, signal)
+  collectHeld()
+  const rendered = await renderTo(source, settings, handle, onProgress, signal)
+  const warnings = damageWarnings(source)
+  const res: ExportResult = warnings.length ? { ...rendered, warnings } : rendered
   const range = settings.range ?? [0, projectDuration(source)]
   if (settings.sidecar && desktop) {
     const cues = cuesInRange(source, range)
@@ -272,6 +282,19 @@ async function renderTo(source: Project, settings: ExportSettings, handle: Expor
   }
 }
 
+/** The picture's encoder failed (as opposed to the disk, the decoder or the compositor). */
+class EncoderFailure extends Error {}
+
+const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err))
+
+/** A hung hardware encoder never answers: after this long without a frame going in, it counts as failed. */
+const ENCODER_STALL_MS = 60_000
+
+function noEncoderMessage(req: EncoderRequest, attempts: EncoderAttempt[]) {
+  const tried = attempts.map((a) => `${describeEncoder(a)}: ${a.error ?? 'failed'}`).join(' · ')
+  return `This computer can’t encode ${CODEC_NAME[req.codec]} at ${req.width}×${req.height}, ${req.fps} fps — try a smaller size, a lower frame rate or another format. (${tried})`
+}
+
 async function exportMedia(
   project: Project,
   settings: ExportSettings,
@@ -280,17 +303,75 @@ async function exportMedia(
   onProgress: (p: ExportProgress) => void,
   check: () => void,
   mixOpts: MixOptions,
+): Promise<ExportResult> {
+  const api = desktop!
+  const format = settings.format as 'mp4' | 'mov' | 'webm' | 'm4a'
+  // Transparency rides along as a second VP9 stream in the WebM.
+  const alpha = format !== 'm4a' && Boolean(settings.alpha) && canAlpha(settings.format, settings.codec)
+  const request: EncoderRequest | null =
+    format === 'm4a' ? null : { codec: settings.codec, container: format, width: settings.width, height: settings.height, fps: settings.fps, quality: settings.quality, hardware: settings.hardware, lockCodec: alpha }
+  let plan: EncoderPlan | null = null
+  if (request) {
+    // Tried for real, with a few frames at this size: some drivers accept settings and then fail.
+    onProgress({ phase: 'preparing', done: 0, total: 1, speed: 0, eta: 0, message: 'Checking the encoder…' })
+    const choice = await chooseEncoder(request)
+    if (!choice.plan) throw new Error(noEncoderMessage(request, choice.attempts))
+    plan = choice.plan
+    check()
+  }
+  // Encoders given up on during this export. If none of them gets through, the encoders weren't the problem.
+  const gaveUpOn: EncoderPlan[] = []
+  const forgive = () => gaveUpOn.forEach((p) => clearEncoderTest(p, settings.width, settings.height, settings.fps))
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await encodeMedia(project, settings, range, handle, onProgress, check, mixOpts, plan, alpha)
+      return plan && request ? { ...res, encoder: { codec: plan.codec, hardware: plan.acceleration === 'prefer-hardware', note: fallbackNote(request, plan) } } : res
+    } catch (err) {
+      if (!(err instanceof EncoderFailure) || !plan || !request || attempt >= 3) {
+        forgive()
+        throw err
+      }
+      // The encoder passed its test and then failed on the real thing: start again on the next one.
+      markEncoderFailed(plan, settings.width, settings.height, settings.fps, errorText(err))
+      gaveUpOn.push(plan)
+      const next = await chooseEncoder(request)
+      if (!next.plan) {
+        forgive()
+        throw new Error(`${describeEncoder(plan)} stopped working (${errorText(err)}), and this computer has no other encoder for this export.`)
+      }
+      onProgress({ phase: 'preparing', done: 0, total: 1, speed: 0, eta: 0, message: `${describeEncoder(plan)} stopped working — starting again with ${describeEncoder(next.plan)}…` })
+      await api.export.restart(handle.id)
+      plan = next.plan
+    }
+  }
+}
+
+async function encodeMedia(
+  project: Project,
+  settings: ExportSettings,
+  range: [number, number],
+  handle: ExportHandle,
+  onProgress: (p: ExportProgress) => void,
+  check: () => void,
+  mixOpts: MixOptions,
+  plan: EncoderPlan | null,
+  alpha: boolean,
 ) {
   const api = desktop!
   const format = settings.format as 'mp4' | 'mov' | 'webm' | 'm4a'
-  const video = format !== 'm4a'
   const projectFps = project.settings.fps
   const start = range[0] / projectFps
   const duration = (range[1] - range[0]) / projectFps
 
+  // A full disk is not the encoder's fault: remembered, so it isn't retried on another encoder.
+  let writeError: unknown = null
   // Chunks are copied out of the muxer's buffer before crossing to the main process.
   const writable = new WritableStream<StreamTargetChunk>({
-    write: (chunk) => api.export.write(handle.id, chunk.position, chunk.data.slice()),
+    write: (chunk) =>
+      api.export.write(handle.id, chunk.position, chunk.data.slice()).catch((err: unknown) => {
+        writeError ??= err
+        throw err
+      }),
   })
   const output = new Output({
     format: format === 'webm' ? new WebMOutputFormat() : format === 'mov' ? new MovOutputFormat({ fastStart: false }) : new Mp4OutputFormat({ fastStart: false }),
@@ -299,18 +380,18 @@ async function exportMedia(
 
   let canvas: HTMLCanvasElement | null = null
   let videoSource: CanvasSource | null = null
-  // Transparency rides along as a second VP9 stream in the WebM.
-  const alpha = Boolean(settings.alpha) && canAlpha(settings.format, settings.codec)
-  if (video) {
+  if (plan) {
     canvas = document.createElement('canvas')
     canvas.width = settings.width
     canvas.height = settings.height
     videoSource = new CanvasSource(canvas, {
-      codec: settings.codec as VideoCodec,
-      bitrate: videoBitrate(settings.width, settings.height, settings.fps, settings.codec, settings.quality),
+      codec: plan.codec as VideoCodec,
+      bitrate: plan.bitrate,
+      // The level this size and frame rate really need (4K at 60 is past what 4K at 30 gets).
+      fullCodecString: plan.codecString,
       keyFrameInterval: 2,
       latencyMode: 'quality',
-      hardwareAcceleration: settings.hardware ? 'prefer-hardware' : 'no-preference',
+      hardwareAcceleration: plan.acceleration,
       ...(alpha ? { alpha: 'keep' as const } : {}),
     })
     output.addVideoTrack(videoSource, { frameRate: settings.fps })
@@ -323,14 +404,32 @@ async function exportMedia(
   }
   if (!videoSource && !audioSource) throw new Error('There’s no audio to export.')
 
+  /** What the encoder and the file writer throw, told apart. */
+  const encoding = async <T>(work: Promise<T>): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        work,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new EncoderFailure('The encoder stopped answering.')), ENCODER_STALL_MS)
+        }),
+      ])
+    } catch (err) {
+      if (writeError) throw writeError
+      throw err instanceof EncoderFailure ? err : new EncoderFailure(errorText(err))
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   // Frame-exact frames only while each export frame is drawn — the preview keeps its live players meanwhile.
-  const feeder = video ? new FrameFeeder(project, settings.width, settings.height) : null
+  const feeder = plan ? new FrameFeeder(project, settings.width, settings.height) : null
   await output.start()
   try {
-    const totalFrames = video ? Math.max(1, Math.round(duration * settings.fps)) : 0
+    const totalFrames = plan ? Math.max(1, Math.round(duration * settings.fps)) : 0
     const block = 2
     const blocks = Math.ceil(duration / block)
-    const progress = makeProgress(onProgress, video ? totalFrames : blocks, canvas)
+    const progress = makeProgress(onProgress, plan ? totalFrames : blocks, canvas)
     const ctx = canvas?.getContext('2d', { alpha, willReadFrequently: false }) ?? null
     let frame = 0
     for (let b = 0; b < blocks; b++) {
@@ -338,7 +437,7 @@ async function exportMedia(
       const t0 = b * block
       const t1 = Math.min(duration, t0 + block)
       if (audioSource) await audioSource.add(await renderMix(project, start + t0, start + t1, mixOpts))
-      if (!video) {
+      if (!plan) {
         progress(b + 1)
         continue
       }
@@ -348,15 +447,17 @@ async function exportMedia(
         const projectFrame = range[0] + (frame / settings.fps) * projectFps
         await feeder!.prepare(projectFrame)
         withVideoFrames(feeder!.frame, () => renderFrame(ctx!, project, projectFrame, { transparent: alpha }))
-        await videoSource!.add(frame / settings.fps, 1 / settings.fps)
+        await encoding(videoSource!.add(frame / settings.fps, 1 / settings.fps))
         progress(frame + 1)
       }
     }
-    progress(video ? totalFrames : blocks, true)
+    progress(plan ? totalFrames : blocks, true)
     onProgress({ phase: 'finishing', done: 1, total: 1, speed: 0, eta: 0, message: 'Finishing file…' })
     videoSource?.close()
     audioSource?.close()
-    await output.finalize()
+    // The encoder's last frames come out here.
+    if (plan) await encoding(output.finalize())
+    else await output.finalize()
     return await api.export.finish(handle.id)
   } catch (err) {
     await output.cancel().catch(() => {})

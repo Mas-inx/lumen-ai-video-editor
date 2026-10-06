@@ -27,7 +27,7 @@ export function startBridgeClient() {
     if (req.method === 'tools') return agentTools().map(({ name, description, inputSchema }) => ({ name, description: describeTool(name, description), inputSchema }))
     // Standing instructions for MCP clients: the skills that are on.
     if (req.method === 'instructions') return skillsPrompt()
-    return runAgentTool(req.tool ?? '', req.args ?? {})
+    return runAgentTool(req.tool ?? '', req.args ?? {}, { maxWait: req.maxWait })
   })
   api.bridge.onState(({ status, log }) => useBridge.setState({ status, log }))
   void api.bridge.state().then(({ status, log }) => useBridge.setState({ status, log }))

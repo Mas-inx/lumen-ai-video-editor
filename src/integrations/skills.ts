@@ -112,6 +112,8 @@ export async function loadSkill(skill: SkillInfo): Promise<SkillDoc> {
 const SKILL_TOOLS: Record<string, string[]> = {
   'motion-design-craft': ['render_motion_graphic', 'render_hyperframes_html', 'add_title', 'render_3d_title'],
   'hyperframes-compositions': ['render_hyperframes_html'],
+  // Its "textured" half is loaded from it, so the tool points at one styles skill, not two.
+  'motion-graphic-styles': ['render_hyperframes_html'],
   'blender-3d': ['render_3d_title', 'render_3d_background', 'render_blender_script', 'blender_live'],
   'generation-prompts': ['generate_image', 'generate_video', 'render_3d_background'],
   'sound-and-music': ['generate_music', 'generate_sound_effect', 'generate_voiceover', 'add_sound_effect', 'duck_music'],

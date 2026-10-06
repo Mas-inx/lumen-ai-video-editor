@@ -6,6 +6,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { IPC, type BridgeLogEntry, type BridgeState, type BridgeToolResult } from '../../shared/integrations'
 import { askEditor, editorInstructions, editorTools, editorWindow, initEditorRpc } from './editor-rpc'
+import { collect, RESULT_TOOL, RESULT_TOOL_DEFINITION, runWithin } from './long-calls'
 import { readJson, writeJson } from './paths'
 
 /**
@@ -31,6 +32,7 @@ const INSTRUCTIONS = `Lumen is a desktop video editor. You are editing the user'
 - list_catalog lists the valid ids for effects, transitions, looks and presets. batch_edit applies several commands as one all-or-nothing undo step.
 - Edits are regular undoable actions, visible in the user's History.
 - Blender and HyperFrames renders take a while: they return a job id; the finished clip lands in the project's media automatically. Use get_job to wait, then place_asset to put it on the timeline.
+- A tool that is still working after about 20 seconds (an export, a transcription, a subject cut-out) answers {"status":"running","call_id":…} instead of making you wait: the work carries on. Call get_tool_result with that call_id to get the result — don't call the tool again.
 - Scripts that run code in Blender need the user's approval in Lumen.
 - Lumen has skills — know-how for doing particular work well (motion design, Blender, grading, sound, short-form edits…). When a task matches one, call use_skill first and follow it; list_skills shows them, and tools name the skills that apply to them.`
 
@@ -62,19 +64,45 @@ function emit() {
   editorWindow()?.webContents.send(IPC.bridgeEvent, bridgeState())
 }
 
+/** Tools that wait on a job (renders, generations) wait at most this long for a client on the other end of HTTP. */
+const JOB_WAIT_SECONDS = 15
+/** How often a call that's still working says so, for clients that reset their timeout on progress. */
+const PROGRESS_EVERY_MS = 5000
+
+/** One tool call in the editor, however long it takes; logged when it ends. */
+async function callEditor(tool: string, args: Record<string, unknown>): Promise<BridgeToolResult> {
+  // Exports and renders can take many minutes.
+  const res = await askEditor({ method: 'call', tool, args, maxWait: JOB_WAIT_SECONDS }, 60 * 60_000)
+  const result: BridgeToolResult = res.ok ? (res.result as BridgeToolResult) : { content: [{ type: 'text', text: res.error ?? 'Failed' }], isError: true }
+  const first = result.content.find((c) => c.type === 'text')
+  log.unshift({ id: randomUUID(), tool, at: Date.now(), ok: !result.isError, detail: first && 'text' in first ? first.text.slice(0, 120) : undefined })
+  log.splice(60)
+  emit()
+  return result
+}
+
 function buildServer(skills = '') {
   const mcp = new Server({ name: 'lumen', title: 'Lumen video editor', version: app.getVersion() }, { capabilities: { tools: {} }, instructions: skills ? `${INSTRUCTIONS}\n\n${skills}` : INSTRUCTIONS })
-  mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: await editorTools() }))
-  mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
+  mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...(await editorTools()), RESULT_TOOL_DEFINITION] }))
+  mcp.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
     const tool = req.params.name
-    // Renders can take minutes; the editor enforces each tool's own wait limit.
-    const res = await askEditor({ method: 'call', tool, args: req.params.arguments ?? {} }, 20 * 60_000)
-    const result: BridgeToolResult = res.ok ? (res.result as BridgeToolResult) : { content: [{ type: 'text', text: res.error ?? 'Failed' }], isError: true }
-    const first = result.content.find((c) => c.type === 'text')
-    log.unshift({ id: randomUUID(), tool, at: Date.now(), ok: !result.isError, detail: first && 'text' in first ? first.text.slice(0, 120) : undefined })
-    log.splice(60)
-    emit()
-    return result as CallToolResult
+    const args = req.params.arguments ?? {}
+    // While it works, say so: clients that reset their timeout on progress then keep waiting.
+    const token = req.params._meta?.progressToken
+    let ticks = 0
+    const ticker =
+      token === undefined
+        ? null
+        : setInterval(() => {
+            void extra.sendNotification({ method: 'notifications/progress', params: { progressToken: token, progress: ++ticks, message: `${tool} is working…` } }).catch(() => {})
+          }, PROGRESS_EVERY_MS)
+    try {
+      // A call still working after 20 seconds answers "running" with a call id; get_tool_result collects it.
+      const result = tool === RESULT_TOOL ? await collect(args) : await runWithin(tool, () => callEditor(tool, args))
+      return result as CallToolResult
+    } finally {
+      if (ticker) clearInterval(ticker)
+    }
   })
   return mcp
 }
@@ -130,7 +158,10 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse, po
   const connecting = messages.some((m) => (m as { method?: unknown } | null)?.method === 'initialize')
   const skills = connecting ? await editorInstructions().catch(() => '') : ''
   const mcp = buildServer(skills)
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
+  // Tool calls answer as a stream: the headers go out at once and a comment every few seconds
+  // keeps the connection from looking dead while a tool works. Everything else is quick, plain JSON.
+  const calling = messages.some((m) => (m as { method?: unknown } | null)?.method === 'tools/call')
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: !calling, keepAliveMs: 5000 })
   res.on('close', () => {
     void transport.close()
     void mcp.close()

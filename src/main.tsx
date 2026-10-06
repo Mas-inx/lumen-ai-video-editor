@@ -1,7 +1,10 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
+import { installDecoderRepair } from './engine/codec-repair'
 import './styles/index.css'
+
+installDecoderRepair()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

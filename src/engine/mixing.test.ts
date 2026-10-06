@@ -91,5 +91,14 @@ describe('crossfades', () => {
     const p = getProject()
     expect(crossfades(p, p.clips[a])).toEqual({ fadeIn: 0, tail: 12 })
     expect(crossfades(p, p.clips[b])).toEqual({ fadeIn: 12, tail: 0 })
+
+    // Centred on the cut: half the fade is over the end of the first clip, half over the start of the second.
+    dispatch('clip.setTransition', { id: b, transition: { kind: 'dissolve', duration: 12, align: 'center' } })
+    expect(crossfades(getProject(), getProject().clips[a])).toEqual({ fadeIn: 0, tail: 6, outLead: 6 })
+    expect(crossfades(getProject(), getProject().clips[b])).toEqual({ fadeIn: 6, tail: 0, inLead: 6 })
+    // Before the cut: the first clip is out by the cut, the second comes in whole.
+    dispatch('clip.setTransition', { id: b, transition: { kind: 'dissolve', duration: 12, align: 'before' } })
+    expect(crossfades(getProject(), getProject().clips[a])).toEqual({ fadeIn: 0, tail: 0, outLead: 12 })
+    expect(crossfades(getProject(), getProject().clips[b])).toEqual({ fadeIn: 0, tail: 0, inLead: 12 })
   })
 })
