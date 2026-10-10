@@ -181,6 +181,22 @@ Scene detection, multicam sync, tracking and stabilization decode media with Med
 - Claude Code's thinking blocks;
 - Codex's reasoning items.
 
+Claude on an API key is asked for `display: 'summarized'`; without it, recent Claude models think in silence.
+
+**A reply is a transcript.** Every brain reports the same events ([`shared/ai.ts`](../shared/ai.ts)): a step starting, thinking, text, a tool call being written (with how much has arrived), a tool starting and ending (with what came back), notes, and the usage at the end. In the chat, a pure reducer ([`src/features/copilot/transcript.ts`](../src/features/copilot/transcript.ts)) folds them into an ordered list of parts plus one *activity*: what is happening right now and since when. The panel draws that list; nothing is inferred from timing. Tools report their own progress to the chat through `ctx.progress`.
+
+**Queue and stop.** A message sent while a reply is in progress is queued in the chat's store and sent when the reply ends (the queue waits after an error). Stop finalises the reply in the chat at once and ignores anything that arrives late, aborts the tool calls of that run in the renderer (each call carries its run's id and an `AbortSignal`), and tells the main process to abort the request.
+
+**Prompt caching** ([`electron/integrations/ai/agent.ts`](../electron/integrations/ai/agent.ts)). A cache matches an identical prefix, in the order tools, instructions, messages, so requests are built to keep that prefix the same:
+
+- Tools are sorted by name; the instructions hold nothing that changes between messages (the playhead and selection travel in the user's message).
+- With an Anthropic key, the instructions carry a one-hour breakpoint (which covers the tools too). Two more move with the conversation: one at the end of the earlier turns, one on the latest message, re-placed before every step, so each step reads the steps before it from cache.
+- History is trimmed from 80 messages to 40 in one go rather than one at a time, which would change the prefix on every message.
+- OpenAI gets a `promptCacheKey` per chat; Claude models through OpenRouter get `cache_control`.
+- Provider retries are done in Lumen's loop, not the SDK's, so the chat can say it is waiting. A retry continues from the steps already completed.
+
+**Attachments** ([`electron/integrations/ai/attachments.ts`](../electron/integrations/ai/attachments.ts)). Files attached to a message are saved under `userData/copilot/attachments/<chat>/`. History stores a marker for each, and every request puts the same bytes back in its place: text inline, pictures and PDFs as file parts for models that take them. Word documents are read to text when attached. Agents that only have Lumen's tools open them with `read_attachment`.
+
 **Skills** are SKILL.md files with a name and description in their frontmatter.
 
 - **Where they come from:** built in, the user's own (`userData/skills`), and Claude Code's (`~/.claude/skills`, read-only, off by default).
@@ -191,6 +207,12 @@ Scene detection, multicam sync, tracking and stabilization decode media with Med
 - **Pages** are fetched by the main process. It follows redirects itself and checks every hop's address after DNS, refusing private, loopback and link-local ones.
 - **Search** uses DuckDuckGo's HTML results.
 - **Screenshots** render offscreen in a separate session that blocks requests to private addresses.
+- **Video links** ([`electron/integrations/video-link.ts`](../electron/integrations/video-link.ts)) are watched without importing them. The main process finds what there is, and the editor lays the frames out as contact sheets.
+  - **YouTube:** the player endpoint, asked as YouTube's own apps ask it, gives the caption tracks and the *storyboard* spec — the sprite sheets of preview frames the player shows on hover. Captions become a transcript; tiles are cut from the sheets. The video itself is never downloaded.
+  - **Vimeo:** the same from its player config. **X:** the post's public video file. **Other pages:** `og:video`, JSON-LD and `<video>` sources.
+  - **A video file** is saved to a temporary directory (capped at 400 MB, deleted when the tool is done, swept after 15 minutes otherwise) and sampled with the editor's own decoder.
+  - **yt-dlp**, only if the user has it on the PATH, opens the rest: `--ignore-config --no-playlist --skip-download -J` for the details, then one small plain-file format.
+  - No cookies go out, nothing signs in, and every address — redirects and ones taken from pages and answers included — passes the same public-address check. These are not official APIs: when a site changes them, the tool says what it couldn't get.
 
 **Transcription** runs Whisper on the device (transformers.js + ONNX Runtime Web in a worker, WebGPU or WASM; the model downloads once through the main process and is cached), or through OpenAI or ElevenLabs.
 

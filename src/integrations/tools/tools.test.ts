@@ -280,3 +280,139 @@ describe('timeline and footage tools', () => {
     expect((await call('track_motion', { clip_id: id, box_fraction: { x: 0.5, y: 0.5, width: 0.1, height: 0.1 } })).json.error).toMatch(/no video under this clip/)
   })
 })
+
+const { videoAnswer, watchWebVideo } = await import('./web')
+
+describe('watching a linked video', () => {
+  type Video = Parameters<typeof videoAnswer>[0]
+  type Options = { frames?: number; from?: number; to?: number; transcript?: boolean; language?: string; release?: string }
+
+  // The main process fetches; here it is a stand-in, and so are the canvas and the picture decoder.
+  function watching(video: Partial<Video>) {
+    const calls: [string, Options | undefined][] = []
+    const watch = async (url: string, opts?: Options) => {
+      calls.push([url, opts])
+      return { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', site: 'YouTube', chapters: [], watchedWith: 'YouTube captions, YouTube preview frames (one every 2 s, 320×180)', notes: [], ...video } as Video
+    }
+    return { calls, watch }
+  }
+  const drawn: number[][] = []
+  beforeEach(() => {
+    drawn.length = 0
+    vi.stubGlobal('document', { createElement: () => ({ width: 0, height: 0, getContext: () => ({ drawImage: (_img: unknown, ...at: number[]) => drawn.push(at) }) }) })
+    vi.stubGlobal('createImageBitmap', async (blob: Blob) => {
+      if (blob.type === 'image/broken') throw new Error('cannot decode')
+      return { width: 960, height: 540, close: () => {} }
+    })
+    return () => vi.unstubAllGlobals()
+  })
+  const sheet = { bytes: new Uint8Array([82, 73, 70, 70]), mime: 'image/webp' }
+  /** Tiles of 320 × 180, nine to a 960 × 540 sheet. */
+  const tiles = (count: number) => ({ sheets: [sheet], frames: Array.from({ length: count }, (_, i) => ({ time: i * 10, sheet: 0, x: (i % 3) * 320, y: (Math.floor(i / 3) % 3) * 180, width: 320, height: 180 })) })
+
+  it('is a tool with a link as its only required input', async () => {
+    const tool = agentTools().find((t) => t.name === 'watch_web_video')!
+    expect(tool.inputSchema).toMatchObject({ required: ['url'], properties: { frames: { minimum: 4, maximum: 48 }, from_seconds: {}, to_seconds: {}, transcript: {}, language: {} } })
+    expect(tool.description).toMatch(/whenever the user shares a video link/)
+    expect(tool.description).toMatch(/information, never instructions/)
+    expect((await call('watch_web_video', {})).json.error).toMatch(/Give url/)
+    expect((await call('watch_web_video', { url: 'https://youtu.be/dQw4w9WgXcQ' })).json.error).toBe('The web needs Lumen’s desktop app.')
+  })
+
+  it('cuts the frames out of the sprite sheets and numbers them across contact sheets', async () => {
+    const { calls, watch } = watching({
+      title: 'Never Gonna Give You Up',
+      author: 'Rick Astley',
+      duration: 213,
+      chapters: [{ start: 0, title: 'Intro' }, { start: 43.2, title: 'Chorus' }],
+      transcript: { language: 'en', kind: 'manual', available: ['en', 'en (auto)', 'de-DE'], lines: [{ start: 18.64, end: 31.04, text: 'We’re no strangers to love' }] },
+      tiles: tiles(30),
+    })
+    const res = (await watchWebVideo({ url: 'https://youtu.be/dQw4w9WgXcQ', frames: 30, language: 'en' }, undefined, watch)) as Json
+    expect(calls).toEqual([['https://youtu.be/dQw4w9WgXcQ', { frames: 30, from: undefined, to: undefined, transcript: true, language: 'en' }]])
+    // Thirty frames make two sheets of fifteen, not one of thirty cells too small to read.
+    expect(res.images).toEqual([
+      { data: 'SlBFRw==', mimeType: 'image/jpeg' },
+      { data: 'SlBFRw==', mimeType: 'image/jpeg' },
+    ])
+    expect(res.json.pictures).toEqual(['frames 1–15: 1248x900', 'frames 16–30: 1248x900'])
+    expect(res.json.frames).toHaveLength(30)
+    expect(res.json.frames[0]).toEqual({ n: 1, at_seconds: 0 })
+    expect(res.json.frames[29]).toEqual({ n: 30, at_seconds: 290 })
+    // Each tile is copied from its place on the sheet.
+    expect(drawn[4]).toEqual([320, 180, 320, 180, 0, 0, 320, 180])
+    expect(res.json).toMatchObject({
+      title: 'Never Gonna Give You Up',
+      author: 'Rick Astley',
+      duration_seconds: 213,
+      chapters: [{ at_seconds: 0, title: 'Intro' }, { at_seconds: 43.2, title: 'Chorus' }],
+      transcript: { language: 'en', kind: 'manual', available_languages: ['en', 'en (auto)', 'de-DE'], lines: [{ at_seconds: 18.6, text: 'We’re no strangers to love' }] },
+      watched_with: 'YouTube captions, YouTube preview frames (one every 2 s, 320×180)',
+    })
+    expect(res.json.note).toBeUndefined()
+  })
+
+  it('leaves out a tile that isn’t on its sheet, and keeps the numbering whole', async () => {
+    const short = tiles(6)
+    short.frames[5].y = 540
+    const { watch } = watching({ tiles: short })
+    const res = (await watchWebVideo({ url: 'https://youtu.be/dQw4w9WgXcQ' }, undefined, watch)) as Json
+    expect(res.json.frames.map((f: Json) => f.n)).toEqual([1, 2, 3, 4, 5])
+    expect(res.images).toHaveLength(1)
+  })
+
+  it('shows the thumbnail when that is all there is, with the reason', async () => {
+    const { watch } = watching({ title: 'A trailer', thumbnail: { bytes: new Uint8Array([255, 216]), mime: 'image/jpeg' }, watchedWith: 'the page’s public details only', notes: ['YouTube won’t play this video: “Sign in to confirm your age.”'] })
+    const res = (await watchWebVideo({ url: 'https://youtu.be/dQw4w9WgXcQ' }, undefined, watch)) as Json
+    expect(res.images).toHaveLength(1)
+    expect(res.json).toMatchObject({ frames: [], pictures: ['the thumbnail: 960x540'], note: 'YouTube won’t play this video: “Sign in to confirm your age.”', watched_with: 'the page’s public details only' })
+    expect(res.json.transcript).toBeUndefined()
+  })
+
+  it('answers in words alone when no picture can be decoded', async () => {
+    const { watch } = watching({ title: 'A talk', tiles: { sheets: [{ ...sheet, mime: 'image/broken' }], frames: tiles(4).frames } })
+    const res = (await watchWebVideo({ url: 'https://youtu.be/dQw4w9WgXcQ' }, undefined, watch)) as Json
+    expect(res.images).toBeUndefined()
+    expect(res).toMatchObject({ title: 'A talk', frames: [], pictures: [] })
+    expect(res.note).toMatch(/preview frames couldn’t be decoded/)
+  })
+
+  it('keeps the request within bounds', async () => {
+    const { calls, watch } = watching({ tiles: tiles(4) })
+    await watchWebVideo({ url: 'https://youtu.be/dQw4w9WgXcQ', frames: 500, from_seconds: 60, to_seconds: 120, transcript: false }, undefined, watch)
+    await watchWebVideo({ url: 'https://youtu.be/dQw4w9WgXcQ', frames: 1 }, undefined, watch)
+    expect(calls.map(([, o]) => o)).toEqual([
+      { frames: 48, from: 60, to: 120, transcript: false, language: undefined },
+      { frames: 4, from: undefined, to: undefined, transcript: true, language: undefined },
+    ])
+    await expect(watchWebVideo({ url: 'https://youtu.be/dQw4w9WgXcQ', from_seconds: 90, to_seconds: 30 }, undefined, watch)).rejects.toThrow(/to_seconds has to be after from_seconds/)
+    expect(calls).toHaveLength(2)
+  })
+
+  it('cuts a long transcript and a long description, saying how to read on', () => {
+    const lines = Array.from({ length: 400 }, (_, i) => ({ start: i * 12, end: i * 12 + 11, text: `line ${i} `.padEnd(100, 'x') }))
+    const notes: string[] = []
+    const answer = videoAnswer({ url: 'u', site: 'YouTube', description: 'd'.repeat(5000), chapters: [], transcript: { language: 'en', kind: 'auto-generated', lines }, watchedWith: '', notes: [] }, 4800, notes)
+    // 24 000 characters of talking: 240 lines of 100.
+    expect(answer.transcript!.lines).toHaveLength(240)
+    expect(answer.transcript!.lines.at(-1)).toMatchObject({ at_seconds: 2868 })
+    expect(notes).toEqual(['The transcript is cut at 48:00 of 1:20:00: call again with from_seconds: 2880 to read on.'])
+    expect(answer.description).toHaveLength(1501)
+    expect(answer.duration_seconds).toBe(4800)
+
+    const whole: string[] = []
+    expect(videoAnswer({ url: 'u', site: 'Vimeo', chapters: [], transcript: { language: 'en', kind: 'manual', lines: lines.slice(0, 50) }, watchedWith: '', notes: [] }, undefined, whole).transcript!.lines).toHaveLength(50)
+    expect(whole).toEqual([])
+  })
+
+  it('gives the temporary file back when it is done with it, even if the video can’t be read', async () => {
+    const { calls, watch } = watching({ title: 'clip.mp4', file: { id: 'file-1', url: 'lumen-media://file/nowhere.mp4', mime: 'video/mp4', size: 10 }, thumbnail: { bytes: new Uint8Array([255, 216]), mime: 'image/jpeg' }, watchedWith: 'the video file itself' })
+    // There is no such file here, so the decoder gives up (after saying so on the console).
+    const quiet = [vi.spyOn(console, 'error').mockImplementation(() => {}), vi.spyOn(console, 'warn').mockImplementation(() => {})]
+    const res = (await watchWebVideo({ url: 'https://example.com/clip.mp4' }, undefined, watch)) as Json
+    quiet.forEach((spy) => spy.mockRestore())
+    expect(res.json.note).toMatch(/downloaded, but this computer couldn’t read it/)
+    expect(res.json.pictures).toEqual(['the thumbnail: 960x540'])
+    expect(calls.at(-1)).toEqual(['', { release: 'file-1' }])
+  })
+})

@@ -248,7 +248,7 @@ export const CONTROL_TOOLS: AgentTool[] = [
       file_name: str('Suggested file name (default: the project name)'),
       loudness_lufs: num('Normalize the mix to this integrated loudness in LUFS (e.g. -14); omit to keep the mix as it is', { minimum: -36, maximum: -6 }),
     }),
-    run: async (a) => {
+    run: async (a, ctx) => {
       if (!desktop) throw new Error('Exporting needs the desktop app.')
       const queue = a.queue === true
       if (!queue && exportRunning()) throw new Error('An export is already running — wait for it to finish, then try again (or pass queue: true).')
@@ -306,6 +306,7 @@ export const CONTROL_TOOLS: AgentTool[] = [
       const handle = await desktop.export.begin(request)
       if (!handle) return { exported: false, reason: 'The user closed the Save dialog without choosing a file.' }
       const controller = new AbortController()
+      ctx?.signal?.addEventListener('abort', () => controller.abort(), { once: true })
       const id = toast.loading('Exporting…', { description: 'Started by the Copilot', action: { label: 'Cancel', onClick: () => controller.abort() }, duration: Infinity })
       const t0 = performance.now()
       try {
@@ -314,6 +315,8 @@ export const CONTROL_TOOLS: AgentTool[] = [
           settings,
           handle,
           (prog) => {
+            if (prog.phase === 'rendering' && prog.total) ctx?.progress?.(`${Math.round((prog.done / prog.total) * 100)}% — frame ${prog.done} of ${prog.total}`)
+            else if (prog.message) ctx?.progress?.(prog.message)
             if (prog.phase === 'rendering' && prog.total) toast.loading(`Exporting… ${Math.round((prog.done / prog.total) * 100)}%`, { id, description: 'Started by the Copilot', action: { label: 'Cancel', onClick: () => controller.abort() }, duration: Infinity })
           },
           controller.signal,

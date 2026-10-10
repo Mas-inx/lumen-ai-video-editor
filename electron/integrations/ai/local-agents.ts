@@ -289,7 +289,15 @@ function textOf(content: unknown): string {
 }
 
 const brief = (s: string) => s.replace(/\s+/g, ' ').trim().slice(0, 160)
-const NOT_SIGNED_IN = /not logged in|please run \/login|invalid api key|oauth token|authentication|unauthori[sz]ed|\blogin\b/i
+/** A tool's result as the chat shows it when a step is opened. */
+const clip = (s: string) => (s.length > 4000 ? `${s.slice(0, 4000)}\n… (${s.length - 4000} more characters)` : s)
+
+/** Local agents only have Lumen's tools: files attached to a message are named, and read_attachment opens them. */
+export function attachmentsNote(req: AgentRunRequest) {
+  if (!req.attachments?.length) return ''
+  return `\n[Lumen] The user attached ${req.attachments.length === 1 ? 'a file' : 'files'} to this message. Open each with the read_attachment tool before answering: ${req.attachments.map((a) => `“${a.name}” (attachment_id ${a.id}, ${a.kind})`).join('; ')}.`
+}
+const NOT_SIGNED_IN = /not logged in|please run \/login|invalid api key|oauth (token|session)|session expired|authenticat(e|ion)|unauthori[sz]ed|\blogin\b/i
 
 export async function runLocal(req: AgentRunRequest, emit: Emit): Promise<void> {
   if (req.target.kind !== 'local') return
@@ -298,7 +306,7 @@ export async function runLocal(req: AgentRunRequest, emit: Emit): Promise<void> 
   if (!state.found || !state.path) return emit({ runId: req.runId, type: 'error', code: 'not-installed', message: `${id === 'claude-code' ? 'Claude Code' : 'Codex'} isn’t installed on this computer.` })
   if (!state.signedIn) return emit({ runId: req.runId, type: 'error', code: 'not-signed-in', message: `Sign in to ${id === 'claude-code' ? 'Claude Code' : 'Codex'} first — it uses your own account.` })
   const { url, token } = await bridgeEndpoint()
-  const prompt = req.context ? `${req.context}\n\n${req.prompt}` : req.prompt
+  const prompt = `${req.context ? `${req.context}${attachmentsNote(req)}\n\n` : attachmentsNote(req) ? `${attachmentsNote(req).trim()}\n\n` : ''}${req.prompt}`
   if (id === 'claude-code') await runClaude(req, state.path, url, token, prompt, emit)
   else await runCodex(req, state.path, url, token, prompt, emit)
 }
@@ -369,6 +377,9 @@ async function runClaude(req: AgentRunRequest, bin: string, url: string, token: 
   let streamedText = false
   let streamedThinking = false
   let afterTool = false
+  let steps = 0
+  // Content blocks of the message being streamed, by index: a tool call being written, or thinking.
+  const blocks = new Map<number, { kind: 'tool'; id: string; tool: string; chars: number; told: number } | { kind: 'thinking' }>()
   const text = (delta: string) => {
     if (!delta) return
     emit({ runId: req.runId, type: 'text', delta: afterTool && streamedText ? `\n\n${delta}` : delta })
@@ -389,7 +400,27 @@ async function runClaude(req: AgentRunRequest, bin: string, url: string, token: 
       if (lumen && lumen.status !== 'connected') emit({ runId: req.runId, type: 'status', message: `Lumen tools: ${lumen.status}` })
     } else if (msg.type === 'stream_event') {
       const ev = msg.event
-      if (ev?.type === 'content_block_delta' && ev.delta?.type === 'text_delta') text(ev.delta.text)
+      if (ev?.type === 'message_start') {
+        blocks.clear()
+        emit({ runId: req.runId, type: 'step', index: ++steps })
+      } else if (ev?.type === 'content_block_start' && ev.content_block?.type === 'tool_use') {
+        const tool = String(ev.content_block.name).replace(/^mcp__lumen__/, '')
+        blocks.set(Number(ev.index), { kind: 'tool', id: String(ev.content_block.id), tool, chars: 0, told: Date.now() })
+        emit({ runId: req.runId, type: 'tool-input', callId: String(ev.content_block.id), tool, chars: 0 })
+      } else if (ev?.type === 'content_block_start' && ev.content_block?.type === 'thinking') blocks.set(Number(ev.index), { kind: 'thinking' })
+      else if (ev?.type === 'content_block_stop') {
+        if (blocks.get(Number(ev.index))?.kind === 'thinking') emit({ runId: req.runId, type: 'reasoning-end' })
+        blocks.delete(Number(ev.index))
+      } else if (ev?.type === 'content_block_delta' && ev.delta?.type === 'input_json_delta') {
+        const block = blocks.get(Number(ev.index))
+        if (block?.kind === 'tool') {
+          block.chars += String(ev.delta.partial_json ?? '').length
+          if (Date.now() - block.told > 300) {
+            block.told = Date.now()
+            emit({ runId: req.runId, type: 'tool-input', callId: block.id, tool: block.tool, chars: block.chars })
+          }
+        }
+      } else if (ev?.type === 'content_block_delta' && ev.delta?.type === 'text_delta') text(ev.delta.text)
       else if (ev?.type === 'content_block_delta' && ev.delta?.type === 'thinking_delta' && ev.delta.thinking) {
         streamedThinking = true
         emit({ runId: req.runId, type: 'reasoning', delta: String(ev.delta.thinking) })
@@ -404,7 +435,7 @@ async function runClaude(req: AgentRunRequest, bin: string, url: string, token: 
       }
     } else if (msg.type === 'user') {
       for (const block of msg.message?.content ?? []) {
-        if (block.type === 'tool_result') emit({ runId: req.runId, type: 'tool-end', callId: block.tool_use_id, tool: '', ok: !block.is_error, summary: brief(textOf(block.content)) })
+        if (block.type === 'tool_result') emit({ runId: req.runId, type: 'tool-end', callId: block.tool_use_id, tool: '', ok: !block.is_error, summary: brief(textOf(block.content)), output: clip(textOf(block.content)) })
       }
     } else if (msg.type === 'result') {
       finished = true
@@ -413,7 +444,14 @@ async function runClaude(req: AgentRunRequest, bin: string, url: string, token: 
         emit({ runId: req.runId, type: 'error', code: NOT_SIGNED_IN.test(result) ? 'not-signed-in' : 'failed', message: result || `Claude Code stopped (${msg.subtype}).` })
       } else {
         if (!streamedText && result) text(result)
-        emit({ runId: req.runId, type: 'done', usage: { inputTokens: msg.usage?.input_tokens, outputTokens: msg.usage?.output_tokens, costUsd: msg.total_cost_usd } })
+        // Claude Code counts cached tokens apart from fresh input: here input is all of it, as for API models.
+        const cached = Number(msg.usage?.cache_read_input_tokens) || 0
+        const written = Number(msg.usage?.cache_creation_input_tokens) || 0
+        emit({
+          runId: req.runId,
+          type: 'done',
+          usage: { inputTokens: (Number(msg.usage?.input_tokens) || 0) + cached + written, outputTokens: msg.usage?.output_tokens, cachedTokens: cached || undefined, cacheWriteTokens: written || undefined, costUsd: msg.total_cost_usd, steps: steps || undefined },
+        })
       }
     }
   }
@@ -464,7 +502,10 @@ async function runCodex(req: AgentRunRequest, bin: string, url: string, token: s
     else if (ev.type === 'item.started' || ev.type === 'item.completed') {
       const item = ev.item ?? {}
       const done = ev.type === 'item.completed'
-      if (item.type === 'reasoning' && done && item.text) emit({ runId: req.runId, type: 'reasoning', delta: `${String(item.text)}\n\n` })
+      if (item.type === 'reasoning' && done && item.text) {
+        emit({ runId: req.runId, type: 'reasoning', delta: `${String(item.text)}\n\n` })
+        emit({ runId: req.runId, type: 'reasoning-end' })
+      }
       else if (item.type === 'agent_message' && done && item.text) {
         emit({ runId: req.runId, type: 'text', delta: wroteText || afterTool ? `\n\n${item.text}` : item.text })
         wroteText = true
@@ -474,7 +515,8 @@ async function runCodex(req: AgentRunRequest, bin: string, url: string, token: s
         if (!done) emit({ runId: req.runId, type: 'tool-start', callId: item.id, tool: String(item.tool ?? 'tool'), input: item.arguments })
         else {
           const errorText = item.error?.message ?? (typeof item.error === 'string' ? item.error : '')
-          emit({ runId: req.runId, type: 'tool-end', callId: item.id, tool: String(item.tool ?? ''), ok: item.status !== 'failed' && !errorText, summary: brief(errorText || textOf(item.result?.content)) })
+          const out = errorText || textOf(item.result?.content)
+          emit({ runId: req.runId, type: 'tool-end', callId: item.id, tool: String(item.tool ?? ''), ok: item.status !== 'failed' && !errorText, summary: brief(out), output: clip(out) })
         }
       } else if (item.type === 'command_execution') {
         afterTool = true
@@ -485,7 +527,7 @@ async function runCodex(req: AgentRunRequest, bin: string, url: string, token: s
       }
     } else if (ev.type === 'turn.completed') {
       finished = true
-      emit({ runId: req.runId, type: 'done', usage: { inputTokens: ev.usage?.input_tokens, outputTokens: ev.usage?.output_tokens } })
+      emit({ runId: req.runId, type: 'done', usage: { inputTokens: ev.usage?.input_tokens, outputTokens: ev.usage?.output_tokens, cachedTokens: Number(ev.usage?.cached_input_tokens) || undefined } })
     } else if (ev.type === 'turn.failed' || ev.type === 'error') {
       finished = true
       const message = String(ev.error?.message ?? ev.message ?? 'Codex failed.')

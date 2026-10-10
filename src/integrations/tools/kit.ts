@@ -16,6 +16,10 @@ export type ToolArgs = Record<string, unknown>
 export interface ToolContext {
   /** The longest to wait on a job before answering, in seconds — set for callers over HTTP, who time out. */
   maxWait?: number
+  /** Aborts when the user stops the Copilot turn that made this call: long work should stop with it. */
+  signal?: AbortSignal
+  /** Says how the work is getting on; the chat shows it on the tool's step. */
+  progress?: (message: string) => void
 }
 
 export interface AgentTool extends BridgeTool {

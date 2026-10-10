@@ -1,22 +1,28 @@
-import { dynamicTool, isStepCount, jsonSchema, streamText, type ModelMessage, type ToolSet } from 'ai'
-import { COPILOT_INSTRUCTIONS, type AgentErrorCode, type AgentEvent, type AgentEventBody, type AgentRunRequest } from '../../../shared/ai'
+import { dynamicTool, isStepCount, jsonSchema, streamText, type ModelMessage, type SystemModelMessage, type ToolSet } from 'ai'
+import { COPILOT_INSTRUCTIONS, type AgentErrorCode, type AgentEvent, type AgentEventBody, type AgentRunRequest, type AgentUsage } from '../../../shared/ai'
 import { IPC, type BridgeTool } from '../../../shared/integrations'
 import { callEditorTool, editorTools, editorWindow } from '../editor-rpc'
+import { forgetAttachments, readAttachment } from './attachments'
 import { deleteHistory, readHistory, writeHistory } from './chats'
-import { effortSettings, geminiEfforts, openaiEfforts, type ModelApi } from './effort'
+import { claudeEfforts, effortSettings, geminiEfforts, openaiEfforts, type ModelApi } from './effort'
 import { forgetLocalSession, runLocal, stopLocal } from './local-agents'
 import { languageModel, MissingKeyError } from './providers'
 
 /**
  * The Copilot's brain when it's a model the user brought a key for: an AI SDK
  * tool loop whose tools are the editor's own (the same ones Lumen serves over
- * MCP). Events stream to the editor as they happen.
+ * MCP). Everything it does streams to the editor as it happens: each request
+ * to the model, its thinking, the tool call it is writing, each tool's result.
  */
 
 const histories = new Map<string, ModelMessage[]>()
 const controllers = new Map<string, AbortController>()
-const MAX_STEPS = 24
-const MAX_HISTORY = 40
+const MAX_STEPS = 40
+/** The conversation is cut back to KEEP messages once it passes MAX — in one go, so the cached prefix stays put between cuts. */
+const MAX_HISTORY = 80
+const KEEP_HISTORY = 40
+/** Tries after the provider is busy or the connection drops, and how long to wait before each. */
+const RETRY_WAITS = [2, 6, 15]
 
 export function emitAgent(e: AgentEvent) {
   editorWindow()?.webContents.send(IPC.aiEvent, e)
@@ -39,6 +45,7 @@ export function forgetConversation(conversationId: string) {
   histories.delete(conversationId)
   deleteHistory(conversationId)
   forgetLocalSession(conversationId)
+  forgetAttachments(conversationId)
 }
 
 /** What a conversation remembers: this session's turns, or those saved before a restart. */
@@ -51,21 +58,25 @@ function historyOf(conversationId: string) {
   return h
 }
 
+type Options = Record<string, Record<string, unknown>>
+type ProviderOptions = NonNullable<Parameters<typeof streamText>[0]['providerOptions']>
+
 /**
- * Asks reasoning models to show their thinking: OpenAI sends summaries of it
- * and Gemini its thoughts only when asked (Claude's thinking streams as is).
+ * Asks reasoning models to show their thinking. Claude 4.6 and later think
+ * adaptively and send nothing of it unless a summary is asked for (a long,
+ * silent wait otherwise); OpenAI sends summaries and Gemini its thoughts only
+ * when asked.
  */
-function thinkingOptions(api: ModelApi, modelId: string): Record<string, Record<string, unknown>> {
+export function thinkingOptions(api: ModelApi, modelId: string): Options {
+  if (api === 'anthropic' && claudeEfforts(modelId).includes('max')) return { anthropic: { thinking: { type: 'adaptive', display: 'summarized' } } }
   if (api === 'openai' && openaiEfforts(modelId).length) return { openai: { reasoningSummary: 'auto' } }
   if (api === 'google' && geminiEfforts(modelId).length) return { google: { thinkingConfig: { includeThoughts: true } } }
   return {}
 }
 
-type ProviderOptions = NonNullable<Parameters<typeof streamText>[0]['providerOptions']>
-
-/** Merges provider options one provider deep (effort settings and thinking display both live there). */
-function mergeOptions(...all: (Record<string, Record<string, unknown>> | undefined)[]) {
-  const out: Record<string, Record<string, unknown>> = {}
+/** Merges provider options one provider deep (effort, thinking display and caching all live there). */
+function mergeOptions(...all: (Options | undefined)[]) {
+  const out: Options = {}
   for (const opts of all) for (const [provider, values] of Object.entries(opts ?? {})) out[provider] = { ...out[provider], ...values }
   return out
 }
@@ -75,6 +86,114 @@ function cleanSchema(schema: Record<string, unknown>) {
   const { $schema: _unused, ...rest } = schema
   void _unused
   return { type: 'object', properties: {}, ...rest } as Parameters<typeof jsonSchema>[0]
+}
+
+// ─── Prompt caching ──────────────────────────────────────────────────────
+//
+// Every step of a turn sends the tools, the instructions and the whole
+// conversation again. Providers bill a cached prefix at a fraction, as long as
+// it is byte for byte what was sent before — so the tools go in a fixed order,
+// the instructions never change within a chat, and what changes each turn (the
+// playhead, the selection) rides in the user's message, after everything cached.
+//
+// Claude caches only up to marked points: the end of the instructions (which
+// covers the tools before them) and the end of the conversation so far. OpenAI
+// and Gemini cache by themselves; OpenAI routes a chat's requests to the same
+// cache when they share a key.
+
+type CacheControl = { type: 'ephemeral'; ttl?: '1h' }
+
+/**
+ * How long the tools and instructions stay cached. People stop and think
+ * between requests: an hour (written at twice the price, read many times) on
+ * Anthropic's own API, the five-minute default through gateways.
+ */
+const prefixCache = (provider: string): CacheControl => (provider === 'anthropic' ? { type: 'ephemeral', ttl: '1h' } : { type: 'ephemeral' })
+
+/** The standing instructions, marked as the end of the cached prefix for Claude. */
+export function systemPrompt(api: ModelApi, provider: string, instructions: string | undefined): string | SystemModelMessage[] {
+  const text = instructions ? `${COPILOT_INSTRUCTIONS}\n\n${instructions}` : COPILOT_INSTRUCTIONS
+  if (api !== 'anthropic') return text
+  return [{ role: 'system', content: text, providerOptions: { anthropic: { cacheControl: prefixCache(provider) } } }]
+}
+
+function marked(m: ModelMessage): ModelMessage {
+  return { ...m, providerOptions: { ...m.providerOptions, anthropic: { ...m.providerOptions?.anthropic, cacheControl: { type: 'ephemeral' } } } } as ModelMessage
+}
+
+/** A message without a cache mark from an earlier step (each step's messages build on the last step's). */
+function unmarked(m: ModelMessage): ModelMessage {
+  const anthropic = m.providerOptions?.anthropic as Record<string, unknown> | undefined
+  if (!anthropic?.cacheControl) return m
+  const { cacheControl: _mark, ...rest } = anthropic
+  void _mark
+  return { ...m, providerOptions: { ...m.providerOptions, anthropic: rest } } as ModelMessage
+}
+
+/**
+ * Marks where Claude caches the conversation: the last message (each step then
+ * reads everything before it from the cache) and the last message of earlier
+ * turns (their stored form differs from what the turn itself sent, so it is
+ * written once at the start of a turn and read by every step after). Only
+ * those two: Claude takes four marks a request, and the instructions hold one.
+ */
+export function cacheMarks(messages: ModelMessage[], earlier: number): ModelMessage[] {
+  const last = messages.length - 1
+  return messages.map((m, i) => (i === last || (earlier > 0 && i === earlier - 1) ? marked(m) : unmarked(m)))
+}
+
+/** Cache settings on the request itself, per provider. */
+function cacheOptions(api: ModelApi, modelId: string, conversationId: string): Options {
+  if (api === 'openai') return { openai: { promptCacheKey: conversationId.slice(0, 64) } }
+  // OpenRouter passes this through to Claude models, which cache automatically with it.
+  if (api === 'openrouter' && modelId.startsWith('anthropic/')) return { openrouter: { cache_control: { type: 'ephemeral' } } }
+  return {}
+}
+
+// ─── Attached files ──────────────────────────────────────────────────────
+//
+// A message's attachments are stored as markers and put back from disk for
+// every request, so the history stays small and each turn sends the same bytes
+// (which is what lets them be read from the cache).
+
+const MARKER = /^\[\[lumen-attachment:(att_[0-9a-f]{12})\]\]$/
+const marker = (id: string) => `[[lumen-attachment:${id}]]`
+
+/** The user's turn as it's stored. */
+export function userTurn(req: Pick<AgentRunRequest, 'prompt' | 'context' | 'attachments'>): ModelMessage {
+  const text = req.context ? `${req.context}\n\n${req.prompt}` : req.prompt
+  if (!req.attachments?.length) return { role: 'user', content: text }
+  return { role: 'user', content: [...req.attachments.map((a) => ({ type: 'text' as const, text: marker(a.id) })), { type: 'text', text }] }
+}
+
+type UserPart = Exclude<Extract<ModelMessage, { role: 'user' }>['content'], string>[number]
+
+function attachmentParts(conversationId: string, id: string, can: { vision: boolean; pdf: boolean }): UserPart[] {
+  const found = readAttachment(conversationId, id)
+  if (!found) return [{ type: 'text', text: '[An attached file that is no longer kept.]' }]
+  const { meta, bytes } = found
+  const label = `Attached file “${meta.name}” (${id})`
+  if (meta.kind === 'text') return [{ type: 'text', text: `${label}:\n<file>\n${bytes.toString('utf8')}\n</file>` }]
+  if (meta.kind === 'image') {
+    if (!can.vision) return [{ type: 'text', text: `[${label}: a picture, which this model can’t see.]` }]
+    return [{ type: 'text', text: `${label}:` }, { type: 'file', data: bytes, mediaType: meta.mime }]
+  }
+  if (!can.pdf) return [{ type: 'text', text: `[${label}: a PDF, which this model can’t open. Tell the user, and suggest a Claude, GPT or Gemini model, or pasting the text.]` }]
+  return [{ type: 'text', text: `${label}:` }, { type: 'file', data: bytes, mediaType: 'application/pdf', filename: meta.name }]
+}
+
+/** Puts attached files back where their markers are, in the form this model takes. */
+export function withAttachments(messages: ModelMessage[], conversationId: string, can: { vision: boolean; pdf: boolean }): ModelMessage[] {
+  return messages.map((m) => {
+    if (m.role !== 'user' || !Array.isArray(m.content) || !m.content.some((p) => p.type === 'text' && MARKER.test(p.text))) return m
+    return {
+      ...m,
+      content: m.content.flatMap((part) => {
+        const id = part.type === 'text' ? MARKER.exec(part.text)?.[1] : undefined
+        return id ? attachmentParts(conversationId, id, can) : [part]
+      }),
+    }
+  })
 }
 
 // ─── Pictures ────────────────────────────────────────────────────────────
@@ -108,7 +227,7 @@ function isPictureMessage(m: ModelMessage) {
 
 const isImageType = (mediaType: unknown) => typeof mediaType === 'string' && mediaType.startsWith('image')
 
-/** Replaces images with a note — for the stored history, and for a model that can't see. */
+/** Replaces tool pictures with a note — for the stored history, and for a model that can't see. */
 function stripPictures(messages: ModelMessage[]): ModelMessage[] {
   return messages.map((m) => {
     if (m.role === 'tool') {
@@ -126,14 +245,12 @@ function stripPictures(messages: ModelMessage[]): ModelMessage[] {
         }),
       }
     }
-    if (m.role === 'user' && Array.isArray(m.content) && m.content.some((c) => c.type === 'image' || (c.type === 'file' && isImageType(c.mediaType)))) {
-      return { ...m, content: m.content.filter((c) => c.type === 'text') }
-    }
+    if (m.role === 'user' && Array.isArray(m.content) && isPictureMessage(m)) return { ...m, content: m.content.filter((c) => c.type === 'text') }
     return m
   })
 }
 
-/** What's kept between turns: no pictures, and very long tool results cut down so the conversation stays affordable. */
+/** What's kept between turns: no tool pictures, and very long tool results cut down so the conversation stays affordable. */
 function forHistory(messages: ModelMessage[]): ModelMessage[] {
   const LIMIT = 6000
   return stripPictures(messages).map((m) => {
@@ -177,14 +294,33 @@ function isEffortRejection(err: unknown) {
   return /effort|reasoning|thinking|budget/i.test(message(err))
 }
 
-function buildTools(defs: BridgeTool[], pictures: Map<string, Picture[]>, modes: () => { native: boolean; vision: boolean }): ToolSet {
+/** The provider is busy, or the connection dropped: worth another try. */
+export function isRetryable(err: unknown) {
+  const code = status(err)
+  if (code !== undefined) return code === 408 || code === 409 || code === 429 || code >= 500
+  return /fetch failed|network|socket|ECONNRESET|ETIMEDOUT|EAI_AGAIN|terminated|overloaded/i.test(message(err))
+}
+
+/** Rejects as soon as the run is stopped, whatever the work underneath is doing. */
+function abortable<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return work
+  if (signal.aborted) return Promise.reject(new DOMException('Stopped.', 'AbortError'))
+  return new Promise<T>((resolve, reject) => {
+    const stop = () => reject(new DOMException('Stopped.', 'AbortError'))
+    signal.addEventListener('abort', stop, { once: true })
+    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', stop))
+  })
+}
+
+function buildTools(defs: BridgeTool[], runId: string, pictures: Map<string, Picture[]>, modes: () => { native: boolean; vision: boolean }): ToolSet {
   const tools: ToolSet = {}
-  for (const def of defs) {
+  // In name order whatever order they were registered or connected in: the tool list opens every request, and a cached prefix has to match exactly.
+  for (const def of [...defs].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
     tools[def.name] = dynamicTool({
       description: def.description,
       inputSchema: jsonSchema(cleanSchema(def.inputSchema)),
-      execute: async (input, { toolCallId }): Promise<ToolOutput> => {
-        const res = await callEditorTool(def.name, (input ?? {}) as Record<string, unknown>)
+      execute: async (input, { toolCallId, abortSignal }): Promise<ToolOutput> => {
+        const res = await abortable(callEditorTool(def.name, (input ?? {}) as Record<string, unknown>, undefined, runId), abortSignal)
         const text = res.content.flatMap((c) => (c.type === 'text' ? [c.text] : [])).join('\n')
         if (res.isError) throw new Error(text || 'The tool failed.')
         const pics = res.content.flatMap((c) => (c.type === 'image' ? [{ data: c.data, mimeType: c.mimeType }] : []))
@@ -215,13 +351,13 @@ function withPictures(messages: ModelMessage[], pictures: Map<string, Picture[]>
   const pics = last.content.flatMap((part) => (part.type === 'tool-result' ? (pictures.get(part.toolCallId) ?? []) : []))
   if (!pics.length) return undefined
   const earlier = messages.map((m) => (isPictureMessage(m) ? { role: 'user' as const, content: [{ type: 'text' as const, text: '[Earlier pictures — no longer attached.]' }] } : m))
-  return [...earlier, { role: 'user', content: [{ type: 'text', text: PICTURES_NOTE }, ...pics.map((p) => ({ type: 'image' as const, image: p.data, mediaType: p.mimeType }))] }]
+  return [...earlier, { role: 'user', content: [{ type: 'text', text: PICTURES_NOTE }, ...pics.map((p) => ({ type: 'file' as const, data: p.data, mediaType: p.mimeType }))] }]
 }
 
 /** Keeps the conversation bounded, cutting only at a user turn so tool calls stay paired. */
-function trim(history: ModelMessage[]) {
+export function trim(history: ModelMessage[]) {
   if (history.length <= MAX_HISTORY) return history
-  let start = history.length - MAX_HISTORY
+  let start = history.length - KEEP_HISTORY
   while (start < history.length && history[start].role !== 'user') start++
   return history.slice(start)
 }
@@ -238,44 +374,56 @@ async function runModel(req: AgentRunRequest) {
     const key = `${provider}:${modelId}`
     // Claude-style APIs take pictures inside tool results; the rest get them in a message after.
     const native = api === 'anthropic'
+    const pdf = api !== 'compatible'
     let vision = canSee !== false && !textOnly.has(key)
     let effort = req.target.effort && !noEffort.has(key) ? req.target.effort : undefined
     const pictures = new Map<string, Picture[]>()
-    const tools = buildTools(await editorTools(), pictures, () => ({ native, vision }))
+    emit({ type: 'status', message: 'Getting the tools ready…' })
+    const tools = buildTools(await editorTools(), runId, pictures, () => ({ native, vision }))
+    const system = systemPrompt(api, provider, req.instructions)
 
     const stored = historyOf(req.conversationId)
-    const history = native ? stripReasoning(stored) : stored
-    const user: ModelMessage = { role: 'user', content: req.context ? `${req.context}\n\n${req.prompt}` : req.prompt }
+    const earlier = native ? stripReasoning(stored) : stored
+    const user = userTurn(req)
     // Steps already completed, carried into a retry so no tool runs twice.
     let carried: ModelMessage[] = []
     let completed: ModelMessage[] = []
     let wroteText = false
     let afterTool = false
-    let usage: { inputTokens?: number; outputTokens?: number } | undefined
-    const retried = { pictures: false, effort: false }
+    let lastFinish = ''
+    const usage: Required<Pick<AgentUsage, 'inputTokens' | 'outputTokens' | 'cachedTokens' | 'cacheWriteTokens' | 'steps'>> = { inputTokens: 0, outputTokens: 0, cachedTokens: 0, cacheWriteTokens: 0, steps: 0 }
+    const retried = { pictures: false, effort: false, busy: 0 }
     const carry = (steps: ModelMessage[]) => {
       const kept = stripPictures(steps)
       return native ? stripReasoning(kept) : kept
     }
+    // A tool call's input as the model writes it: who it is for and how much has arrived.
+    const writing = new Map<string, { tool: string; chars: number; told: number }>()
 
     for (;;) {
       try {
         const effortOpts = effortSettings(api, effort)
+        const can = { vision, pdf }
         const result = streamText({
           model,
-          system: req.instructions ? `${COPILOT_INSTRUCTIONS}\n\n${req.instructions}` : COPILOT_INSTRUCTIONS,
-          messages: [...history, user, ...carried],
+          system,
+          messages: withAttachments([...earlier, user, ...carried], req.conversationId, can),
           tools,
           headers,
           ...effortOpts,
-          providerOptions: mergeOptions(effortOpts.providerOptions, thinkingOptions(api, modelId)) as ProviderOptions,
+          providerOptions: mergeOptions(effortOpts.providerOptions as Options | undefined, thinkingOptions(api, modelId), cacheOptions(api, modelId, req.conversationId)) as ProviderOptions,
           stopWhen: isStepCount(MAX_STEPS),
+          // Retries are done here, where the chat can be told about them.
+          maxRetries: 0,
           abortSignal: controller.signal,
           prepareStep: ({ messages, responseMessages }) => {
             completed = responseMessages as ModelMessage[]
-            if (native || !vision) return undefined
-            const next = withPictures(messages, pictures)
-            return next ? { messages: next } : undefined
+            // Said before the request goes out: until the first word comes back, this is all there is to show.
+            usage.steps++
+            emit({ type: 'step', index: usage.steps })
+            const next = native || !vision ? undefined : withPictures(messages, pictures)
+            if (!native) return next ? { messages: next } : undefined
+            return { messages: cacheMarks(messages, earlier.length) }
           },
         })
         for await (const part of result.fullStream) {
@@ -289,21 +437,48 @@ async function runModel(req: AgentRunRequest) {
             case 'reasoning-delta':
               if (part.text) emit({ type: 'reasoning', delta: part.text })
               break
+            case 'reasoning-end':
+              emit({ type: 'reasoning-end' })
+              break
+            case 'tool-input-start':
+              writing.set(part.id, { tool: part.toolName, chars: 0, told: Date.now() })
+              emit({ type: 'tool-input', callId: part.id, tool: part.toolName, chars: 0 })
+              break
+            case 'tool-input-delta': {
+              const w = writing.get(part.id)
+              if (!w) break
+              w.chars += part.delta.length
+              // A long composition arrives in hundreds of pieces: a few updates a second is plenty.
+              if (Date.now() - w.told > 300) {
+                w.told = Date.now()
+                emit({ type: 'tool-input', callId: part.id, tool: w.tool, chars: w.chars })
+              }
+              break
+            }
             case 'tool-call':
               afterTool = true
+              writing.delete(part.toolCallId)
               emit({ type: 'tool-start', callId: part.toolCallId, tool: part.toolName, input: part.input })
               break
-            case 'tool-result':
-              emit({ type: 'tool-end', callId: part.toolCallId, tool: part.toolName, ok: true, summary: brief((part.output as ToolOutput | undefined)?.text ?? part.output) })
+            case 'tool-result': {
+              const text = (part.output as ToolOutput | undefined)?.text ?? (typeof part.output === 'string' ? part.output : JSON.stringify(part.output))
+              emit({ type: 'tool-end', callId: part.toolCallId, tool: part.toolName, ok: true, summary: brief(text), output: clip(text) })
               break
+            }
             case 'tool-error':
-              emit({ type: 'tool-end', callId: part.toolCallId, tool: part.toolName, ok: false, summary: brief(message(part.error)) })
+              emit({ type: 'tool-end', callId: part.toolCallId, tool: part.toolName, ok: false, summary: brief(message(part.error)), output: clip(message(part.error)) })
               break
+            case 'finish-step':
+              usage.inputTokens += part.usage.inputTokens ?? 0
+              usage.outputTokens += part.usage.outputTokens ?? 0
+              usage.cachedTokens += part.usage.inputTokenDetails?.cacheReadTokens ?? 0
+              usage.cacheWriteTokens += part.usage.inputTokenDetails?.cacheWriteTokens ?? 0
+              lastFinish = part.finishReason
+              break
+            case 'abort':
+              throw new DOMException('Stopped.', 'AbortError')
             case 'error':
               throw part.error
-            case 'finish':
-              usage = { inputTokens: part.totalUsage.inputTokens, outputTokens: part.totalUsage.outputTokens }
-              break
           }
         }
         // Every step's messages — tool calls and results included — so later turns remember what was looked up.
@@ -311,6 +486,7 @@ async function runModel(req: AgentRunRequest) {
         const next = trim(forHistory([...stored, user, ...carried, ...steps]))
         histories.set(req.conversationId, next)
         writeHistory(req.conversationId, next)
+        if (lastFinish === 'tool-calls') emit({ type: 'note', message: `Stopped after ${MAX_STEPS} steps in one go. Say “continue” and it carries on from here.` })
         emit({ type: 'done', usage })
         return
       } catch (err) {
@@ -321,7 +497,8 @@ async function runModel(req: AgentRunRequest) {
           textOnly.add(key)
           vision = false
           carried = carry([...carried, ...completed])
-          emit({ type: 'status', message: 'This model can’t look at images — carrying on without them.' })
+          completed = []
+          emit({ type: 'note', message: 'This model can’t look at images — carrying on without them.' })
           continue
         }
         if (effort && !retried.effort && isEffortRejection(err)) {
@@ -330,7 +507,17 @@ async function runModel(req: AgentRunRequest) {
           noEffort.add(key)
           effort = undefined
           carried = carry([...carried, ...completed])
-          emit({ type: 'status', message: 'This model doesn’t take that effort setting — carrying on with its default.' })
+          completed = []
+          emit({ type: 'note', message: 'This model doesn’t take that effort setting — carrying on with its default.' })
+          continue
+        }
+        if (retried.busy < RETRY_WAITS.length && isRetryable(err)) {
+          // Busy or cut off: wait, then carry on from the steps already done (no tool runs twice).
+          const wait = RETRY_WAITS[retried.busy++]
+          carried = carry([...carried, ...completed])
+          completed = []
+          emit({ type: 'note', message: `${status(err) === 429 ? 'The provider is rate-limiting requests' : 'The provider didn’t answer'} (${brief(friendly(err)).slice(0, 90)}). Trying again in ${wait} s — try ${retried.busy} of ${RETRY_WAITS.length}.` })
+          await abortable(new Promise((r) => setTimeout(r, wait * 1000)), controller.signal)
           continue
         }
         throw err
@@ -349,6 +536,12 @@ const message = (err: unknown) => (err instanceof Error ? err.message : String(e
 function brief(value: unknown) {
   const text = typeof value === 'string' ? value : JSON.stringify(value)
   return (text ?? '').replace(/\s+/g, ' ').trim().slice(0, 160)
+}
+
+/** A tool's result as the chat shows it when a step is opened: enough to follow, not megabytes. */
+function clip(text: string) {
+  const LIMIT = 4000
+  return text.length > LIMIT ? `${text.slice(0, LIMIT)}\n… (${text.length - LIMIT} more characters)` : text
 }
 
 function status(err: unknown): number | undefined {

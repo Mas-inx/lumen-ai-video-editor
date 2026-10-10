@@ -12,7 +12,7 @@ import { isPrivateHost } from '../../shared/integrations'
  * from the editor, and nothing on the local network is reachable.
  */
 
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
+export const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
 const MAX_BYTES = 4 * 1024 * 1024
 
 // ─── Where requests may go ───────────────────────────────────────────────
@@ -42,7 +42,7 @@ export function blockedHost(hostname: string) {
   return !h.includes('.')
 }
 
-async function checkUrl(raw: string): Promise<URL> {
+export async function checkUrl(raw: string): Promise<URL> {
   let url: URL
   try {
     url = new URL(raw.trim())
@@ -59,15 +59,50 @@ async function checkUrl(raw: string): Promise<URL> {
   return url
 }
 
-/** Fetches a page (following redirects, each one checked), capped in size and time. */
+/**
+ * Where a redirect leads. Electron's net.fetch, told not to follow one, fails
+ * with "Redirect was cancelled" without saying where it pointed; a request with
+ * a listener is told. Nothing is followed here either: the caller checks the
+ * address, then asks for it as a request of its own.
+ */
+export function redirectTarget(url: URL, headers: Record<string, string>, timeoutMs = 20_000): Promise<string | null> {
+  return new Promise((resolve) => {
+    const request = net.request({ url: url.href, method: 'GET', redirect: 'manual', credentials: 'omit' })
+    for (const [name, value] of Object.entries(headers)) request.setHeader(name, value)
+    const timer = setTimeout(() => {
+      request.abort()
+      resolve(null)
+    }, timeoutMs)
+    const done = (to: string | null) => {
+      clearTimeout(timer)
+      resolve(to)
+    }
+    request.on('redirect', (_status, _method, to) => done(to))
+    request.on('response', () => {
+      request.abort()
+      done(null)
+    })
+    request.on('error', () => done(null))
+    request.end()
+  })
+}
+
+export const isCancelledRedirect = (err: unknown) => err instanceof Error && /redirect was cancelled/i.test(err.message)
+
+/** Fetches a page (following redirects, each one checked), capped in size and time. No cookies go out or get kept. */
 async function get(raw: string, accept = 'text/html,application/xhtml+xml,*/*;q=0.8') {
   let url = await checkUrl(raw)
+  const headers = { 'User-Agent': UA, Accept: accept, 'Accept-Language': 'en-US,en;q=0.9' }
   for (let hop = 0; hop < 6; hop++) {
-    const res = await net.fetch(url.href, {
-      redirect: 'manual',
-      headers: { 'User-Agent': UA, Accept: accept, 'Accept-Language': 'en-US,en;q=0.9' },
-      signal: AbortSignal.timeout(20_000),
-    })
+    let res: Response
+    try {
+      res = await net.fetch(url.href, { redirect: 'manual', credentials: 'omit', headers, signal: AbortSignal.timeout(20_000) })
+    } catch (err) {
+      const to = isCancelledRedirect(err) ? await redirectTarget(url, headers) : null
+      if (!to) throw err
+      url = await checkUrl(new URL(to, url).href)
+      continue
+    }
     if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
       url = await checkUrl(new URL(res.headers.get('location')!, url).href)
       continue
@@ -106,7 +141,7 @@ export function decodeEntities(s: string) {
   })
 }
 
-const meta = (html: string, name: string) => {
+export const meta = (html: string, name: string) => {
   const re = new RegExp(`<meta[^>]+(?:name|property)=["']${name}["'][^>]*>`, 'i')
   const tag = re.exec(html)?.[0]
   const content = tag && /content=["']([^"']*)["']/i.exec(tag)?.[1]
@@ -134,7 +169,7 @@ export function readable(html: string): string {
     .trim()
 }
 
-function absolute(href: string, base: URL) {
+export function absolute(href: string, base: URL) {
   try {
     const u = new URL(decodeEntities(href), base)
     return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : null
@@ -174,7 +209,7 @@ function resultUrl(href: string) {
   return /^https?:\/\//.test(url) && !/duckduckgo\.com\/y\.js/.test(url) ? url : null
 }
 
-const strip = (s: string) => decodeEntities(s.replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim()
+export const strip = (s: string) => decodeEntities(s.replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim()
 
 export function parseSearch(html: string, max: number): WebSearchResult[] {
   const out: WebSearchResult[] = []
@@ -197,6 +232,7 @@ export async function webSearch(query: string, max = 8): Promise<WebSearchResult
   const n = Math.min(20, Math.max(1, Math.round(max)))
   const res = await net.fetch('https://html.duckduckgo.com/html/', {
     method: 'POST',
+    credentials: 'omit',
     headers: { 'User-Agent': UA, 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'text/html' },
     body: new URLSearchParams({ q, kl: 'us-en' }).toString(),
     signal: AbortSignal.timeout(15_000),

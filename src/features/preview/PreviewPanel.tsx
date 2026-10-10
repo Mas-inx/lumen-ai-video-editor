@@ -72,6 +72,7 @@ export function PreviewPanel() {
   const [scopes, setScopes] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
   // The whole window goes full screen and the panel covers it, so menus, tooltips and toasts (drawn outside the panel) still show.
+  // It sits above everything in the editor (the timeline's sticky ruler reaches z-50) and under dialogs (90) and menus (100).
   useEffect(() => {
     const sync = () => setFullscreen(Boolean(document.fullscreenElement))
     document.addEventListener('fullscreenchange', sync)
@@ -111,7 +112,7 @@ export function PreviewPanel() {
   }
 
   return (
-    <div className={cn('panel flex h-full flex-col overflow-hidden', fullscreen && 'fixed inset-0 z-40 rounded-none border-0')}>
+    <div className={cn('panel flex h-full flex-col overflow-hidden', fullscreen && 'fixed inset-0 z-[70] rounded-none border-0')}>
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line pr-2 pl-4">
         <span className="text-sm font-semibold text-fg">Program</span>
         <button

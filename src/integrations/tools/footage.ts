@@ -97,10 +97,10 @@ export const FOOTAGE_TOOLS: AgentTool[] = [
       },
       ['clip_id'],
     ),
-    run: async (a) => {
+    run: async (a, ctx) => {
       const clip = clipById(String(a.clip_id))
       const action = (text(a, 'action') ?? 'split') as 'split' | 'markers' | 'none'
-      const r = await scenesInClip(clip.id, { action, sensitivity: number(a, 'sensitivity'), source: 'ai' })
+      const r = await scenesInClip(clip.id, { action, sensitivity: number(a, 'sensitivity'), source: 'ai' }, (p: number) => ctx?.progress?.(`${Math.round(Math.min(1, p) * 100)}%`), ctx?.signal)
       if (r.clipIds) useUI.getState().markAiTouched(r.clipIds)
       return { cuts: r.cuts.length, cuts_seconds: r.cuts.map(seconds), applied: r.applied, ...(r.clipIds ? { clip_ids: r.clipIds } : {}) }
     },
@@ -151,9 +151,9 @@ export const FOOTAGE_TOOLS: AgentTool[] = [
       { clip_id: str('A video clip on the timeline'), smoothness_seconds: num('0.2–4 (default 1)', { minimum: 0.2, maximum: 4 }), keep_level: bool('Also hold the horizon level (default true)') },
       ['clip_id'],
     ),
-    run: async (a) => {
+    run: async (a, ctx) => {
       const clip = clipById(String(a.clip_id))
-      const r = await stabilizeClip(clip.id, { smooth: number(a, 'smoothness_seconds'), rotation: a.keep_level !== false, source: 'ai' })
+      const r = await stabilizeClip(clip.id, { smooth: number(a, 'smoothness_seconds'), rotation: a.keep_level !== false, source: 'ai' }, (p: number) => ctx?.progress?.(`${Math.round(Math.min(1, p) * 100)}%`), ctx?.signal)
       useUI.getState().markAiTouched([clip.id])
       return { stabilized: true, zoom_percent: Math.round((r.zoom - 1) * 1000) / 10, frames_measured: r.frames }
     },
@@ -180,7 +180,7 @@ export const FOOTAGE_TOOLS: AgentTool[] = [
       },
       ['clip_id'],
     ),
-    run: async (a) => {
+    run: async (a, ctx) => {
       const clip = clipById(String(a.clip_id))
       const { width: PW, height: PH } = getProject().settings
       const f = a.box_fraction as { x: number; y: number; width: number; height: number } | undefined
@@ -196,7 +196,7 @@ export const FOOTAGE_TOOLS: AgentTool[] = [
         frame,
         sourceId: text(a, 'source_clip_id'),
         source: 'ai',
-      })
+      }, (p: number) => ctx?.progress?.(`${Math.round(Math.min(1, p) * 100)}%`), ctx?.signal)
       useUI.getState().markAiTouched([clip.id])
       return { tracked_frames: r.frames, from_seconds: seconds(r.from), to_seconds: seconds(r.to), ...(r.lost ? { note: 'Lost sight of it before the end of the clip.' } : {}) }
     },

@@ -1,57 +1,64 @@
+import { toast } from 'sonner'
 import { create } from 'zustand'
-import type { AgentErrorCode, AgentEvent, CopilotTarget } from '@shared/ai'
+import type { AgentErrorCode, AgentEvent, AgentUsage, ChatAttachment, CopilotTarget } from '@shared/ai'
 import { usePlayback } from '@/editor/playback'
 import { getProject, undoEntry, useEditor } from '@/editor/store'
 import { useUI } from '@/editor/ui-store'
 import { onAgentEvent, resolveTarget, targetLabel } from '@/integrations/ai'
-import { api } from '@/integrations/store'
+import { setConversation } from '@/integrations/conversation'
 import { skillsPrompt } from '@/integrations/skills'
-import { onToolImages } from '@/integrations/tools/events'
+import { api } from '@/integrations/store'
+import { abortCalls } from '@/integrations/tool-runs'
+import { onToolImages, onToolProgress } from '@/integrations/tools/events'
 import { uid } from '@/lib/id'
 import { formatTimecode } from '@/lib/time'
+import { importDropped } from '@/project/media-import'
+import { applyEvent, finish, fromLegacy, type Activity, type LocalEvent, type Part, type ToolPart } from './transcript'
 
-export type CallStatus = 'queued' | 'running' | 'done' | 'error'
+export type { Activity, Part, ToolPart }
 
-export interface ToolCall {
+/** A file on a message, as the chat shows it. */
+export interface FileChip {
   id: string
-  tool: string
-  title: string
-  detail?: string
-  status: CallStatus
-  /** What the AI looked at — frames, contact sheets, screenshots (data URLs). */
-  images?: string[]
-  /** Pictures that were shown but aren't kept (a chat reopened after a restart). */
-  pictures?: number
+  name: string
+  kind: ChatAttachment['kind']
+  size: number
+  /** A small picture of it (pictures only), kept with the chat. */
+  thumb?: string
 }
 
 export interface Message {
   id: string
   role: 'user' | 'assistant'
-  /** user text, or the assistant's intro */
+  /** The user's words. A reply's are in `parts`. */
   text: string
-  shown: number
-  phase?: 'thinking' | 'intro' | 'tools' | 'outro' | 'done'
-  calls?: ToolCall[]
-  outro?: string
-  outroShown?: number
+  createdAt?: number
+  /** Clips and media the request was about. */
+  context?: { id: string; name: string }[]
+  /** Files attached to the request. */
+  files?: FileChip[]
+
+  // ── replies ──
+  /** Everything the AI did, in order. */
+  parts?: Part[]
+  phase?: 'working' | 'done'
+  /** What it is doing right now (while working). */
+  activity?: Activity
+  /** When anything last arrived from it. */
+  lastEventAt?: number
+  /** Which brain answered. */
+  agent?: string
+  error?: { message: string; code?: AgentErrorCode }
+  /** The user stopped it. */
+  stopped?: boolean
+  usage?: AgentUsage
+  startedAt?: number
+  finishedAt?: number
   suggestions?: string[]
   historyId?: number
-  /** Live agents make several undo steps; "Undo all" reverts them together. */
+  /** An agent makes several undo steps; "Undo all" reverts them together. */
   historyIds?: number[]
   undone?: boolean
-  context?: { id: string; name: string }[]
-  /** Which brain answered (live agents). */
-  agent?: string
-  /** Live progress line, e.g. "Codex is working…" */
-  status?: string
-  error?: { message: string; code?: AgentErrorCode }
-  /** The model's thinking for this reply, as it streamed. */
-  reasoning?: string
-  /** While thinking: when this stretch of it started (ms). */
-  thinkingSince?: number
-  /** How long it thought, all stretches together (ms). */
-  thoughtMs?: number
-  createdAt?: number
 }
 
 /** One Copilot conversation; each project keeps its own. */
@@ -64,6 +71,15 @@ export interface Chat {
   messages: Message[]
 }
 
+/** A request waiting for the reply before it to finish. */
+export interface Queued {
+  id: string
+  text: string
+  context: { id: string; name: string }[]
+  assets: AssetAttachment[]
+  files: FileAttachment[]
+}
+
 interface CopilotState {
   /** The project these chats belong to. */
   projectId: string | null
@@ -72,6 +88,10 @@ interface CopilotState {
   messages: Message[]
   busy: boolean
   draft: string
+  /** Requests sent while the AI was busy: each goes out when the one before is done. */
+  queue: Queued[]
+  /** The queue waits (after an error) until the user sends the next one. */
+  queueHeld: boolean
   /** The open chat — also keys the main process's history / agent session for it. */
   conversationId: string
   setDraft: (draft: string) => void
@@ -85,10 +105,17 @@ export const useCopilot = create<CopilotState>((set) => ({
   messages: [],
   busy: false,
   draft: '',
+  queue: [],
+  queueHeld: false,
   conversationId: uid('conv'),
   setDraft: (draft) => set({ draft }),
   clear: () => newChat(),
 }))
+
+setConversation(useCopilot.getState().conversationId)
+useCopilot.subscribe((s, prev) => {
+  if (s.conversationId !== prev.conversationId) setConversation(s.conversationId)
+})
 
 // ─── Chats ───────────────────────────────────────────────────────────────
 
@@ -117,20 +144,29 @@ export function mergeChats(chats: Chat[], messages: Message[], conversationId: s
   return list.filter((c) => c.messages.length).sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
+/** Files waiting in the composer belong to the open chat: leaving it lets them go. */
+function dropPendingFiles() {
+  const { conversationId } = useCopilot.getState()
+  for (const item of useAttachments.getState().items) if (item.kind === 'file' && item.file) void api?.ai.detach(conversationId, item.file.id)
+  useAttachments.setState((s) => ({ items: s.items.filter((i) => i.kind !== 'file') }))
+}
+
 /** Opens a fresh chat; the one that was open stays in the list. */
 export function newChat() {
   if (useCopilot.getState().busy) return
+  dropPendingFiles()
   const chats = allChats()
-  useCopilot.setState({ chats, messages: [], conversationId: uid('conv') })
+  useCopilot.setState({ chats, messages: [], conversationId: uid('conv'), queue: [], queueHeld: false })
 }
 
 export function openChat(id: string) {
   const s = useCopilot.getState()
   if (s.busy || id === s.conversationId) return
+  dropPendingFiles()
   const chats = allChats()
   const chat = chats.find((c) => c.id === id)
   if (!chat) return
-  useCopilot.setState({ chats, messages: chat.messages, conversationId: id })
+  useCopilot.setState({ chats, messages: chat.messages, conversationId: id, queue: [], queueHeld: false })
 }
 
 export function deleteChat(id: string) {
@@ -138,8 +174,10 @@ export function deleteChat(id: string) {
   if (s.busy && id === s.conversationId) return
   void api?.ai.forget(id)
   const chats = allChats().filter((c) => c.id !== id)
-  if (id === s.conversationId) useCopilot.setState({ chats, messages: [], conversationId: uid('conv') })
-  else useCopilot.setState({ chats })
+  if (id === s.conversationId) {
+    useAttachments.setState((a) => ({ items: a.items.filter((i) => i.kind !== 'file') }))
+    useCopilot.setState({ chats, messages: [], conversationId: uid('conv'), queue: [], queueHeld: false })
+  } else useCopilot.setState({ chats })
 }
 
 export function renameChat(id: string, title: string) {
@@ -148,15 +186,15 @@ export function renameChat(id: string, title: string) {
   useCopilot.setState({ chats })
 }
 
-/** A chat as it's kept on disk: no pictures (they're large) — just how many there were. */
+/** A chat as it's kept on disk: no pictures the AI looked at (they're large) — just how many there were. */
 function forDisk(chat: Chat): Chat {
   return {
     ...chat,
     messages: chat.messages.map((m) => ({
       ...m,
-      thinkingSince: undefined,
-      status: undefined,
-      calls: m.calls?.map(({ images, ...c }) => ({ ...c, pictures: (c.pictures ?? 0) + (images?.length ?? 0) || undefined })),
+      activity: undefined,
+      lastEventAt: undefined,
+      parts: m.parts?.map((p) => (p.kind === 'tool' ? { ...p, images: undefined, progress: undefined, chars: undefined, pictures: (p.pictures ?? 0) + (p.images?.length ?? 0) || undefined } : p)),
     })),
   }
 }
@@ -165,17 +203,15 @@ function forDisk(chat: Chat): Chat {
 function fromDisk(raw: unknown): Chat | null {
   const c = raw as Partial<Chat> | null
   if (!c || typeof c.id !== 'string' || !Array.isArray(c.messages)) return null
-  const messages = (c.messages as Message[])
+  const messages = (c.messages as (Message & Parameters<typeof fromLegacy>[0])[])
     .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.text === 'string')
-    .map((m) => ({
-      ...m,
-      shown: m.text.length,
-      outroShown: undefined,
-      phase: m.role === 'assistant' ? ('done' as const) : m.phase,
-      historyId: undefined,
-      historyIds: undefined,
-      calls: m.calls?.map((call) => (call.status === 'running' || call.status === 'queued' ? { ...call, status: 'error' as const } : call)),
-    }))
+    .map((m): Message => {
+      if (m.role === 'user') return { id: m.id, role: 'user', text: m.text, createdAt: m.createdAt, context: m.context, files: m.files }
+      // Replies saved before transcripts had an intro, a list of calls and an outro.
+      const parts = Array.isArray(m.parts) ? m.parts : fromLegacy(m)
+      const done = finish({ parts, phase: 'working', error: m.error, stopped: m.stopped, usage: m.usage }, m.finishedAt ?? 0)
+      return { id: m.id, role: 'assistant', text: '', createdAt: m.createdAt, agent: m.agent, startedAt: m.startedAt, suggestions: m.suggestions, undone: m.undone, ...done, finishedAt: m.finishedAt }
+    })
   return { id: c.id, title: typeof c.title === 'string' ? c.title : undefined, createdAt: Number(c.createdAt) || Date.now(), updatedAt: Number(c.updatedAt) || Date.now(), messages }
 }
 
@@ -207,8 +243,9 @@ useCopilot.subscribe((s, prev) => {
 /** Opens a project's chats: the latest one, ready to carry on. */
 async function loadChatsFor(projectId: string) {
   saveNow()
-  if (useCopilot.getState().busy) stopCopilot()
-  useCopilot.setState({ projectId, chats: [], messages: [], conversationId: uid('conv'), busy: false })
+  if (useCopilot.getState().busy) stopCopilot({ keepQueue: false })
+  useAttachments.setState({ items: [] })
+  useCopilot.setState({ projectId, chats: [], messages: [], conversationId: uid('conv'), busy: false, queue: [], queueHeld: false })
   if (!api) return
   try {
     const chats = (await api.ai.loadChats(projectId)).map(fromDisk).filter((c): c is Chat => c !== null)
@@ -234,47 +271,141 @@ function patch(id: string, fn: (m: Message) => Partial<Message>) {
   useCopilot.setState((s) => ({ messages: s.messages.map((m) => (m.id === id ? { ...m, ...fn(m) } : m)) }))
 }
 
-let live: { runId: string; messageId: string; startedAfter: number } | null = null
+/** The turn in progress. Events for any other run are ignored, which is what makes Stop immediate. */
+let live: { runId: string; messageId: string; startedAfter: number; startedAt: number; local: boolean } | null = null
 
-// Pictures a tool showed the AI land on that tool's row in the running reply,
-// whichever brain asked (models, Claude Code and Codex all go through the same tools).
-onToolImages((tool, images) => {
+function feed(e: LocalEvent) {
   const run = live
   if (!run) return
-  const urls = images.map((i) => `data:${i.mimeType};base64,${i.data}`)
-  patch(run.messageId, (m) => {
-    const calls = m.calls ?? []
-    const running = calls.findLastIndex((c) => c.tool === tool && c.status === 'running')
-    const index = running >= 0 ? running : calls.findLastIndex((c) => c.tool === tool)
-    if (index < 0) return {}
-    return { calls: calls.map((c, i) => (i === index ? { ...c, images: [...(c.images ?? []), ...urls] } : c)) }
-  })
-})
-
-export function stopCopilot() {
-  if (live) void api?.ai.stop(live.runId)
+  patch(run.messageId, (m) => applyEvent(m, e, Date.now()))
 }
 
-/** Extra context the user attached to the next message (media from the library). */
-export interface Attachment {
+// What a tool shows the AI, and how a long tool is getting on, land on that tool's step in the running
+// reply, whichever brain asked (models, Claude Code and Codex all go through the same tools).
+onToolImages((tool, images) => feed({ type: 'tool-images', tool, images: images.map((i) => `data:${i.mimeType};base64,${i.data}`) }))
+onToolProgress((tool, message) => feed({ type: 'tool-progress', tool, message }))
+
+/**
+ * Stops the reply now. The chat doesn't wait to hear back: it marks the reply
+ * stopped, stops the work its tools started, and tells the brain to quit.
+ */
+export function stopCopilot(opts: { keepQueue?: boolean } = {}) {
+  const run = live
+  if (!run) return
+  abortCalls(run.runId, run.local ? run.startedAt : undefined)
+  void api?.ai.stop(run.runId)
+  if (opts.keepQueue === false) useCopilot.setState({ queue: [] })
+  finishLive(run.messageId, { message: 'Stopped.', code: 'cancelled' })
+}
+
+// ─── Attachments ─────────────────────────────────────────────────────────
+
+/** Media from the library the next message is about. */
+export interface AssetAttachment {
   id: string
   name: string
   kind: 'asset'
 }
 
+/** A picture or document that goes to the AI with the next message. */
+export interface FileAttachment {
+  id: string
+  name: string
+  kind: 'file'
+  status: 'reading' | 'ready'
+  /** Set once the file is kept for this chat. */
+  file?: ChatAttachment
+  thumb?: string
+}
+
+export type Attachment = AssetAttachment | FileAttachment
+
 export const useAttachments = create<{ items: Attachment[] }>(() => ({ items: [] }))
 
-export function attach(item: Attachment) {
+export function attach(item: AssetAttachment) {
   useAttachments.setState((s) => (s.items.some((i) => i.id === item.id) ? s : { items: [...s.items, item] }))
 }
 
 export function detach(id: string) {
+  const item = useAttachments.getState().items.find((i) => i.id === id)
+  if (item?.kind === 'file' && item.file) void api?.ai.detach(useCopilot.getState().conversationId, item.file.id)
   useAttachments.setState((s) => ({ items: s.items.filter((i) => i.id !== id) }))
 }
 
+const isMedia = (file: File) => /^(video|audio)\//.test(file.type) || /\.(mp4|mov|mkv|webm|avi|m4v|mp3|wav|m4a|aac|flac|ogg)$/i.test(file.name)
+
+/** A small picture of an image file, to show on the message and keep with the chat. */
+async function thumbnail(file: Blob): Promise<string | undefined> {
+  try {
+    const bitmap = await createImageBitmap(file)
+    const k = Math.min(1, 160 / Math.max(bitmap.width, bitmap.height))
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(bitmap.width * k))
+    canvas.height = Math.max(1, Math.round(bitmap.height * k))
+    canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+    bitmap.close()
+    return canvas.toDataURL('image/jpeg', 0.72)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Attaches files to the next message: pasted, dropped or picked. Pictures, PDFs,
+ * Word and text files go to the AI with the message; video and audio go into the
+ * project's media, and the message points at them.
+ */
+export async function attachFiles(files: File[]) {
+  if (!files.length) return
+  useUI.getState().setRightTab('copilot')
+  const media = files.filter(isMedia)
+  if (media.length) {
+    try {
+      for (const a of await importDropped(media)) attach({ id: a.id, name: a.name, kind: 'asset' })
+    } catch (err) {
+      toast.error('Couldn’t add that to Media', { description: err instanceof Error ? err.message : String(err) })
+    }
+  }
+  await Promise.all(
+    files
+      .filter((f) => !isMedia(f))
+      .slice(0, 12)
+      .map(async (file) => {
+        const id = uid('file')
+        const name = file.name || (file.type.startsWith('image/') ? `pasted-${new Date().toTimeString().slice(0, 8).replace(/:/g, '')}.${file.type.slice(6).replace('jpeg', 'jpg')}` : 'pasted.txt')
+        useAttachments.setState((s) => ({ items: [...s.items, { id, name, kind: 'file', status: 'reading' }] }))
+        const conversationId = useCopilot.getState().conversationId
+        try {
+          if (!api) throw new Error('Attaching files needs Lumen’s desktop app.')
+          const kept = await api.ai.attach(conversationId, { name, mime: file.type || undefined, data: new Uint8Array(await file.arrayBuffer()) })
+          const thumb = kept.kind === 'image' ? await thumbnail(file) : undefined
+          // Removed, or the chat changed, while it was being read: let it go.
+          const still = useAttachments.getState().items.some((i) => i.id === id) && useCopilot.getState().conversationId === conversationId
+          if (!still) return void api.ai.detach(conversationId, kept.id)
+          useAttachments.setState((s) => ({ items: s.items.map((i) => (i.id === id ? { id, name: kept.name, kind: 'file', status: 'ready', file: kept, thumb } : i)) }))
+        } catch (err) {
+          useAttachments.setState((s) => ({ items: s.items.filter((i) => i.id !== id) }))
+          toast.error(`Couldn’t attach ${name}`, { description: (err instanceof Error ? err.message : String(err)).replace(/^Error invoking remote method '[^']+': (?:\w*Error: )?/, ''), duration: 8000 })
+        }
+      }),
+  )
+}
+
+/** A long paste becomes a text file on the message, so the box stays for the request itself. */
+export const PASTE_AS_FILE = 6000
+
+// ─── Sending ─────────────────────────────────────────────────────────────
+
+/**
+ * Sends a request — or, while the AI is busy, lines it up to go when the reply
+ * in progress is done.
+ */
 export async function sendPrompt(text: string) {
   const prompt = text.trim()
-  if (!prompt || useCopilot.getState().busy) return
+  const items = useAttachments.getState().items
+  if (!prompt && !items.length) return
+  // A file still being read isn't ready to send.
+  if (items.some((i) => i.kind === 'file' && i.status !== 'ready')) return void toast('Still reading the attached file — one moment.')
   useUI.getState().setRightTab('copilot')
 
   const project = getProject()
@@ -284,18 +415,37 @@ export async function sendPrompt(text: string) {
     .map((id) => project.clips[id])
     .filter(Boolean)
     .map((c) => ({ id: c.id, name: c.name }))
-  const attachments = useAttachments.getState().items.filter((a) => project.assets[a.id])
+  const assets = items.filter((a): a is AssetAttachment => a.kind === 'asset' && Boolean(project.assets[a.id]))
+  const files = items.filter((a): a is FileAttachment => a.kind === 'file' && Boolean(a.file))
   useAttachments.setState({ items: [] })
+  const request: Queued = { id: uid('q'), text: prompt || (files.length ? 'Look at what I attached.' : ''), context, assets, files }
 
+  if (useCopilot.getState().busy) {
+    useCopilot.setState((s) => ({ draft: '', queue: [...s.queue, request] }))
+    return
+  }
+  useCopilot.setState({ draft: '' })
+  return start(request)
+}
+
+function start(request: Queued) {
   const target = resolveTarget()
   const aid = uid('msg')
+  const now = Date.now()
   useCopilot.setState((s) => ({
     busy: true,
-    draft: '',
+    queueHeld: false,
     messages: [
       ...s.messages,
-      { id: uid('msg'), role: 'user', text: prompt, shown: prompt.length, createdAt: Date.now(), context: [...context, ...attachments.map((a) => ({ id: a.id, name: a.name }))] },
-      { id: aid, role: 'assistant', text: '', shown: 0, phase: 'thinking', createdAt: Date.now(), agent: target ? targetLabel(target).title : undefined },
+      {
+        id: uid('msg'),
+        role: 'user',
+        text: request.text,
+        createdAt: now,
+        context: [...request.context, ...request.assets.map((a) => ({ id: a.id, name: a.name }))],
+        files: request.files.map((f) => ({ id: f.file!.id, name: f.name, kind: f.file!.kind, size: f.file!.size, thumb: f.thumb })),
+      },
+      { id: aid, role: 'assistant', text: '', parts: [], phase: 'working', createdAt: now, startedAt: now, lastEventAt: now, activity: { kind: 'starting', label: 'Starting…', since: now }, agent: target ? targetLabel(target).title : undefined },
     ],
   }))
 
@@ -303,173 +453,99 @@ export async function sendPrompt(text: string) {
     finishLive(aid, { message: 'Copilot needs an AI to think with. Use your own Claude Code or Codex, or add a model with an API key.', code: 'no-brain' })
     return
   }
-  return runLive(aid, target, prompt, context, attachments)
+  return runLive(aid, target, request)
+}
+
+// ─── The queue ───────────────────────────────────────────────────────────
+
+export function removeQueued(id: string) {
+  const item = useCopilot.getState().queue.find((q) => q.id === id)
+  if (!item) return
+  const { conversationId } = useCopilot.getState()
+  for (const f of item.files) if (f.file) void api?.ai.detach(conversationId, f.file.id)
+  useCopilot.setState((s) => ({ queue: s.queue.filter((q) => q.id !== id) }))
+}
+
+/** Puts a queued request back in the box to change it. */
+export function editQueued(id: string) {
+  const item = useCopilot.getState().queue.find((q) => q.id === id)
+  if (!item) return
+  useCopilot.setState((s) => ({ queue: s.queue.filter((q) => q.id !== id), draft: s.draft ? `${s.draft}\n${item.text}` : item.text }))
+  useAttachments.setState((s) => ({ items: [...s.items, ...item.assets, ...item.files].filter((a, i, all) => all.findIndex((b) => b.id === a.id) === i) }))
+}
+
+/** Sends a queued request right away: the reply in progress is stopped and this one goes next. */
+export function sendQueuedNow(id: string) {
+  const s = useCopilot.getState()
+  const item = s.queue.find((q) => q.id === id)
+  if (!item) return
+  useCopilot.setState({ queue: [item, ...s.queue.filter((q) => q.id !== id)], queueHeld: false })
+  if (s.busy) stopCopilot()
+  else sendNext()
+}
+
+function sendNext() {
+  const s = useCopilot.getState()
+  if (s.busy || !s.queue.length) return
+  const [next, ...rest] = s.queue
+  useCopilot.setState({ queue: rest })
+  void start(next)
 }
 
 // ─── Live agents (models and local agents) ───────────────────────────────
 
 /** What the agent should know about this moment that isn't in the project itself. */
-function turnContext(context: { id: string; name: string }[], attachments: Attachment[]) {
+function turnContext(context: { id: string; name: string }[], assets: AssetAttachment[]) {
   const fps = getProject().settings.fps
   const frame = usePlayback.getState().frame
   const lines = [`[Lumen] Playhead at frame ${frame} (${formatTimecode(frame, fps)}).`]
   if (context.length) lines.push(`Selected clips: ${context.map((c) => `${c.name} (${c.id})`).join(', ')}.`)
-  if (attachments.length) lines.push(`Media the user attached (asset ids): ${attachments.map((a) => `${a.name} (${a.id})`).join(', ')}.`)
+  if (assets.length) lines.push(`Media the user attached (asset ids): ${assets.map((a) => `${a.name} (${a.id})`).join(', ')}.`)
   return lines.join(' ')
 }
 
-async function runLive(messageId: string, target: CopilotTarget, prompt: string, context: { id: string; name: string }[], attachments: Attachment[]) {
+async function runLive(messageId: string, target: CopilotTarget, request: Queued) {
   if (!api) {
     finishLive(messageId, { message: 'Live models need Lumen’s desktop app.', code: 'failed' })
     return
   }
   const runId = uid('run')
-  live = { runId, messageId, startedAfter: Math.max(0, ...useEditor.getState().past.map((e) => e.id)) }
+  live = { runId, messageId, startedAfter: Math.max(0, ...useEditor.getState().past.map((e) => e.id)), startedAt: Date.now(), local: target.kind === 'local' }
   try {
-    await api.ai.run({ runId, conversationId: useCopilot.getState().conversationId, target, prompt, context: turnContext(context, attachments), instructions: skillsPrompt() || undefined })
+    await api.ai.run({
+      runId,
+      conversationId: useCopilot.getState().conversationId,
+      target,
+      prompt: request.text,
+      context: turnContext(request.context, request.assets),
+      instructions: skillsPrompt() || undefined,
+      attachments: request.files.flatMap((f) => (f.file ? [f.file] : [])),
+    })
   } catch (err) {
-    finishLive(messageId, { message: err instanceof Error ? err.message : String(err), code: 'failed' })
+    if (live?.runId === runId) finishLive(messageId, { message: err instanceof Error ? err.message : String(err), code: 'failed' })
   }
 }
 
-const TOOL_TITLES: Record<string, string> = {
-  get_project: 'Read the project',
-  place_asset: 'Place media on the timeline',
-  seek: 'Move the playhead',
-  render_3d_title: 'Render a 3D title in Blender',
-  render_3d_background: 'Render a 3D background in Blender',
-  render_blender_script: 'Render a Blender scene',
-  blender_live: 'Run code in Blender',
-  render_motion_graphic: 'Render a motion graphic',
-  render_hyperframes_html: 'Render a HyperFrames composition',
-  get_job: 'Check on a render',
-  import_media_url: 'Import media',
-  import_media_file: 'Import media',
-  transcribe_media: 'Transcribe speech',
-  find_pauses: 'Find pauses',
-  remove_pauses: 'Remove pauses',
-  add_captions: 'Add captions',
-  duck_music: 'Duck the music',
-  reframe: 'Reframe the canvas',
-  generate_image: 'Generate an image',
-  generate_video: 'Generate a video',
-  add_sound_effect: 'Add a sound effect',
-  list_voices: 'Look up voices',
-  generate_voiceover: 'Generate a voiceover',
-  generate_sound_effect: 'Generate a sound effect',
-  generate_music: 'Generate music',
-  get_frame: 'Look at the video',
-  get_contact_sheet: 'Watch the edit',
-  get_media_frames: 'Look at the footage',
-  get_editor_screenshot: 'Look at the editor',
-  get_clips_at: 'Check what’s on screen',
-  get_clip: 'Read clip details',
-  find_media: 'Search the media',
-  get_transcript: 'Read the transcript',
-  analyze_audio: 'Listen to the sound',
-  get_history: 'Check the history',
-  list_catalog: 'Look up effects and presets',
-  batch_edit: 'Make the edits',
-  add_title: 'Add a title',
-  undo: 'Undo',
-  redo: 'Redo',
-  select_clips: 'Select clips',
-  playback: 'Play the preview',
-  save_project: 'Save the project',
-  export_video: 'Export the video',
-  shell: 'Run a command',
-  web_search: 'Search the web',
-  read_web_page: 'Read a web page',
-  screenshot_web_page: 'Look at a web page',
-  list_skills: 'Check its skills',
-  detect_beats: 'Find the beat',
-  cut_to_beats: 'Cut to the beat',
-  cut_out_subject: 'Cut out the subject',
-  clip_animate: 'Animate',
-  use_skill: 'Use a skill',
-  read_skill_file: 'Read a skill’s notes',
-}
-
-function toolTitle(tool: string) {
-  if (TOOL_TITLES[tool]) return TOOL_TITLES[tool]
-  const words = tool.replace(/^mcp__\w+__/, '').replace(/[_.]+/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()
-  return words.charAt(0).toUpperCase() + words.slice(1)
-}
-
-function inputDetail(input: unknown) {
-  if (!input || typeof input !== 'object') return undefined
-  const entries = Object.entries(input as Record<string, unknown>).filter(([, v]) => v !== undefined && v !== null && typeof v !== 'object')
-  const text = entries
-    .slice(0, 3)
-    .map(([k, v]) => `${k}: ${String(v).slice(0, 40)}`)
-    .join(' · ')
-  return text || undefined
-}
-
-function finishLive(messageId: string, error?: { message: string; code?: AgentErrorCode }) {
+function finishLive(messageId: string, error?: { message: string; code?: AgentErrorCode }, usage?: AgentUsage) {
   const run = live?.messageId === messageId ? live : null
   const past = useEditor.getState().past
   const ids = run ? past.filter((e) => e.id > run.startedAfter && e.source === 'ai').map((e) => e.id) : []
-  patch(messageId, (m) => ({
-    ...stopThinking(m),
-    phase: 'done',
-    status: undefined,
-    error: error?.code === 'cancelled' ? undefined : error,
-    outro: error?.code === 'cancelled' ? [m.outro, 'Stopped.'].filter(Boolean).join('\n\n') : m.outro,
-    outroShown: undefined,
-    historyIds: ids.length ? ids : undefined,
-    calls: m.calls?.map((c) => (c.status === 'running' ? { ...c, status: error ? 'error' : 'done' } : c)),
-  }))
+  patch(messageId, (m) => ({ ...finish(m, Date.now(), error, usage), historyIds: ids.length ? ids : undefined }))
   if (run) live = null
-  useCopilot.setState({ busy: false })
-}
-
-/** Ends the current stretch of thinking, adding it to the time thought. */
-function stopThinking(m: Message): Partial<Message> {
-  if (!m.thinkingSince) return {}
-  return { thinkingSince: undefined, thoughtMs: (m.thoughtMs ?? 0) + (Date.now() - m.thinkingSince) }
+  // After an error the queue waits: what's next may depend on what just failed. Stopping is the user's
+  // own move, usually to say something else, so what they lined up goes straight on.
+  const held = Boolean(error) && error?.code !== 'cancelled' && useCopilot.getState().queue.length > 0
+  useCopilot.setState({ busy: false, queueHeld: held })
+  if (!held) sendNext()
 }
 
 onAgentEvent((e: AgentEvent) => {
+  // Anything from a run that is no longer the live one (stopped, replaced) is dropped.
   if (!live || e.runId !== live.runId) return
   const id = live.messageId
-  switch (e.type) {
-    case 'status':
-      patch(id, () => ({ status: e.message }))
-      break
-    case 'reasoning':
-      patch(id, (m) => {
-        // A new stretch of thinking after the model did something else starts on its own paragraph.
-        const sep = m.reasoning && !m.thinkingSince && !m.reasoning.endsWith('\n\n') ? '\n\n' : ''
-        return { reasoning: (m.reasoning ?? '') + sep + e.delta, thinkingSince: m.thinkingSince ?? Date.now() }
-      })
-      break
-    case 'text':
-      // Before any tool call, text is the intro; after, it's the wrap-up.
-      patch(id, (m) =>
-        m.calls?.length
-          ? { ...stopThinking(m), outro: (m.outro ?? '') + e.delta.replace(/^\n+/, m.outro ? '\n\n' : ''), phase: 'outro' }
-          : { ...stopThinking(m), text: m.text + e.delta, shown: m.text.length + e.delta.length, phase: 'intro' },
-      )
-      break
-    case 'tool-start':
-      patch(id, (m) => ({
-        ...stopThinking(m),
-        phase: 'tools',
-        status: undefined,
-        calls: [...(m.calls ?? []), { id: e.callId, tool: e.tool, title: toolTitle(e.tool), detail: inputDetail(e.input), status: 'running' }],
-      }))
-      break
-    case 'tool-end':
-      patch(id, (m) => ({ calls: m.calls?.map((c) => (c.id === e.callId ? { ...c, status: e.ok ? 'done' : 'error', detail: e.ok ? c.detail : (e.summary ?? c.detail) } : c)) }))
-      break
-    case 'done':
-      finishLive(id)
-      break
-    case 'error':
-      finishLive(id, { message: e.message, code: e.code })
-      break
-  }
+  if (e.type === 'done') return finishLive(id, undefined, e.usage)
+  if (e.type === 'error') return finishLive(id, { message: e.message, code: e.code })
+  patch(id, (m) => applyEvent(m, e, Date.now()))
 })
 
 // ─── Undo ────────────────────────────────────────────────────────────────

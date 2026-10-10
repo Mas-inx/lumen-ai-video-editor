@@ -8,6 +8,7 @@ import type { BridgeLogEntry, BridgeStatus } from '@shared/integrations'
 import { agentTools, runAgentTool } from './agent-tools'
 import { describeTool, skillsPrompt } from './skills'
 import { api } from './store'
+import { trackCall } from './tool-runs'
 
 interface BridgeStore {
   status: BridgeStatus
@@ -27,7 +28,12 @@ export function startBridgeClient() {
     if (req.method === 'tools') return agentTools().map(({ name, description, inputSchema }) => ({ name, description: describeTool(name, description), inputSchema }))
     // Standing instructions for MCP clients: the skills that are on.
     if (req.method === 'instructions') return skillsPrompt()
-    return runAgentTool(req.tool ?? '', req.args ?? {}, { maxWait: req.maxWait })
+    const call = trackCall(req.runId)
+    try {
+      return await runAgentTool(req.tool ?? '', req.args ?? {}, { maxWait: req.maxWait, signal: call.signal })
+    } finally {
+      call.done()
+    }
   })
   api.bridge.onState(({ status, log }) => useBridge.setState({ status, log }))
   void api.bridge.state().then(({ status, log }) => useBridge.setState({ status, log }))

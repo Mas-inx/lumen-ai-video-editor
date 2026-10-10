@@ -1,7 +1,7 @@
 {
   "name": "lumen",
   "productName": "Lumen",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "private": true,
   "description": "Open-source AI video editor for Windows, with a Copilot that can see, hear and edit your video.",
   "keywords": [

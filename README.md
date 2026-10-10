@@ -19,7 +19,7 @@ Lumen is a desktop video editor where the AI isn't a chatbot bolted onto a timel
 [![CI](https://img.shields.io/github/actions/workflow/status/Mas-inx/lumen-ai-video-editor/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/Mas-inx/lumen-ai-video-editor/actions/workflows/ci.yml)
 ![License: MIT](https://img.shields.io/badge/license-MIT-d6ee00?style=flat-square)
 ![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-2b2c26?style=flat-square)
-![122 AI tools](https://img.shields.io/badge/AI%20tools-122-d6ee00?style=flat-square)
+![124 AI tools](https://img.shields.io/badge/AI%20tools-124-d6ee00?style=flat-square)
 ![MCP server and client](https://img.shields.io/badge/MCP-server%20%2B%20client-2b2c26?style=flat-square)
 ![Electron 44](https://img.shields.io/badge/Electron-44-2b2c26?style=flat-square&logo=electron)
 ![React 19](https://img.shields.io/badge/React-19-2b2c26?style=flat-square&logo=react)
@@ -113,9 +113,13 @@ What the AI sees when it watches your edit — one call to `get_contact_sheet`:
 **Brains:** your own **Claude Code** or **Codex** (Lumen runs them headless, with only Lumen's tools), or a model with your key: **Anthropic, OpenAI, Google Gemini, OpenRouter, OpenCode Zen, OpenCode Go, Ollama, LM Studio** or any OpenAI-compatible endpoint. Pick the model and the **effort** — how hard it thinks, from Low to Max (Ultra on Codex) — for every one of them, Claude Code's Fable, Opus, Sonnet and Haiku and Codex's own model list included. Keys are encrypted by Windows (DPAPI) and never leave the app's main process.
 
 - **Chats per project.** Start new chats, switch between them, and pick up where you left off after a restart.
-- **See its thinking** as it streams, then expand it any time.
-- **Copy** any message or code block.
+- **Nothing happens out of sight.** The chat shows the model's thinking, each step while it is written, run and finished, and a line with a clock for what it is doing right now. Open any step to see what was sent and what came back.
+- **Queue and stop.** Send more while it works and the messages wait their turn. Stop ends the reply at once, running exports and cut-outs included.
+- **Attach files:** paste, drop or pick pictures, PDFs, Word documents and text files.
+- **Prompt caching** on API keys: with Anthropic, each step re-reads the conversation from cache at about a tenth of the price, and every reply shows what it used.
+- **Copy** any message, code block, or everything a reply did.
 - **The web:** it can search, read pages, and look at a page as a screenshot, and links in its replies show previews.
+- **Video links:** paste a YouTube or Vimeo link, a video post on X or a video file, and it watches it: frames across the whole video, the transcript from its captions, and the chapters. Nothing is imported.
 - **Skills:** craft guides it loads before the work, for short-form editing, motion design, grading, sound, Blender and generation prompts. Add your own in the SKILL.md format. Claude Code, Codex and any agent on Lumen's MCP server use them too.
 
 ### Smart edits

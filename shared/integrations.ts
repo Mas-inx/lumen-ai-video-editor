@@ -3,7 +3,7 @@
  * HyperFrames renderer and every MCP connection — and the editor UI.
  * Type-only apart from the IPC channel names, so both sides can import it.
  */
-import type { AgentEvent, AgentRunRequest, LocalAgentId, LocalAgentState, ModelInfo, ProviderId, ProviderState } from './ai'
+import type { AgentEvent, AgentRunRequest, AttachmentContent, AttachmentInput, ChatAttachment, LocalAgentId, LocalAgentState, ModelInfo, ProviderId, ProviderState } from './ai'
 import type { SkillDoc, SkillInfo, SkillSource } from './skills'
 
 // ─── Generated media ─────────────────────────────────────────────────────
@@ -258,11 +258,15 @@ export const IPC = {
   aiRun: 'lumen:ai:run',
   aiStop: 'lumen:ai:stop',
   aiForget: 'lumen:ai:forget',
+  aiAttach: 'lumen:ai:attach',
+  aiDetach: 'lumen:ai:detach',
+  aiAttachment: 'lumen:ai:attachment',
   aiChatsLoad: 'lumen:ai:chats-load',
   webSearch: 'lumen:web:search',
   webRead: 'lumen:web:read',
   webScreenshot: 'lumen:web:screenshot',
   webPreview: 'lumen:web:preview',
+  webVideo: 'lumen:web:video',
   skillsList: 'lumen:skills:list',
   skillsRead: 'lumen:skills:read',
   skillsReadFile: 'lumen:skills:read-file',
@@ -341,6 +345,11 @@ export interface IntegrationsAPI {
     stop(runId: string): Promise<void>
     /** Drops a conversation's history / agent session. */
     forget(conversationId: string): Promise<void>
+    /** Keeps a file for a chat message (a pasted picture, a dropped or picked document). Rejects with why when it can't be taken. */
+    attach(conversationId: string, file: AttachmentInput): Promise<ChatAttachment>
+    detach(conversationId: string, id: string): Promise<void>
+    /** An attachment read back, or null once its chat is gone. */
+    attachment(conversationId: string, id: string): Promise<AttachmentContent | null>
     /** A project's Copilot chats, as last saved. */
     loadChats(projectId: string): Promise<unknown[]>
     saveChats(projectId: string, chats: unknown[]): Promise<void>
@@ -370,6 +379,8 @@ export interface IntegrationsAPI {
     read(url: string, maxChars?: number): Promise<WebPage>
     screenshot(url: string, opts?: { width?: number; height?: number; fullPage?: boolean }): Promise<WebShot>
     preview(url: string): Promise<WebPreview>
+    /** Watches a linked video without importing it. With `opts.release`, deletes the temporary file an earlier answer pointed at instead. */
+    watchVideo(url: string, opts?: WebVideoOptions): Promise<WebVideo>
   }
   /** Lumen's own MCP server, for external agents. */
   bridge: {
@@ -394,6 +405,8 @@ export interface BridgeRequest {
   args?: Record<string, unknown>
   /** The longest a tool should wait on a job before answering, in seconds (callers over HTTP can't wait long). */
   maxWait?: number
+  /** The Copilot turn this call belongs to, so stopping the turn stops the tool's work too. */
+  runId?: string
 }
 
 /** An MCP tool definition as the editor serves it. */
@@ -477,6 +490,69 @@ export interface WebShot {
   height: number
   /** JPEG, base64. */
   image: string
+}
+
+/** What to watch of a linked video. */
+export interface WebVideoOptions {
+  /** How many frames to show, spread over the stretch (4–48, default 16). */
+  frames?: number
+  /** The stretch to watch, in seconds (default: the whole video). */
+  from?: number
+  to?: number
+  /** Fetch what is said (default true). */
+  transcript?: boolean
+  /** Preferred caption language, e.g. "en". */
+  language?: string
+  /** Instead of watching: delete the temporary file of an earlier answer (its `file.id`). */
+  release?: string
+  /** A name for this watch, so it can be stopped. */
+  id?: string
+  /** Instead of watching: stop the watch with this `id` (its requests and its download end). */
+  cancel?: string
+}
+
+/** A picture as the site served it (often WebP): the editor decodes it. */
+export interface WebVideoPicture {
+  bytes: Uint8Array
+  mime: string
+}
+
+/** A linked video, as far as it could be watched without importing it. */
+export interface WebVideo {
+  url: string
+  /** "YouTube", "Vimeo", or the page's host. */
+  site: string
+  title?: string
+  author?: string
+  /** seconds */
+  duration?: number
+  description?: string
+  /** The day it was published (YYYY-MM-DD), when the site says. */
+  published?: string
+  views?: number
+  live?: boolean
+  chapters: { start: number; title: string }[]
+  /** What is said, in readable lines (within the stretch asked for). */
+  transcript?: {
+    language: string
+    kind: 'manual' | 'auto-generated'
+    lines: TranscriptSegment[]
+    /** The caption languages there are, e.g. "en", "de", "en (auto)". */
+    available?: string[]
+  }
+  /** Frames as tiles on the site's own preview sprite sheets: the editor cuts them out. */
+  tiles?: {
+    sheets: WebVideoPicture[]
+    frames: { time: number; sheet: number; x: number; y: number; width: number; height: number }[]
+  }
+  /** The video as a temporary file the editor decodes frames from; release it when done. */
+  file?: { id: string; url: string; mime: string; size: number }
+  /** The poster picture, for when there are no frames. */
+  thumbnail?: WebVideoPicture
+  /** How it was obtained, e.g. "YouTube captions, YouTube preview frames". */
+  watchedWith: string
+  /** What couldn't be watched, and why. */
+  notes: string[]
 }
 
 export function isPrivateHost(hostname: string) {

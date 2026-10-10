@@ -4,6 +4,48 @@ Every notable change to Lumen, newest first. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-10-11
+
+A Copilot chat you can follow, queue and stop, that takes files and video links, and costs less on an API key.
+
+### Added
+
+- **The Copilot chat shows everything as it happens.** A reply is now a running record, in order: what the model thought, what it said and every step it took.
+  - Thinking shows live, then folds to *Thought for 12 s*; open it to read all of it. Claude models on an API key now send a summary of their thinking. Before, they sent none and the chat sat silent while they thought.
+  - Each step shows while the model is still writing it (*Writing the request — 4,200 characters so far*), while it runs (with progress from exports, cut-outs, tracking and renders) and when it's done. Open a step to see what was sent and what came back.
+  - There is always a line saying what's going on, with a clock: *Asking the model…*, *Waiting for the model…*, *Reading the result…*. After 20 seconds with nothing new, it says that too.
+  - When a provider is busy or rate-limiting, the chat says so and tries again, up to three times, from the steps already done. No tool runs twice.
+  - Each reply ends with what it used: tokens in (and how many came from cache), tokens out, steps and time. *Copy everything it did* copies the whole record.
+- **Queue messages while it works.** Send while a reply is in progress and the message waits in a list above the box, then goes when the reply ends. Send one now, edit it or remove it. After an error, the queue waits for you.
+- **Attach files to a message:** paste from the clipboard, drop onto the chat, or pick *From your computer…*.
+  - Pictures, PDFs, Word documents and text of any kind (code, CSV, JSON, subtitles, Markdown). A long paste becomes a file, so the box stays readable.
+  - Video and audio go into the media library and are attached as media.
+  - Pictures need a model that can see them. PDFs go to Claude, GPT and Gemini API models. Claude Code and Codex open attachments with the new `read_attachment` tool.
+- **The Copilot watches video links.** Paste a link and it sees the video itself, not just the thumbnail: frames spread across it as labelled contact sheets, what is said (a timestamped transcript from the captions), the chapters, title, author and length. Nothing is imported into the project.
+  - **YouTube** (videos and Shorts) and **Vimeo** take a second or two: Lumen reads the captions and the small preview pictures the player shows when you hover the timeline, without downloading the video.
+  - **A video file's link** is downloaded to a temporary file (up to 400 MB), sampled, and deleted. **Video posts on X** and pages that name their video in public work the same way.
+  - Ask for a closer look at any stretch (*from_seconds*, *to_seconds*) and it gets more frames of less video. A long transcript comes in parts.
+  - Other sites (TikTok, Instagram, Twitch and the like) need [yt-dlp](https://github.com/yt-dlp/yt-dlp) installed; Lumen uses it if it's on your PATH and never downloads it itself.
+  - Lumen doesn't sign in or get around age and sign-in checks: for those it says so and shows what is public. YouTube and Vimeo are read the way their own players read them, which isn't an official API and can stop working when they change it.
+  - Every brain can use it (`watch_web_video`), Claude Code, Codex and agents on the MCP server included.
+- **Prompt caching for API models,** so a long chat costs a fraction of what it did.
+  - With an Anthropic key, the tool list and instructions are cached for an hour and the conversation is cached as it grows: every step of a reply re-reads what came before at about a tenth of the price.
+  - Requests are built so the cached part stays identical byte for byte: tools in a fixed order, the playhead and selection kept in your message rather than in the instructions, attachments sent the same way each time, and old history dropped in large blocks rather than a message at a time.
+  - OpenAI gets a cache key per chat, and Claude models through OpenRouter get cache markers.
+  - The line under each reply shows how much was read from cache.
+
+### Changed
+
+- **Stop stops at once.** The reply is marked stopped straight away, running work (an export, a cut-out, tracking, a video being downloaded to watch, a wait on a render) is cancelled, and anything that arrives late is ignored. Queued messages carry on. *Esc* in the message box stops too.
+- **The chat stays where you're reading.** It follows new output only while you're at the bottom. Scroll up and it stays put; *Latest* (or *New below* when there is more) takes you back.
+- Chats saved by earlier versions open in the new layout.
+
+### Fixed
+
+- In full screen, the timeline's ruler and tracks no longer show through the middle of the picture.
+- **Reading a page or previewing a link failed on any address that redirects** (`http://` to `https://`, a short link, a *latest release* link) with "Redirect was cancelled". Redirects are followed again, each hop checked as before. Page requests no longer carry cookies.
+- An expired Claude Code sign-in is recognised as one, so the chat offers *Sign in* instead of only the error, and the error is shown once rather than twice.
+
 ## [1.4.0] — 2026-10-07
 
 Frames straight from other apps, exports that find a working encoder on any graphics card, and transitions you can place anywhere on a cut.
@@ -254,7 +296,9 @@ First release.
 - **Integrations** — Blender renders (3D titles, backgrounds, agent-written scenes), HyperFrames motion graphics, MCP host (Higgsfield, Runway, Replicate, fal.ai or any server) and Lumen's own MCP server for external agents.
 - Windows installer (NSIS, per-user or all-users).
 
-[Unreleased]: https://github.com/Mas-inx/lumen-ai-video-editor/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/Mas-inx/lumen-ai-video-editor/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.5.0
+[1.4.0]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.4.0
 [1.3.0]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.3.0
 [1.2.0]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.2.0
 [1.1.0]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.1.0

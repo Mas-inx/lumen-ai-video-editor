@@ -23,7 +23,7 @@ import { useAi } from './ai'
 import { requestApproval } from './approvals'
 import { api, elevenMusic, elevenSfx, elevenSpeak, generateImage, generateVideo, importLink, loadGenModels, renderBlender, renderMotion, useGenModels, useIntegrations, type GenProvider } from './store'
 import { CONTROL_TOOLS } from './tools/control'
-import { emitToolImages } from './tools/events'
+import { emitToolImages, emitToolProgress } from './tools/events'
 import { FOOTAGE_TOOLS } from './tools/footage'
 import { INSPECT_TOOLS } from './tools/inspect'
 import { bool, num, obj, oneOf, str, waitSeconds, withImages, WithImages, type AgentTool, type ToolContext, type ToolImage } from './tools/kit'
@@ -31,6 +31,7 @@ import { VISION_TOOLS } from './tools/vision'
 import { BEAT_TOOLS } from './tools/beats'
 import { SKILL_TOOLS } from './tools/skills'
 import { SUBJECT_TOOLS } from './tools/subject'
+import { ATTACHMENT_TOOLS } from './tools/attachments'
 import { INGEST_TOOLS } from './tools/ingest'
 import { WEB_TOOLS } from './tools/web'
 
@@ -40,7 +41,7 @@ const AT = num('Where to place it, in seconds from the start of the timeline (de
 
 // ─── Jobs ────────────────────────────────────────────────────────────────
 
-function waitForJob(jobId: string, seconds: number): Promise<Job | undefined> {
+function waitForJob(jobId: string, seconds: number, ctx?: ToolContext): Promise<Job | undefined> {
   const done = () => {
     const s = useIntegrations.getState()
     const job = s.jobs[jobId]
@@ -50,17 +51,25 @@ function waitForJob(jobId: string, seconds: number): Promise<Job | undefined> {
   const now = done()
   if (now || seconds <= 0) return Promise.resolve(now ?? useIntegrations.getState().jobs[jobId])
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      unsub()
-      resolve(useIntegrations.getState().jobs[jobId])
-    }, seconds * 1000)
-    const unsub = useIntegrations.subscribe(() => {
-      const job = done()
-      if (!job) return
+    let told = ''
+    const finish = (job: Job | undefined) => {
       clearTimeout(timer)
       unsub()
+      ctx?.signal?.removeEventListener('abort', stop)
       resolve(job)
+    }
+    // Stopped by the user: stop waiting (the render itself carries on and still lands in Media).
+    const stop = () => finish(useIntegrations.getState().jobs[jobId])
+    const timer = setTimeout(stop, seconds * 1000)
+    const unsub = useIntegrations.subscribe(() => {
+      const job = done()
+      if (job) return finish(job)
+      const running = useIntegrations.getState().jobs[jobId]
+      if (!running || !ctx?.progress) return
+      const line = [running.progress >= 0 ? `${Math.round(running.progress * 100)}%` : '', running.message ?? ''].filter(Boolean).join(' — ')
+      if (line && line !== told) ctx.progress((told = line))
     })
+    ctx?.signal?.addEventListener('abort', stop, { once: true })
   })
 }
 
@@ -83,7 +92,7 @@ function jobReport(job: Job | undefined, placedClip?: string | null) {
 async function runJob(start: () => Promise<Job>, args: Record<string, unknown>, ctx?: ToolContext) {
   const at = typeof args.at_seconds === 'number' ? Math.round(args.at_seconds * getProject().settings.fps) : usePlayback.getState().frame
   const job = await start()
-  const finished = await waitForJob(job.id, waitSeconds(args, ctx, 90))
+  const finished = await waitForJob(job.id, waitSeconds(args, ctx, 90), ctx)
   let clip: string | null = null
   if (finished?.status === 'done' && args.place !== false) {
     const [assetId] = useIntegrations.getState().imported[job.id] ?? []
@@ -615,7 +624,7 @@ const INTEGRATION_TOOLS: AgentTool[] = [
     name: 'get_job',
     description: 'Status of a render or generation job. Waits up to wait_seconds for it to finish.',
     inputSchema: obj({ job_id: str('Job id'), wait_seconds: WAIT }, ['job_id']),
-    run: async (a, ctx) => jobReport(await waitForJob(String(a.job_id), waitSeconds(a, ctx, 30))),
+    run: async (a, ctx) => jobReport(await waitForJob(String(a.job_id), waitSeconds(a, ctx, 30), ctx)),
   },
   {
     name: 'import_media_url',
@@ -701,7 +710,7 @@ function mcpAgentTools(servers: Record<string, McpServerState>): AgentTool[] {
 
 let cache: AgentTool[] | null = null
 export function agentTools(servers: Record<string, McpServerState> = useIntegrations.getState().servers): AgentTool[] {
-  cache ??= [...INTEGRATION_TOOLS, ...VISION_TOOLS, ...INSPECT_TOOLS, ...CONTROL_TOOLS, ...FOOTAGE_TOOLS, ...WEB_TOOLS, ...SKILL_TOOLS, ...BEAT_TOOLS, ...SUBJECT_TOOLS, ...INGEST_TOOLS, ...editorTools()]
+  cache ??= [...INTEGRATION_TOOLS, ...VISION_TOOLS, ...INSPECT_TOOLS, ...CONTROL_TOOLS, ...FOOTAGE_TOOLS, ...WEB_TOOLS, ...SKILL_TOOLS, ...BEAT_TOOLS, ...SUBJECT_TOOLS, ...INGEST_TOOLS, ...ATTACHMENT_TOOLS, ...editorTools()]
   const mcp = mcpAgentTools(servers)
   return mcp.length ? [...cache, ...mcp] : cache
 }
@@ -710,7 +719,7 @@ export async function runAgentTool(name: string, args: Record<string, unknown>, 
   const tool = agentTools().find((t) => t.name === name)
   if (!tool) return { content: [{ type: 'text', text: `Unknown tool: ${name}. Call get_project to start; the tool list names every tool.` }], isError: true }
   try {
-    const out = await tool.run(args ?? {}, ctx)
+    const out = await tool.run(args ?? {}, { ...ctx, progress: (message) => emitToolProgress(name, message) })
     const result = out instanceof WithImages ? out.json : out
     const structured = result && typeof result === 'object' && !Array.isArray(result) ? (result as Record<string, unknown>) : { result }
     const content: BridgeToolResult['content'] = [{ type: 'text', text: JSON.stringify(result, null, 2) }]

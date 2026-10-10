@@ -27,15 +27,17 @@ export const SUBJECT_TOOLS: AgentTool[] = [
       },
       ['clip_id'],
     ),
-    run: async (a) => {
+    run: async (a, ctx) => {
       const clipId = text(a, 'clip_id') ?? ''
+      // The model's one-time download and each frame show on the tool's step; stopping the turn stops the cut-out.
+      const live = { signal: ctx?.signal, onProgress: (p: { done: number; total: number }) => p.total && ctx?.progress?.(`${Math.round((p.done / p.total) * 100)}% — frame ${p.done} of ${p.total}`) }
       const subject = a.subject === 'any' ? 'any' : 'person'
       const mode = text(a, 'mode') ?? 'text-behind'
       if (mode === 'text-behind') {
-        const res = await textBehindSubject(clipId, { subject, text: text(a, 'text'), titleId: text(a, 'title_id'), source: 'ai' })
+        const res = await textBehindSubject(clipId, { subject, text: text(a, 'text'), titleId: text(a, 'title_id'), source: 'ai', ...live })
         return { subject_clip_id: res.subjectClipId, title_clip_id: res.titleClipId, note: 'Edit the title (clip_update text) to change words, font or size; keep it big and behind the head for the effect to read.' }
       }
-      await cutOutSubject(clipId, { subject, invert: mode === 'remove', source: 'ai' })
+      await cutOutSubject(clipId, { subject, invert: mode === 'remove', source: 'ai', ...live })
       return { clip_id: clipId, matte: getProject().clips[clipId]?.matte }
     },
   },

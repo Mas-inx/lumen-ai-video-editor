@@ -1,5 +1,5 @@
 import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron'
-import { IPC, type BlenderRenderRequest, type ImageGenRequest, type McpServerConfig, type MotionRenderRequest, type Provenance, type VideoGenRequest } from '../../shared/integrations'
+import { IPC, type BlenderRenderRequest, type ImageGenRequest, type McpServerConfig, type MotionRenderRequest, type Provenance, type VideoGenRequest, type WebVideoOptions } from '../../shared/integrations'
 import { detectBlender, renderBlender, runLive, setBlenderPath } from './blender'
 import { renderMotion } from './hyperframes'
 import { cancelJob, listJobs } from './jobs'
@@ -8,15 +8,17 @@ import { elevenLabsState, listVoices, music, setElevenLabsKey, soundEffect, spea
 import { importUrl, reveal } from './media'
 import { bridgeState, regenerateToken, startBridge, stopBridge } from './server'
 import { forgetConversation, startAgentRun, stopAgentRun } from './ai/agent'
+import { attachmentContent, readAttachment, removeAttachment, saveAttachment } from './ai/attachments'
 import { loadChats, saveChats } from './ai/chats'
 import { linkPreview, readPage, screenshotPage, webSearch } from './web'
+import { watchVideo } from './video-link'
 import { deleteSkill, importSkill, listSkills, openSkillsFolder, readSkill, readSkillFile, saveSkill } from './skills'
 import { localAgentStates, signInLocal } from './ai/local-agents'
 import { signInOpenRouter } from './ai/openrouter'
 import { listModels, providerStates, setProvider } from './ai/providers'
 import { transcribeWithOpenAI } from './ai/transcribe'
 import { generateImage, generateVideo, mediaModels } from './ai/media-gen'
-import { cleanTarget, PROVIDERS, type AgentRunRequest, type LocalAgentId, type ProviderId } from '../../shared/ai'
+import { cleanTarget, PROVIDERS, type AgentRunRequest, type AttachmentInput, type ChatAttachment, type LocalAgentId, type ProviderId } from '../../shared/ai'
 
 /**
  * The integration IPC surface. Only the editor's own page may call it —
@@ -77,8 +79,19 @@ export function registerIntegrationIpc(isTrustedUrl: (url: string) => boolean) {
       prompt: req.prompt.slice(0, 20_000),
       context: typeof req.context === 'string' ? req.context.slice(0, 4000) : undefined,
       instructions: typeof req.instructions === 'string' ? req.instructions.slice(0, 12_000) : undefined,
+      // Only what was really saved for this chat: the bytes are looked up by id.
+      attachments: (Array.isArray(req.attachments) ? req.attachments : [])
+        .slice(0, 12)
+        .flatMap((a) => (a && typeof a.id === 'string' ? [readAttachment(req.conversationId, a.id)?.meta] : []))
+        .filter((a): a is ChatAttachment => Boolean(a)),
     })
   })
+  handle(IPC.aiAttach, (conversationId: string, file: AttachmentInput) => {
+    if (!file || typeof file.name !== 'string' || !(file.data instanceof Uint8Array)) throw new Error('Bad file')
+    return saveAttachment(String(conversationId), { name: file.name, mime: typeof file.mime === 'string' ? file.mime : undefined, data: file.data })
+  })
+  handle(IPC.aiDetach, (conversationId: string, id: string) => removeAttachment(String(conversationId), String(id)))
+  handle(IPC.aiAttachment, (conversationId: string, id: string) => attachmentContent(String(conversationId), String(id)))
   handle(IPC.aiStop, (runId: string) => stopAgentRun(String(runId)))
   handle(IPC.aiForget, (conversationId: string) => forgetConversation(String(conversationId)))
   handle(IPC.aiChatsLoad, (projectId: string) => loadChats(String(projectId)))
@@ -90,6 +103,7 @@ export function registerIntegrationIpc(isTrustedUrl: (url: string) => boolean) {
     return screenshotPage(String(url), { width: Number(o.width) || undefined, height: Number(o.height) || undefined, fullPage: o.fullPage === true })
   })
   handle(IPC.webPreview, (url: string) => linkPreview(String(url)))
+  handle(IPC.webVideo, (url: string, opts?: WebVideoOptions) => watchVideo(String(url), opts && typeof opts === 'object' ? opts : {}))
 
   const skillSource = (s: unknown) => {
     if (s !== 'user' && s !== 'claude') throw new Error('Unknown skill source')

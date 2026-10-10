@@ -55,7 +55,8 @@ export async function editorInstructions(): Promise<string> {
   return res.ok && typeof res.result === 'string' ? res.result : ''
 }
 
-export async function callEditorTool(tool: string, args: Record<string, unknown>, timeoutMs = 20 * 60_000): Promise<BridgeToolResult> {
-  const res = await askEditor({ method: 'call', tool, args }, timeoutMs)
+/** Runs one of the editor's tools. `runId` ties the call to a Copilot turn, so stopping the turn stops the work. */
+export async function callEditorTool(tool: string, args: Record<string, unknown>, timeoutMs = 20 * 60_000, runId?: string): Promise<BridgeToolResult> {
+  const res = await askEditor({ method: 'call', tool, args, ...(runId ? { runId } : {}) }, timeoutMs)
   return res.ok ? (res.result as BridgeToolResult) : { content: [{ type: 'text', text: res.error ?? 'Failed' }], isError: true }
 }

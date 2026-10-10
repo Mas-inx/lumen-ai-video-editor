@@ -14,7 +14,7 @@ import { desktop } from '@/lib/platform'
 import { assetById, clampNum, frameArg, int, list, num, number, obj, rangeArg, seconds, str, timecode, trackName, withImages, type AgentTool } from './kit'
 
 /** "0:12.5" — tenths, so cells a second apart still read differently. */
-function label(sec: number) {
+export function label(sec: number) {
   const m = Math.floor(sec / 60)
   return `${m}:${(sec - m * 60).toFixed(1).padStart(4, '0')}`
 }

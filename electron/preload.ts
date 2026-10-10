@@ -61,6 +61,9 @@ const integrations: IntegrationsAPI = {
     run: (req) => invoke(IPC.aiRun, req),
     stop: (runId) => invoke(IPC.aiStop, runId),
     forget: (conversationId) => invoke(IPC.aiForget, conversationId),
+    attach: (conversationId, file) => invoke(IPC.aiAttach, conversationId, file),
+    detach: (conversationId, id) => invoke(IPC.aiDetach, conversationId, id),
+    attachment: (conversationId, id) => invoke(IPC.aiAttachment, conversationId, id),
     loadChats: (projectId) => invoke(IPC.aiChatsLoad, projectId),
     saveChats: (projectId, chats) => invoke(IPC.aiChatsSave, projectId, chats),
     transcribe: (wav, language) => invoke(IPC.aiTranscribe, wav, language),
@@ -83,6 +86,7 @@ const integrations: IntegrationsAPI = {
     read: (url, maxChars) => invoke(IPC.webRead, url, maxChars),
     screenshot: (url, opts) => invoke(IPC.webScreenshot, url, opts),
     preview: (url) => invoke(IPC.webPreview, url),
+    watchVideo: (url, opts) => invoke(IPC.webVideo, url, opts),
   },
   bridge: {
     state: () => invoke(IPC.bridgeState),
