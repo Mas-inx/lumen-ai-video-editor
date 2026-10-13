@@ -1,6 +1,6 @@
 # Lumen AI tools
 
-Every AI that works in Lumen — the Copilot's API models, your own Claude Code or Codex, and any agent connected to Lumen's MCP server — uses this same set of **124 tools**. This page is generated from the tool registry ([`src/integrations/agent-tools.ts`](../src/integrations/agent-tools.ts) and [`src/integrations/tools/`](../src/integrations/tools)).
+Every AI that works in Lumen — the Copilot's API models, your own Claude Code or Codex, and any agent connected to Lumen's MCP server — uses this same set of **133 tools**. This page is generated from the tool registry ([`src/integrations/agent-tools.ts`](../src/integrations/agent-tools.ts) and [`src/integrations/tools/`](../src/integrations/tools)).
 
 - **Times:** the helper tools take seconds; editor commands take integer frames at the project's fps (see `get_project`).
 - **Pictures:** `get_frame`, `get_contact_sheet`, `get_media_frames` and `get_editor_screenshot` return an image block along with JSON — over MCP as `image` content, and to the Copilot's models as real images.
@@ -17,6 +17,7 @@ Every AI that works in Lumen — the Copilot's API models, your own Claude Code 
 - [Smart edits](#smart-edits) — 9 tools
 - [Generate and import](#generate-and-import) — 18 tools
 - [Timelines and footage](#timelines-and-footage) — 8 tools
+- [Record](#record) — 9 tools
 - [Web, files and skills](#web-files-and-skills) — 8 tools
 - [Editor commands](#editor-commands) — 58 tools
 
@@ -84,7 +85,7 @@ Everything under one moment of the timeline, on every track (top layer first): e
 
 ### `get_clip`
 
-Full details of one or more clips — every property (transform, color grade, audio mix, keyframes, effects, animation, transition, text style, speed, look, blend), with times in seconds and the media each uses. A clip that came with a cue sheet (a GS Cinematic Studio render) also lists its cues: what happens in it — lines said, cuts, footsteps, effects — at timeline seconds, for placing voices and sounds, since the clip itself is silent. Read a clip before a precise edit so you only change what you mean to.
+Full details of one or more clips — every property (transform, color grade, audio mix, keyframes, effects, animation, transition, text style, speed, look, blend), with times in seconds and the media each uses. A clip that came with a cue sheet (a GS Cinematic Studio render) also lists its cues: what happens in it — lines said, cuts, footsteps, effects — at timeline seconds, for placing voices and sounds, since the clip itself is silent. A screen recording lists its markers the same way, and its clicks (when and where on the picture). Read a clip before a precise edit so you only change what you mean to.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
@@ -664,6 +665,134 @@ The render queue (exports lined up with their files chosen; add to it with expor
 | --- | --- | --- |
 | `action` | `list` · `start` · `clear_finished` | What to do (default list) |
 | `wait_seconds` | number | With start: wait up to this long for the queue to finish (max 600, default 0) |
+
+## Record
+
+Record a screen or a window into the project — picture at up to 4K and 60 fps, its sound, the microphone and the camera — then follow the pointer’s clicks. The first call asks the user to allow screen recording for the session. See [Recording](RECORDING.md).
+
+### `list_capture_sources`
+
+What can be recorded on this computer: every screen and every open window, with its id, size and the app it belongs to — and one picture of them all, numbered in the same order. Call it to find the window to record (a game, a browser, an app) before start_recording. The first call asks the user to allow screen recording for this session.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `kind` | `screen` · `window` | Only screens, or only windows |
+| `query` | string | Only windows whose title or app name contains this |
+| `pictures` | boolean | Include the picture (default true) |
+
+### `start_recording`
+
+Start recording a screen or a window into the project: picture at up to 4K and 60 fps on the graphics card’s encoder (the processor’s if there is none that works), with the sound of the whole computer or of just that window’s app, and optionally the microphone and the camera as clips of their own. Returns once it is rolling, with the real picture size and the encoder in use. Then do whatever should be filmed, and call stop_recording. `source` is an id from list_capture_sources, “screen”, or words from a window’s title or app (“fivem”, “chrome”). A resolution above the source’s scales the picture up; `region` records part of it. Set max_seconds for a recording that ends by itself.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `source` **(required)** | string | What to record: a source id, “screen”, “screen 2”, or words from a window’s title or app name |
+| `region` | object |  |
+| `resolution` | `native` · `4k` · `2160p` · `1440p` · `1080p` · `720p` | The picture’s size by its short side (default native; 4k scales a smaller source up) |
+| `fps` | number | Frames a second, 5–60 (default 60) |
+| `codec` | `h264` · `hevc` · `av1` | Video codec (default h264; another is used if this computer can’t encode it at this size) |
+| `hardware` | boolean | Encode on the graphics card (default true) |
+| `quality` | number | 10–100 (default 60): the bitrate is worked out from it |
+| `bitrate_mbps` | number | Or an exact video bitrate in megabits a second |
+| `keyframe_seconds` | number | A key frame at least this often (default 2) |
+| `audio` | `off` · `system` · `app` | The recording’s own sound: off, system (everything the computer plays) or app (only the recorded window’s app — windows only) |
+| `microphone` | boolean \| string | true for the first microphone, or words from one’s name; false for none |
+| `camera` | boolean \| string | true for the first camera, or words from one’s name; false for none |
+| `cursor` | boolean | The mouse pointer is in the picture (default true; false for games and films) |
+| `click_data` | boolean | Keep the pointer’s clicks as data for zoom_on_clicks and highlight_clicks (default true) |
+| `countdown_seconds` | integer | Seconds counted down first (default 0) |
+| `max_seconds` | number | Stop by itself after this long |
+| `name` | string | A name for the recording |
+| `hide_lumen` | boolean | Keep Lumen’s own window out of a screen recording (default true) |
+| `minimize_lumen` | boolean | Minimize Lumen while recording |
+
+### `recording_status`
+
+Whether a recording is running and how it is going: seconds so far, frames, how many frames a second the source is sending, frames skipped, size, and anything worth knowing that happened. With wait_seconds it waits that long, or until the recording ends.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `wait_seconds` | number | Wait this long (or until it ends) before answering |
+
+### `pause_recording`
+
+Pause the running recording, or carry on with it. Paused time isn’t in the file.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `paused` | boolean | true to pause, false to carry on (default: the other of what it is now) |
+
+### `add_recording_marker`
+
+Mark this moment of the running recording. Markers come out as cues on the recording’s clip (and get_clip gives them at timeline seconds), so the edit can find the moments that mattered.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `label` | string | What happens here |
+
+### `stop_recording`
+
+Stop the recording, finish its files and add them to the project: the recording on the timeline at the playhead (or at_seconds) with the camera in the corner above it and the microphone on a voice track beneath, all lined up — or only in the media library with place: "library". To keep only part of it on the timeline (the media keeps everything), give trim_start_seconds / trim_end_seconds from the recording’s start, or the same moments as Unix times. `cues` attaches a cue sheet to the clip. Returns the files, media and clips.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `place` | `timeline` · `library` · `none` | Where the clips go (default timeline) |
+| `at_seconds` | number | Timeline position for the clips (default: the playhead) |
+| `trim_start_seconds` | number | Use the recording from this many seconds in |
+| `trim_end_seconds` | number | …up to this many seconds in |
+| `trim_from_unix_ms` | number | Use the recording from this moment (Unix milliseconds) |
+| `trim_to_unix_ms` | number | …up to this moment (Unix milliseconds) |
+| `cues` | object[] | What happens in the picture and when: { at (seconds from the trimmed start), kind, label… } |
+| `discard` | boolean | Throw the recording away instead |
+
+### `zoom_on_clicks`
+
+Zoom a screen recording in on where the pointer clicked: it pushes in just before each click, stays while the clicking goes on there (panning between clicks close together) and eases back out. Uses the click data the recording kept; the zooms are ordinary scale and position keyframes, so they can be changed or removed after. Replaces the clip’s own size and position animation. clear: true only takes the zooms off.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `clip_id` **(required)** | string | The recording’s clip on the timeline |
+| `zoom` | number | How far in: 2 shows half the picture’s width (default 2) |
+| `hold_seconds` | number | How long it stays after the last click (default 1.6) |
+| `lead_seconds` | number | How long the push-in takes (default 0.45) |
+| `group_seconds` | number | Clicks this close together share one zoom (default 2.5) |
+| `right_clicks` | boolean | Zoom on right clicks too |
+| `clear` | boolean | Remove the zooms instead |
+
+### `highlight_clicks`
+
+Draw a pulse where each click landed in a screen recording: a dot that grows and fades, as short title clips on a track of their own above it (so each can be moved or deleted). It follows the clip’s zooms, so call zoom_on_clicks first.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `clip_id` **(required)** | string | The recording’s clip on the timeline |
+| `color` | string | Hex colour (default #ffd400) |
+| `size` | number | Largest size as a fraction of the frame’s height (default 0.09) |
+| `seconds` | number | How long each pulse lasts (default 0.5) |
+| `right_clicks` | boolean | Right clicks too |
+
+### `record_studio_take`
+
+Film a take of the open GS Cinematic Studio scene in real time and put it on the timeline: finds the game’s window, starts recording it (picture and only the game’s sound, no pointer), tells the studio to play the take cleanly (film_take: every panel and overlay hidden, a held first and last frame), stops, and trims the clip to exactly the take with the studio’s cue sheet attached. Needs the studio connected in Integrations with a director’s game under remote control, on this computer, with the game in a window or borderless. Use it for takes that should move and sound as the game does; render_export with ingest_start stays the frame-exact (silent, slower) way.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `target` | `scene` · `shot` · `range` | What to film (default the whole active scene) |
+| `path_id` | string | The shot, for target: shot (default the active shot) |
+| `from_frame` | integer | First frame, for target: range |
+| `to_frame` | integer | Last frame, for target: range |
+| `window` | string | Words from the game window’s title or app name (default: fivem) |
+| `resolution` | `native` · `4k` · `2160p` · `1440p` · `1080p` · `720p` | The picture’s size (default native) |
+| `fps` | number | Frames a second (default 60) |
+| `codec` | `h264` · `hevc` · `av1` | Video codec (default h264) |
+| `quality` | number | 10–100 (default 80) |
+| `audio` | `off` · `system` · `app` | The take’s sound (default app: only the game) |
+| `preroll_seconds` | number | Held first frame before the take plays (default 1) |
+| `postroll_seconds` | number | Held last frame after it (default 0.5) |
+| `at_seconds` | number | Timeline position for the clip (default: the playhead) |
+| `place` | `timeline` · `library` | Where the clip goes (default timeline) |
+| `name` | string | A name for the take |
+| `server` | string | Which connected studio, by name, when there are several |
 
 ## Web, files and skills
 

@@ -5,6 +5,7 @@
  * user picked (or that a project it opened references).
  */
 
+import type { CaptureAPI } from './capture'
 import type { IngestClip, IngestQuality, IngestResult, IngestSession, IngestState } from './ingest'
 
 /** A media file on disk the editor may read, served as `url` (lumen-media://file/…). */
@@ -342,6 +343,8 @@ export interface AppAPI {
     onState(cb: (state: IngestState) => void): () => void
     onClip(cb: (clip: IngestClip) => void): () => void
   }
+  /** Screen recording: sources, files, the keys that work in other apps, one app's sound and the cursor (see shared/capture.ts). */
+  capture: CaptureAPI
   system: {
     /** The graphics cards Chromium found and what it accelerates on them. */
     gpu(): Promise<GpuInfo>

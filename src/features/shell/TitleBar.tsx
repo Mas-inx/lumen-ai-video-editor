@@ -22,11 +22,14 @@ import {
   Save,
   SaveAll,
   Settings2,
+  Square,
   Undo2,
   Upload,
 } from 'lucide-react'
 import { useRef, useState } from 'react'
+import { openRecorder, stopRecording, useRecorder } from '@/capture/recorder'
 import { AiSparkle, APP_NAME, LogoMark } from '@/components/brand'
+import { fmtClock } from '@/features/record/RecordDialog'
 import { Button, IconButton } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuSub, MenuTrigger } from '@/components/ui/menu'
@@ -99,6 +102,7 @@ export function TitleBar() {
           <Redo2 />
         </IconButton>
         <div className="mx-2 h-4 w-px bg-line-2" />
+        <RecordButton />
         <Button
           variant="ghost"
           size="sm"
@@ -114,6 +118,35 @@ export function TitleBar() {
         </Button>
       </div>
     </header>
+  )
+}
+
+/** Opens the record window; while a recording runs it is the clock, and a click on the square stops it. */
+function RecordButton() {
+  const phase = useRecorder((s) => s.phase)
+  const seconds = useRecorder((s) => s.stats.seconds)
+  if (phase === 'idle')
+    return (
+      <IconButton label="Record a screen or window" shortcut="mod+shift+r" onClick={() => void openRecorder()} tooltipSide="bottom">
+        <span className="grid size-[17px] place-items-center rounded-full ring-[1.5px] ring-current">
+          <span className="size-[7px] rounded-full bg-danger" />
+        </span>
+      </IconButton>
+    )
+  const rolling = phase === 'recording' || phase === 'paused'
+  return (
+    <div className="mr-1 flex h-7 items-center gap-1 rounded-full bg-danger/14 pr-1 pl-2.5 text-xs font-medium text-danger tabular">
+      <button type="button" className="flex items-center gap-1.5" onClick={() => void openRecorder()} title="Show the recording">
+        <span className={cn('size-2 rounded-full bg-danger', phase === 'recording' && 'animate-pulse-soft')} />
+        {phase === 'paused' ? 'Paused' : phase === 'finishing' ? 'Finishing' : phase === 'countdown' ? 'Starting' : phase === 'preparing' ? 'Getting ready' : fmtClock(seconds)}
+        {phase === 'paused' && <span className="text-danger/70">{fmtClock(seconds)}</span>}
+      </button>
+      {rolling && (
+        <button type="button" aria-label="Stop recording" title="Stop recording" onClick={() => void stopRecording().catch(() => {})} className="grid size-5 place-items-center rounded-full hover:bg-danger/20">
+          <Square className="size-2.5" fill="currentColor" />
+        </button>
+      )}
+    </div>
   )
 }
 

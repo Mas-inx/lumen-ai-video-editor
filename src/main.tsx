@@ -41,7 +41,8 @@ if (import.meta.env.DEV || window.lumen?.testMode) {
     import('@/engine/render-cache'),
     import('@/engine/preview-res'),
     import('@/engine/stills'),
-  ]).then(([store, ui, pb, copilot, ai, integrations, session, media, exporter, smart, transcribe, audio, tools, engineMedia, proxies, sequences, nav, analysis, queue, subtitles, compositor, mediabunny, previewStage, renders, previewRes, stills]) => {
+    import('@/capture/recorder'),
+  ]).then(([store, ui, pb, copilot, ai, integrations, session, media, exporter, smart, transcribe, audio, tools, engineMedia, proxies, sequences, nav, analysis, queue, subtitles, compositor, mediabunny, previewStage, renders, previewRes, stills, recorder]) => {
     Object.assign(window, {
       __lumen: {
         editor: store.useEditor,
@@ -72,6 +73,7 @@ if (import.meta.env.DEV || window.lumen?.testMode) {
         renders,
         previewRes,
         stills,
+        recorder,
       },
     })
   })

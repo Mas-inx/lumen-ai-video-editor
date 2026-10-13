@@ -1,6 +1,8 @@
 import { app, BrowserWindow, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { APP_IPC, type MediaFolder } from '../shared/app'
+import { CAPTURE_IPC, type CaptureSessionState } from '../shared/capture'
 import path from 'node:path'
+import { arm, beginRecording, focusWindow, captureFolder, captureFree, discardRecording, finishRecording, forgetRecording, helperState, listSources, pickCaptureFolder, recoverable, recoverRecording, resetCaptureFolder, setSession, startAppAudio, startCursor, stopStream, windowInfo } from './capture'
 import { collectProject } from './collect'
 import { abortExport, beginExport, beginFile, finishExport, forgetPicked, openPicked, pickExport, restartExport, writeExport, writeFrame, writeSidecar, type ExportRequest } from './export'
 import { mediaRoot } from './integrations/paths'
@@ -119,6 +121,34 @@ export function registerAppIpc(isTrustedUrl: (url: string) => boolean, getStartu
   handle(APP_IPC.ingestComplete, (_win, clipId: unknown, result: unknown) => completeClip(str(clipId), (result ?? {}) as IngestResult))
   handle(APP_IPC.ingestFail, (_win, clipId: unknown, message: unknown) => failClip(str(clipId), str(message)))
   on(APP_IPC.ingestProgress, (_win, clipId: unknown, encoded: unknown) => reportProgress(str(clipId), Number(encoded)))
+  // Screen recording. The picture itself never passes through here: the editor asks Chromium for it.
+  const target = (v: unknown) => {
+    const t = (v ?? {}) as { hwnd?: unknown; pid?: unknown; hz?: unknown }
+    return { hwnd: typeof t.hwnd === 'number' ? t.hwnd : undefined, pid: typeof t.pid === 'number' ? t.pid : undefined, hz: typeof t.hz === 'number' ? t.hz : undefined }
+  }
+  handle(CAPTURE_IPC.sources, (_win, opts: unknown) => {
+    const o = (opts ?? {}) as { thumbnails?: unknown; icons?: unknown }
+    return listSources({ thumbnails: o.thumbnails === true, icons: o.icons === true })
+  })
+  handle(CAPTURE_IPC.arm, (_win, sourceId: unknown, systemAudio: unknown) => arm(str(sourceId), systemAudio === true))
+  handle(CAPTURE_IPC.helper, () => helperState())
+  handle(CAPTURE_IPC.folder, () => captureFolder())
+  handle(CAPTURE_IPC.pickFolder, (win) => pickCaptureFolder(win))
+  handle(CAPTURE_IPC.resetFolder, () => resetCaptureFolder())
+  handle(CAPTURE_IPC.begin, (_win, name: unknown, extension: unknown) => beginRecording(str(name), str(extension)))
+  handle(CAPTURE_IPC.finish, (_win, id: unknown) => finishRecording(str(id)))
+  handle(CAPTURE_IPC.discard, (_win, id: unknown) => discardRecording(str(id)))
+  handle(CAPTURE_IPC.free, () => captureFree())
+  handle(CAPTURE_IPC.appAudioStart, (_win, key: unknown, t: unknown) => startAppAudio(str(key), target(t)))
+  handle(CAPTURE_IPC.cursorStart, (_win, key: unknown, t: unknown) => startCursor(str(key), target(t)))
+  handle(CAPTURE_IPC.streamStop, (_win, key: unknown) => stopStream(str(key)))
+  handle(CAPTURE_IPC.windowInfo, (_win, hwnd: unknown) => windowInfo(Number(hwnd)))
+  handle(CAPTURE_IPC.focus, (win, hwnd: unknown) => focusWindow(win, typeof hwnd === 'number' ? hwnd : undefined))
+  handle(CAPTURE_IPC.recoverable, () => recoverable())
+  handle(CAPTURE_IPC.recover, (_win, file: unknown) => recoverRecording(str(file)))
+  handle(CAPTURE_IPC.forget, (_win, file: unknown) => forgetRecording(str(file)))
+  on(CAPTURE_IPC.session, (win, state: unknown) => setSession(win, (state ?? {}) as Partial<CaptureSessionState>))
+
   handle(APP_IPC.gpuInfo, () => gpuInfo())
   handle(APP_IPC.graphicsSet, (_win, patch: unknown) => {
     setGraphicsSettings((patch ?? {}) as Record<string, never>)

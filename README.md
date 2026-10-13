@@ -19,7 +19,7 @@ Lumen is a desktop video editor where the AI isn't a chatbot bolted onto a timel
 [![CI](https://img.shields.io/github/actions/workflow/status/Mas-inx/lumen-ai-video-editor/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/Mas-inx/lumen-ai-video-editor/actions/workflows/ci.yml)
 ![License: MIT](https://img.shields.io/badge/license-MIT-d6ee00?style=flat-square)
 ![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-2b2c26?style=flat-square)
-![124 AI tools](https://img.shields.io/badge/AI%20tools-124-d6ee00?style=flat-square)
+![133 AI tools](https://img.shields.io/badge/AI%20tools-133-d6ee00?style=flat-square)
 ![MCP server and client](https://img.shields.io/badge/MCP-server%20%2B%20client-2b2c26?style=flat-square)
 ![Electron 44](https://img.shields.io/badge/Electron-44-2b2c26?style=flat-square&logo=electron)
 ![React 19](https://img.shields.io/badge/React-19-2b2c26?style=flat-square&logo=react)
@@ -122,6 +122,18 @@ What the AI sees when it watches your edit — one call to `get_contact_sheet`:
 - **Video links:** paste a YouTube or Vimeo link, a video post on X or a video file, and it watches it: frames across the whole video, the transcript from its captions, and the chapters. Nothing is imported.
 - **Skills:** craft guides it loads before the work, for short-form editing, motion design, grading, sound, Blender and generation prompts. Add your own in the SKILL.md format. Claude Code, Codex and any agent on Lumen's MCP server use them too.
 
+### Record
+
+Record a screen, a window or part of one straight into the project, and edit it at once. [How it works →](docs/RECORDING.md)
+
+- **Up to 4K at 60 frames a second**, at the source's own size or scaled, in H.264, HEVC or AV1, with the bitrate, key frames and encoder yours to set.
+- **Any graphics card.** The encoder is tried with real frames first: your codec on the card, another codec on the card, then the processor. If one stops mid-recording, the recording carries on with the next.
+- **Sound, your choice:** everything the computer plays, or only the recorded window's app. The microphone and the camera are recorded as clips of their own.
+- **On the timeline when it stops:** the recording, the camera in its corner and the microphone, lined up and grouped.
+- **Clicks as data:** *Zoom on clicks* pushes in on each click and eases back out; *Highlight clicks* draws a pulse where each landed.
+- **A recording survives a crash,** and Lumen keeps itself out of the picture.
+- **The Copilot can record too:** “Record my browser while I show the bug, then zoom on the clicks and add captions.” It asks before it looks at your screen.
+
 ### Smart edits
 
 One-click suggestions on the timeline, and tools for every AI:
@@ -214,6 +226,7 @@ npm run dev      # the app, with hot reload
 ## Documentation
 
 - [AI tools reference](docs/AI-TOOLS.md) — every tool the AI can use, with parameters
+- [Recording](docs/RECORDING.md) — screens, windows and games: settings, how it works, limits
 - [Frame ingest](docs/INGEST.md) — sending frames to Lumen from another app
 - [Architecture](docs/ARCHITECTURE.md) — how the editor, media engine, AI and integrations fit together
 - [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md) · [Third-party notices](THIRD-PARTY-NOTICES.md)

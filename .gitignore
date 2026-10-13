@@ -18,3 +18,4 @@ Thumbs.db
 .claude/
 .vscode/*
 !.vscode/extensions.json
+native/bin/

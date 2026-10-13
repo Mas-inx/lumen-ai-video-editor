@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url'
 import { app, BrowserWindow, nativeTheme, protocol, shell } from 'electron'
 import { APP_IPC } from '../shared/app'
 import { registerAppIpc } from './app-ipc'
+import { initCapture, stopCapture } from './capture'
 import { abortAllExports } from './export'
 import { registerMediaProtocol } from './files'
 import { applyGraphicsSettings } from './gpu'
@@ -79,6 +80,7 @@ function createWindow() {
   registerJobListener(win)
   initBridge(win, isTrustedUrl)
   initIngest(win)
+  initCapture(win, isTrustedUrl)
   guardClose(win)
   // Show the editor as soon as its page has loaded. 'ready-to-show' alone isn't
   // enough: it waits for a visible first paint, but the start screen fades in with
@@ -160,6 +162,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  stopCapture()
   abortAllExports()
   void disconnectAll()
   void stopBridge(false)

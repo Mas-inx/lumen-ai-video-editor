@@ -19,6 +19,7 @@ import { sendPrompt } from '@/features/copilot/store'
 import { actions } from '@/features/shell/actions'
 import { cn } from '@/lib/cn'
 import { formatDuration, formatTimecode } from '@/lib/time'
+import { ClicksSection } from './ClicksSection'
 import { CropSection } from './CropSection'
 import { MaskSection } from './MaskSection'
 import { MotionSection, NestSection } from './MotionSections'
@@ -126,6 +127,7 @@ function ClipInspector({ clip }: { clip: Clip }) {
           {clip.sequenceId && <NestSection clip={clip} />}
           {clip.kind !== 'adjustment' && <TransformSection clip={clip} />}
           <MotionSection clip={clip} />
+          {clip.kind === 'video' && <ClicksSection clip={clip} />}
           {(clip.kind === 'video' || clip.kind === 'image') && <CropSection clip={clip} />}
           {(clip.kind === 'video' || clip.kind === 'image' || clip.kind === 'adjustment') && <MaskSection clip={clip} />}
           {clip.kind !== 'adjustment' && <Space3DSection clip={clip} />}

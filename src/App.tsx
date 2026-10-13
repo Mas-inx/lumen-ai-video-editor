@@ -30,6 +30,8 @@ import { startAi } from '@/integrations/ai'
 import { startBridgeClient } from '@/integrations/bridge'
 import { startIntegrations } from '@/integrations/store'
 import { startIngestClient } from '@/project/ingest'
+import { offerRecovery } from '@/capture/recorder'
+import { RecordDialog } from '@/features/record/RecordDialog'
 import { startUpdates } from '@/lib/updates'
 
 export function App() {
@@ -42,6 +44,8 @@ export function App() {
     startIntegrations()
     startBridgeClient()
     startIngestClient()
+    // A recording cut short by a crash can still be finished.
+    void offerRecovery()
     startAi()
     startUpdates()
   }, [])
@@ -59,6 +63,7 @@ export function App() {
 
         <CommandPalette />
         <ExportDialog />
+        <RecordDialog />
         <ShortcutsDialog />
         <AboutDialog />
         <GraphicsDialog />

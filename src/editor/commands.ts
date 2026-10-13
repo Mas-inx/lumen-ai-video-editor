@@ -338,6 +338,12 @@ const assetCue = z.object({
   data: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
 })
 
+const cursorTrack = z.object({
+  moves: z.array(z.number()),
+  clicks: z.array(z.object({ t: z.number(), x: z.number(), y: z.number(), button: z.enum(['left', 'right', 'middle']), held: z.number().optional() })),
+  rate: z.number().positive(),
+})
+
 const asset = z.object({
   id,
   name: z.string().min(1),
@@ -357,6 +363,7 @@ const asset = z.object({
   tags: z.array(z.string()).optional(),
   proxy: z.object({ path: z.string(), url: z.string(), width: z.number(), height: z.number() }).optional(),
   cues: z.array(assetCue).optional(),
+  cursor: cursorTrack.optional(),
   matteOf: z
     .object({ assetId: z.string(), subject: z.enum(['person', 'any']), from: z.number(), to: z.number(), box: z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() }).optional() })
     .optional(),

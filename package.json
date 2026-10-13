@@ -1,7 +1,7 @@
 {
   "name": "lumen",
   "productName": "Lumen",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "private": true,
   "description": "Open-source AI video editor for Windows, with a Copilot that can see, hear and edit your video.",
   "keywords": [
@@ -49,6 +49,7 @@
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
+    "predev": "node scripts/build-capture-helper.mjs --if-missing",
     "dev": "vite",
     "dev:web": "vite --mode web",
     "build": "npm run typecheck && vite build",
@@ -56,8 +57,9 @@
     "typecheck": "tsc -p tsconfig.app.json && tsc -p tsconfig.node.json",
     "test": "vitest run",
     "preview:web": "vite preview --mode web",
-    "pack": "npm run build && install-electron && electron-builder --dir --publish never",
-    "dist": "npm run build && install-electron && electron-builder --win nsis --publish never"
+    "build:helper": "node scripts/build-capture-helper.mjs",
+    "pack": "npm run build && npm run build:helper && install-electron && electron-builder --dir --publish never",
+    "dist": "npm run build && npm run build:helper && install-electron && electron-builder --win nsis --publish never"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.60",
@@ -143,6 +145,15 @@
       "!**/{test,tests,__tests__,docs,example,examples}/**"
     ],
     "asar": true,
+    "extraResources": [
+      {
+        "from": "native/bin",
+        "to": "bin",
+        "filter": [
+          "*.exe"
+        ]
+      }
+    ],
     "publish": [
       {
         "provider": "github",

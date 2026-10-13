@@ -19,6 +19,7 @@ shared/
   ai.ts             Copilot brains, effort scale, agent events, instructions
   skills.ts         SKILL.md parsing (the same format as Claude's skills)
   ingest.ts         frame ingest: the request contract, qualities and the master's codec strings
+  capture.ts        recording: sources, settings, the picture's size, a recording's clock, the pointer as data
 src/
   editor/           the document and its rules (framework-free, unit-tested)
     types.ts          project model — integer frames at the project's fps
@@ -71,6 +72,8 @@ src/
                     subtitle files, and the footage tools wired to the editor (analysis-actions.ts); subject
                     mattes (segment.ts + its worker) and text behind subject (subject.ts); beat analysis (beats.ts);
                     frame ingest (ingest.ts, its encoder worker and the colour conversion)
+  capture/          recording: recorder.ts (streams, start / pause / stop, clips on the timeline), the encoder
+                    worker, zooms on clicks (autozoom.ts) and what they do to a clip (click-actions.ts)
   integrations/     AI brains, Blender / HyperFrames / MCP clients
     agent-tools.ts    the tool registry every AI uses
     skills.ts         built-in skills (skills/*.md) and which tools point at them
@@ -91,6 +94,7 @@ electron/
   render-cache.ts   rendered preview chunks on disk, per project, capped at 8 GB
   offscreen.ts      offscreen windows that render exact pixels at any display scaling
   ingest.ts         the frame-ingest receiver: loopback HTTP, a two-frame queue per clip
+  capture.ts        recording: what can be recorded, handing Chromium the source, the files, global keys, the helper
   gpu.ts            which graphics card to run on (decided before Chromium starts) and what it reports
   app-ipc.ts        file / project / export / window-capture / update IPC for the editor page only
   integrations/     Blender, HyperFrames, MCP host, Lumen's MCP server, media generation, skills, the web
@@ -134,6 +138,23 @@ Another app sends a shot as raw frames over loopback HTTP and Lumen makes the ma
 - **Encoder** (a worker in the editor): long-polls the receiver for frames through `lumen-media://ingest/…`, so frames never cross the editor's thread. It converts RGBA to Y′CbCr with exact BT.709 maths, encodes VP9 4:4:4 with a fixed quantizer and muxes MP4. The file's bytes go back to the page, which writes them through the same streamed writer as exports.
 - **Why VP9 4:4:4, 8-bit:** it is software-encoded and software-decoded everywhere, so the picture is identical on every graphics card, and Chromium converts 8-bit 4:4:4 back to RGB exactly on the GPU. 10-bit takes a coarser path and measured worse.
 - **Lossless** codes RGB directly (VP9's identity matrix) with quantizer 0, because 8-bit Y′CbCr has no code for some RGB colours. It decodes bit-exactly in Lumen's export path, in the preview and in ffmpeg.
+
+## Recording
+
+A screen or a window is recorded as it plays, at up to 4K and 60 fps. The user's guide, with the limits, is [RECORDING.md](RECORDING.md).
+
+- **Source.** The main process lists screens and windows (`desktopCapturer`), and the editor names the one it wants just before calling `getDisplayMedia`; the request handler serves only the editor's own page, once, for that source. System sound rides on the same stream as a loopback track.
+- **One worker per file** ([`src/capture/capture.worker.ts`](../src/capture/capture.worker.ts)): the recording with its sound, the camera, the microphone. Frames reach it as a transferred stream (`MediaStreamTrackProcessor`).
+  - **No canvas.** A region is a `visibleRect` on the frame and a different size is the encoder's configured size: Chromium crops and scales on the way in, for hardware and software encoders alike. A canvas in the path could not keep up at these sizes.
+  - **Encoder.** Chosen with [`tryEncoderConfig`](../src/engine/encoders.ts) — real frames at the real size, in the real-time mode a recording uses — in the order: the codec asked for on the graphics card, the other codecs on the card, then the processor. It is started on the first frame, before the recording begins, so the first recorded frame doesn't wait for it.
+  - **Frame timing.** A frame's place in the file comes from its capture time, on the grid of the chosen frame rate (one that rounds onto a taken place takes the next). A source that has gone quiet for half a second has its last frame written again, one a beat, while the encoder's queue is empty. A place missed while frames are arriving is left empty: a repeat would cost encoder time the next real frame needs.
+  - **Clocks.** Capture stamps frames on its own clock. The smallest difference seen between a stamp and its arrival maps that clock to the page's; sound is placed the same way, so the two stay together.
+  - **A new file, not a failure.** An encoder that errors, or a source that changes size, ends the file and the next one starts on the next encoder that works.
+- **Files** are fragmented MP4 written through the export's streamed writes, so a crash loses at most the last fragment. On stop the main process rewrites the file as an ordinary MP4 with Mediabunny (packets copied, nothing encoded). A `.partial` left in the recordings folder is offered for recovery at the next start.
+- **The helper** ([`native/capture-helper`](../native/capture-helper), C#, built with the compiler that ships with Windows, about 40 KB) does what Chromium can't: one app's sound through WASAPI process loopback, the pointer's position and buttons 120 times a second, and windows' process names and rectangles. It streams over stdout and stops when its stdin closes.
+- **The pointer as data** is stored on the media item as fractions of the recorded picture ([`shared/capture.ts`](../shared/capture.ts)). [`autozoom.ts`](../src/capture/autozoom.ts) turns clicks into `scale` / `x` / `y` keyframes; highlights are short title clips.
+- **Colour.** Capture labels its frames BT.601 whatever the screen is; the file's colour box is rewritten to say BT.709, or Display P3 when the user picks the screen's own gamut.
+- **Agents** go through [`src/integrations/tools/capture.ts`](../src/integrations/tools/capture.ts); the first call asks the user, once per session.
 
 ## Timelines and nesting
 

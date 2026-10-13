@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog } from '@/components/ui/dialog'
 import { useApprovals } from '@/integrations/approvals'
 
-/** Asks before any agent-written code runs on this machine. */
+/** Asks before any agent-written code runs on this machine, and before an agent looks at or records the screen. */
 export function AgentApprovals() {
   const current = useApprovals((s) => s.queue[0])
   const waiting = useApprovals((s) => s.queue.length)
@@ -25,14 +25,14 @@ export function AgentApprovals() {
           {current.code && (
             <pre className="mt-4 max-h-[46vh] overflow-auto rounded-xl bg-black/40 px-4 py-3 font-mono text-[11px] leading-relaxed text-fg-2 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)]">{current.code}</pre>
           )}
-          <p className="mt-3 text-2xs leading-relaxed text-fg-4">This runs with your permissions on this computer. Only allow code you’re comfortable with.</p>
+          <p className="mt-3 text-2xs leading-relaxed text-fg-4">{current.note ?? 'This runs with your permissions on this computer. Only allow code you’re comfortable with.'}</p>
           <div className="mt-5 flex items-center justify-end gap-2">
             {waiting > 1 && <span className="mr-auto text-2xs text-fg-4">{waiting - 1} more waiting</span>}
             <Button variant="ghost" onClick={() => current.resolve(false)}>
-              Don’t run
+              {current.deny ?? 'Don’t run'}
             </Button>
             <Button variant="primary" onClick={() => current.resolve(true)}>
-              Run it
+              {current.confirm ?? 'Run it'}
             </Button>
           </div>
         </div>

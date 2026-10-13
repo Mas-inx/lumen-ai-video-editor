@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { AgentEvent } from '../shared/ai'
 import { APP_IPC, type AppAPI, type CollectProgress, type UpdateState } from '../shared/app'
+import { CAPTURE_IPC, type CaptureHotkey, type CursorEvent } from '../shared/capture'
 import type { IngestClip, IngestState } from '../shared/ingest'
 import { IPC, type BridgeRequest, type BridgeState, type IntegrationsAPI, type Job, type McpServerState } from '../shared/integrations'
 
@@ -179,6 +180,43 @@ const appApi: AppAPI = {
     fail: (clipId, message) => invoke(APP_IPC.ingestFail, clipId, message),
     onState: (cb) => subscribe<IngestState>(APP_IPC.ingestEvent, cb),
     onClip: (cb) => subscribe<IngestClip>(APP_IPC.ingestClip, cb),
+  },
+  capture: {
+    sources: (opts) => invoke(CAPTURE_IPC.sources, opts),
+    arm: (sourceId, systemAudio) => invoke(CAPTURE_IPC.arm, sourceId, systemAudio),
+    helper: () => invoke(CAPTURE_IPC.helper),
+    folder: () => invoke(CAPTURE_IPC.folder),
+    pickFolder: () => invoke(CAPTURE_IPC.pickFolder),
+    resetFolder: () => invoke(CAPTURE_IPC.resetFolder),
+    begin: (name, extension) => invoke(CAPTURE_IPC.begin, name, extension),
+    finish: (id) => invoke(CAPTURE_IPC.finish, id),
+    discard: (id) => invoke(CAPTURE_IPC.discard, id),
+    free: () => invoke(CAPTURE_IPC.free),
+    session: (state) => ipcRenderer.send(CAPTURE_IPC.session, state),
+    startAppAudio: (key, target) => invoke(CAPTURE_IPC.appAudioStart, key, target),
+    startCursor: (key, target) => invoke(CAPTURE_IPC.cursorStart, key, target),
+    stopStream: (key) => invoke(CAPTURE_IPC.streamStop, key),
+    windowInfo: (hwnd) => invoke(CAPTURE_IPC.windowInfo, hwnd),
+    focus: (hwnd) => invoke(CAPTURE_IPC.focus, hwnd),
+    recoverable: () => invoke(CAPTURE_IPC.recoverable),
+    recover: (path) => invoke(CAPTURE_IPC.recover, path),
+    forget: (path) => invoke(CAPTURE_IPC.forget, path),
+    onAudioChunk: (cb) => {
+      const listener = (_e: IpcRendererEvent, key: string, data: Uint8Array) => cb(key, data)
+      ipcRenderer.on(CAPTURE_IPC.audioChunk, listener)
+      return () => void ipcRenderer.removeListener(CAPTURE_IPC.audioChunk, listener)
+    },
+    onCursorEvents: (cb) => {
+      const listener = (_e: IpcRendererEvent, key: string, events: CursorEvent[]) => cb(key, events)
+      ipcRenderer.on(CAPTURE_IPC.cursorEvents, listener)
+      return () => void ipcRenderer.removeListener(CAPTURE_IPC.cursorEvents, listener)
+    },
+    onStreamEnded: (cb) => {
+      const listener = (_e: IpcRendererEvent, key: string, reason: string) => cb(key, reason)
+      ipcRenderer.on(CAPTURE_IPC.streamEnded, listener)
+      return () => void ipcRenderer.removeListener(CAPTURE_IPC.streamEnded, listener)
+    },
+    onHotkey: (cb) => subscribe<CaptureHotkey>(CAPTURE_IPC.hotkey, cb),
   },
   system: {
     gpu: () => invoke(APP_IPC.gpuInfo),

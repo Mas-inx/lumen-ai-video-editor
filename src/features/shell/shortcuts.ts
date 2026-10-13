@@ -1,3 +1,4 @@
+import { openRecorder } from '@/capture/recorder'
 import { playback } from '@/editor/playback'
 import { useUI } from '@/editor/ui-store'
 import { actions } from './actions'
@@ -86,6 +87,7 @@ export const SHORTCUTS: Shortcut[] = [
   { id: 'import', label: 'Import media', group: 'App', keys: ['mod+i'], run: actions.importMedia, global: true },
   { id: 'export', label: 'Export', group: 'App', keys: ['mod+e'], run: () => ui().setExportOpen(true), global: true },
   { id: 'queue', label: 'Render queue', group: 'App', keys: ['mod+shift+e'], run: () => ui().setQueueOpen(true), global: true },
+  { id: 'record', label: 'Record a screen or window', group: 'App', keys: ['mod+shift+r'], run: () => void openRecorder(), global: true },
   { id: 'save', label: 'Save', group: 'App', keys: ['mod+s'], run: () => void actions.save(), global: true },
   { id: 'save-as', label: 'Save as…', group: 'App', keys: ['mod+shift+s'], run: actions.saveAs, global: true },
   { id: 'open', label: 'Open project…', group: 'App', keys: ['mod+o'], run: actions.open, global: true },

@@ -87,16 +87,29 @@ export function placeSequence(sequenceId: string, frame: number, opts: { trackId
   return clipId
 }
 
-export function placeAsset(assetId: string, frame: number, opts: { trackId?: string; source?: ActionSource } = {}) {
+export interface PlaceOptions {
+  trackId?: string
+  source?: ActionSource
+  /** Only part of the media: where it starts (frames into the media) and how long it runs. */
+  inPoint?: number
+  duration?: number
+  /** Above the footage rather than in the main story (a camera in the corner of a screen recording). */
+  overlay?: boolean
+  /** Changes to the new clip (a transform, say), as `clip.add` takes them. */
+  patch?: Record<string, unknown>
+}
+
+export function placeAsset(assetId: string, frame: number, opts: PlaceOptions = {}) {
   const project = getProject()
   const asset = project.assets[assetId]
   if (!asset) return null
-  const duration = assetFrames(project, asset)
+  const inPoint = Math.max(0, Math.round(opts.inPoint ?? 0))
+  const duration = Math.max(1, Math.min(opts.duration ?? Infinity, assetFrames(project, asset) - inPoint))
   let clipId: string | null = null
   useEditor.getState().transaction(`Add ${asset.name}`, opts.source ?? 'user', () => {
-    const trackId = ensureTrack(asset.kind, frame, duration, opts.trackId, opts.source, Boolean(asset.alpha), asset.kind === 'audio' ? audioRole(asset) : null)
+    const trackId = ensureTrack(asset.kind, frame, duration, opts.trackId, opts.source, opts.overlay ?? Boolean(asset.alpha), asset.kind === 'audio' ? audioRole(asset) : null)
     if (!trackId) return
-    const res = dispatch('clip.add', { trackId, kind: asset.kind, start: frame, duration, assetId, name: asset.name })
+    const res = dispatch('clip.add', { trackId, kind: asset.kind, start: frame, duration, assetId, name: asset.name, ...(inPoint ? { inPoint } : {}), ...(opts.patch ? { patch: opts.patch } : {}) })
     if (res.ok) clipId = res.result as string
   })
   return clipId

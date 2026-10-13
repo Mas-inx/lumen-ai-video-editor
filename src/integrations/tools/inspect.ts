@@ -163,6 +163,17 @@ function slice(buffer: AudioBuffer, from: number, to: number) {
   return Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c).subarray(a, Math.max(a, b)))
 }
 
+/** A screen recording's clicks inside a clip, at timeline seconds, with where on the picture each landed. */
+function clicksOf(c: Clip, asset: Asset, fps: number) {
+  if (!asset.cursor?.clicks.length) return {}
+  const clicks = asset.cursor.clicks
+    .map((k) => ({ k, frame: Math.round(k.t * fps) - c.inPoint }))
+    .filter(({ frame }) => frame >= 0 && frame < c.duration)
+    .map(({ k, frame }) => ({ at_seconds: round((c.start + frame) / fps, 3), x: k.x, y: k.y, button: k.button, ...(k.held && k.held > 0.3 ? { held_seconds: k.held } : {}) }))
+  if (!clicks.length) return {}
+  return { clicks: clicks.slice(0, 300), ...(clicks.length > 300 ? { clicks_more: clicks.length - 300 } : {}), clicks_note: 'x and y are fractions of the picture from its top left. zoom_on_clicks and highlight_clicks use them.' }
+}
+
 /** A clip's cues at timeline seconds (and where each sits in the media). */
 function cuesOf(c: Clip, asset: Asset, fps: number) {
   const cues = clipCues(c, asset, fps)
@@ -202,7 +213,7 @@ export const INSPECT_TOOLS: AgentTool[] = [
   {
     name: 'get_clip',
     description:
-      'Full details of one or more clips — every property (transform, color grade, audio mix, keyframes, effects, animation, transition, text style, speed, look, blend), with times in seconds and the media each uses. A clip that came with a cue sheet (a GS Cinematic Studio render) also lists its cues: what happens in it — lines said, cuts, footsteps, effects — at timeline seconds, for placing voices and sounds, since the clip itself is silent. Read a clip before a precise edit so you only change what you mean to.',
+      'Full details of one or more clips — every property (transform, color grade, audio mix, keyframes, effects, animation, transition, text style, speed, look, blend), with times in seconds and the media each uses. A clip that came with a cue sheet (a GS Cinematic Studio render) also lists its cues: what happens in it — lines said, cuts, footsteps, effects — at timeline seconds, for placing voices and sounds, since the clip itself is silent. A screen recording lists its markers the same way, and its clicks (when and where on the picture). Read a clip before a precise edit so you only change what you mean to.',
     inputSchema: obj({ clip_ids: list('Clip ids', { type: 'string' }, { minItems: 1, maxItems: 50 }) }, ['clip_ids']),
     run: async (a) => {
       const p = getProject()
@@ -226,6 +237,7 @@ export const INSPECT_TOOLS: AgentTool[] = [
                   source_out_seconds: round((c.inPoint + consumed(c)) / fps, 3),
                   asset: { id: asset.id, name: asset.name, kind: asset.kind, duration_seconds: asset.duration ?? null },
                   ...cuesOf(c, asset, fps),
+                  ...clicksOf(c, asset, fps),
                 }
               : {}),
           }

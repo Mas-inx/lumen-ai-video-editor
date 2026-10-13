@@ -94,6 +94,8 @@ export interface Asset {
   proxy?: { path: string; url: string; width: number; height: number }
   /** What happens in it and when, from the app that made it (see editor/cues.ts). */
   cues?: AssetCue[]
+  /** A screen recording's pointer: where it was and when it clicked (see shared/capture.ts). */
+  cursor?: CursorTrack
   /** The music's beat grid, once detected (source seconds). */
   beats?: { bpm: number; times: number[]; downbeats: number[]; confidence: number }
   /** A subject matte made from another media item (kept with the project, not listed in the Media panel). */
@@ -445,6 +447,7 @@ export type AnimatableProp = 'x' | 'y' | 'scale' | 'rotation' | 'opacity' | 'vol
 /** The curve from a keyframe to the next: a named curve or "cubic-bezier(x1, y1, x2, y2)" (see easing.ts). */
 export type { Easing } from './easing'
 import type { Easing } from './easing'
+import type { CursorTrack } from '@shared/capture'
 
 export interface Keyframe {
   /** Relative to the clip start. */

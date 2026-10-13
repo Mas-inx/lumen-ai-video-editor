@@ -19,6 +19,8 @@ interface OpenFile {
   partial: string
   fd: number
   size: number
+  /** Left on disk (unfinished) when Lumen quits: a recording, which can be recovered. */
+  keep?: boolean
 }
 
 interface OpenFolder {
@@ -143,12 +145,12 @@ export async function beginExport(win: BrowserWindow | null, opts: ExportRequest
 }
 
 /** Opens a file Lumen names itself (a proxy, say) for the same streamed writes — no dialog. */
-export function beginFile(target: string): ExportHandle {
+export function beginFile(target: string, opts: { keepOnQuit?: boolean } = {}): ExportHandle {
   ensureDir(path.dirname(target))
   const partial = `${target}.partial`
   const fd = fs.openSync(partial, 'w')
   const id = randomUUID()
-  open.set(id, { kind: 'file', path: target, partial, fd, size: 0 })
+  open.set(id, { kind: 'file', path: target, partial, fd, size: 0, ...(opts.keepOnQuit ? { keep: true } : {}) })
   return { id, path: target }
 }
 
@@ -224,7 +226,17 @@ export function abortExport(id: string) {
 }
 
 export function abortAllExports() {
-  for (const id of [...open.keys()]) abortExport(id)
+  for (const [id, e] of [...open]) {
+    if (e.kind === 'file' && e.keep) {
+      // What a recording has written so far stays, to be finished the next time Lumen opens.
+      open.delete(id)
+      try {
+        fs.closeSync(e.fd)
+      } catch {
+        /* already closed */
+      }
+    } else abortExport(id)
+  }
 }
 
 /** Captions saved beside a finished export: `Video.mp4` → `Video.srt` (inside the folder for an image sequence). */

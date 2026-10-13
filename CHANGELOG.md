@@ -4,6 +4,33 @@ Every notable change to Lumen, newest first. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-10-13
+
+Record a screen, a window or a game straight into the edit, by hand or through the Copilot.
+
+### Added
+
+- **Record a screen or a window, straight into the project.** The red dot in the title bar, *Ctrl Shift R*, or the command palette. See [docs/RECORDING.md](docs/RECORDING.md).
+  - **Pick the source from live pictures:** any screen, any open window, or a region you drag over either.
+  - **Up to 4K at 60 frames a second,** at the source's own size or scaled up or down, in H.264, HEVC or AV1.
+  - **Expert settings:** codec, graphics card or processor, quality or an exact bitrate, key-frame interval, pointer in or out of the picture, countdown.
+  - **Sound, your choice of:** everything the computer plays, only the recorded window's app, or none. The microphone and the camera are recorded as clips of their own.
+  - **When it stops, the clips are on the timeline:** the recording on the main track, the camera in the corner above it, the microphone on a voice track, lined up and grouped. An empty timeline takes the recording's size and frame rate.
+  - **Pause, mark a moment, stop** from the record window, the title bar, or keys that work while another app is in front (*Ctrl Alt R*, *P*, *M*). Markers become cues on the clip.
+  - **Lumen stays out of a screen recording,** and can minimize itself while recording.
+- **Works on any graphics card.** The encoder is tried with real frames at the recording's size first: the codec you asked for on the graphics card, then another codec on the card, then the processor.
+  - If an encoder stops part-way, or the window changes size, the recording carries on in a new file within about half a second, and the parts land on the timeline back to back.
+- **A recording survives a crash.** If Lumen closes unexpectedly while recording, the next start offers to recover what was recorded.
+- **Clicks as data.** A recording keeps where the pointer was and when it clicked.
+  - *Zoom on clicks* (Inspector › Clicks) pushes in on each click, pans between clicks close together and eases back out.
+  - *Highlight clicks* draws a pulse where each click landed.
+  - Both are ordinary keyframes and clips afterwards, and one undo takes them off.
+- **The Copilot can record.** Nine tools: `list_capture_sources`, `start_recording`, `recording_status`, `pause_recording`, `add_recording_marker`, `stop_recording`, `zoom_on_clicks`, `highlight_clicks` and `record_studio_take`, with a *screen-recording* skill.
+  - The first time, Lumen asks you to allow screen recording for the session.
+  - Agents on Lumen's MCP server have the same tools, and are asked the same way.
+  - `get_clip` lists a recording's markers and clicks at timeline seconds.
+- **Film a GS Cinematic Studio take live.** `record_studio_take` records the game's window while the studio plays the take with every panel hidden, then puts the clip on the timeline trimmed to exactly the take, with the game's sound and the cue sheet. It needs a studio that has the `film_take` tool. Frame ingest stays the frame-exact route.
+
 ## [1.5.0] — 2026-10-11
 
 A Copilot chat you can follow, queue and stop, that takes files and video links, and costs less on an API key.
@@ -296,7 +323,8 @@ First release.
 - **Integrations** — Blender renders (3D titles, backgrounds, agent-written scenes), HyperFrames motion graphics, MCP host (Higgsfield, Runway, Replicate, fal.ai or any server) and Lumen's own MCP server for external agents.
 - Windows installer (NSIS, per-user or all-users).
 
-[Unreleased]: https://github.com/Mas-inx/lumen-ai-video-editor/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/Mas-inx/lumen-ai-video-editor/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.6.0
 [1.5.0]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.5.0
 [1.4.0]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.4.0
 [1.3.0]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.3.0

@@ -1,8 +1,9 @@
 import { create } from 'zustand'
 
 /**
- * Anything that would run agent-written code on this machine (Blender
- * scripts) waits here for the user's explicit yes.
+ * Anything an agent may only do with the user's explicit yes waits here:
+ * running agent-written code on this machine (Blender scripts), or looking at
+ * and recording the screen.
  */
 export interface Approval {
   id: string
@@ -10,6 +11,10 @@ export interface Approval {
   detail: string
   code?: string
   requester: string
+  /** What the small print and the two buttons say, when it isn't code being run. */
+  note?: string
+  confirm?: string
+  deny?: string
   resolve: (ok: boolean) => void
 }
 

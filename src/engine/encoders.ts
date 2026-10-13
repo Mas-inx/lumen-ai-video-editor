@@ -116,12 +116,20 @@ const key = (p: Pick<EncoderPlan, 'codec' | 'acceleration'>, width: number, heig
 const TEST_FRAMES = 3
 
 /** Encodes a few real frames at the real size. Drivers that accept settings and then fail are caught here. */
-async function tryEncoder(plan: EncoderPlan, width: number, height: number, fps: number): Promise<TestResult> {
+function tryEncoder(plan: EncoderPlan, width: number, height: number, fps: number): Promise<TestResult> {
+  return tryEncoderConfig(encoderConfig(plan, width, height, fps), fps)
+}
+
+/**
+ * The same test for settings of the caller's own (a recording encodes as the
+ * frames arrive, which is a different mode of the same encoders).
+ */
+export async function tryEncoderConfig(config: VideoEncoderConfig, fps: number): Promise<TestResult> {
   const fail = (error: string): TestResult => ({ ok: false, error, at: Date.now() })
   if (typeof VideoEncoder === 'undefined') return fail('This build has no video encoder.')
-  const config = encoderConfig(plan, width, height, fps)
+  const { width, height } = config
   const support = await VideoEncoder.isConfigSupported(config).catch(() => null)
-  if (!support?.supported) return fail(plan.acceleration === 'prefer-hardware' ? 'No graphics-card encoder takes these settings.' : 'Not available at this size.')
+  if (!support?.supported) return fail(config.hardwareAcceleration === 'prefer-hardware' ? 'No graphics-card encoder takes these settings.' : 'Not available at this size.')
   let chunks = 0
   let error: string | null = null
   const encoder = new VideoEncoder({ output: () => void chunks++, error: (e) => void (error ??= e.message || 'The encoder failed.') })
