@@ -38,6 +38,7 @@ import {
   Undo2,
   UnfoldHorizontal,
   Upload,
+  VolumeX,
 } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import { AiSparkle } from '@/components/brand'
@@ -211,6 +212,9 @@ export function CommandPalette() {
           </Item>
           <Item icon={<SkipForward />} shortcut={shortcutFor('end')} onSelect={run(actions.goToEnd)}>
             Go to end
+          </Item>
+          <Item icon={<VolumeX />} keywords={['volume', 'sound', 'silence', 'speaker', 'monitor']} shortcut={shortcutFor('mute-preview')} onSelect={run(() => playback.toggleMute())}>
+            Mute / unmute the preview
           </Item>
         </Command.Group>
 

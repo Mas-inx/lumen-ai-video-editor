@@ -4,6 +4,18 @@ Every notable change to Lumen, newest first. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+## [1.6.2] — 2026-10-16
+
+A volume for the preview that leaves the mix alone.
+
+### Added
+
+- **Preview volume.** The speaker beside the master meter sets how loud Lumen plays while you edit, without touching the mix: clip, track and master levels, the meter and every export stay as they are. Click it for the slider and mute, scroll over it to nudge the level, or press *Shift M* to mute. Sounds auditioned in the media and sound libraries follow it too, and the level is remembered between sessions.
+
+### Changed
+
+- **The preview plays at the export's level by default.** It used to play about 2 dB quieter (an unseen 80% monitor level); 100% is now exactly what an export sounds like.
+
 ## [1.6.1] — 2026-10-15
 
 Games recorded with their window in front of Lumen keep 60 frames a second.
@@ -332,7 +344,8 @@ First release.
 - **Integrations** — Blender renders (3D titles, backgrounds, agent-written scenes), HyperFrames motion graphics, MCP host (Higgsfield, Runway, Replicate, fal.ai or any server) and Lumen's own MCP server for external agents.
 - Windows installer (NSIS, per-user or all-users).
 
-[Unreleased]: https://github.com/Mas-inx/lumen-ai-video-editor/compare/v1.6.1...HEAD
+[Unreleased]: https://github.com/Mas-inx/lumen-ai-video-editor/compare/v1.6.2...HEAD
+[1.6.2]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.6.2
 [1.6.1]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.6.1
 [1.6.0]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.6.0
 [1.5.0]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.5.0

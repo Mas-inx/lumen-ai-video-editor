@@ -34,6 +34,7 @@ export const SHORTCUTS: Shortcut[] = [
   { id: 'next-edit', label: 'Next edit point', group: 'Playback', keys: ['down'], run: () => actions.jumpEdit(1) },
   { id: 'start', label: 'Go to start', group: 'Playback', keys: ['home'], run: actions.goToStart },
   { id: 'end', label: 'Go to end', group: 'Playback', keys: ['end'], run: actions.goToEnd },
+  { id: 'mute-preview', label: 'Mute / unmute the preview', group: 'Playback', keys: ['shift+m'], run: () => playback.toggleMute() },
 
   // Editing
   { id: 'split', label: 'Split at playhead', group: 'Editing', keys: ['s', 'mod+b'], run: actions.split },

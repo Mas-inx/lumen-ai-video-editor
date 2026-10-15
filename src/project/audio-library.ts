@@ -6,6 +6,7 @@
 import { toast } from 'sonner'
 import type { MediaFileInfo } from '@shared/app'
 import { dispatch, getProject } from '@/editor/store'
+import { monitorLevel, onMonitorChange } from '@/editor/playback'
 import type { Asset } from '@/editor/types'
 import { computePeaks } from '@/engine/audio-engine'
 import { renderSfx, SFX } from '@/engine/sfx'
@@ -84,16 +85,28 @@ export async function sfxAsset(id: string): Promise<string> {
 }
 
 let previewCtx: AudioContext | null = null
+let previewOut: GainNode | null = null
 let previewNode: AudioBufferSourceNode | null = null
+
+/** Where auditions play: the speakers, at the preview volume. */
+function auditionOutput() {
+  if (previewCtx && previewOut) return { ctx: previewCtx, out: previewOut }
+  const ctx = (previewCtx = new AudioContext())
+  const out = (previewOut = ctx.createGain())
+  out.gain.value = monitorLevel()
+  out.connect(ctx.destination)
+  onMonitorChange((gain) => out.gain.setTargetAtTime(gain, ctx.currentTime, 0.015))
+  return { ctx, out }
+}
 
 /** Plays an effect (a second call stops it). */
 export async function auditionSfx(id: string, onEnd?: () => void) {
   previewNode?.stop()
-  previewCtx ??= new AudioContext()
+  const { ctx, out } = auditionOutput()
   const buffer = await sfxBuffer(id)
-  const node = previewCtx.createBufferSource()
+  const node = ctx.createBufferSource()
   node.buffer = buffer
-  node.connect(previewCtx.destination)
+  node.connect(out)
   node.onended = () => {
     if (previewNode === node) previewNode = null
     onEnd?.()

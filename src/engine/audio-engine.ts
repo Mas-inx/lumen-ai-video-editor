@@ -534,7 +534,7 @@ let monitor: GainNode | null = null
 let graph: MixGraph | null = null
 let active: Scheduled[] = []
 let running: { from: number; at: number; project: Project } | null = null
-let masterLevel = 0.8
+let masterLevel = 1
 
 /** Long recordings play in chunks decoded just ahead of the playhead. */
 interface Streamer {
@@ -661,8 +661,9 @@ export const audioEngine = {
     if (running) running.project = project
   },
 
-  setVolume(volume: number, muted: boolean) {
-    masterLevel = muted ? 0 : volume
+  /** The preview volume, as a gain (0..1). Only what the speakers get: exports never pass through it. */
+  setMonitor(gain: number) {
+    masterLevel = gain
     if (monitor && ctx) monitor.gain.setTargetAtTime(masterLevel, ctx.currentTime, 0.015)
   },
 

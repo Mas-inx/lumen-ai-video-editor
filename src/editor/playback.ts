@@ -8,6 +8,7 @@
  */
 import { create } from 'zustand'
 import { audioEngine } from '@/engine/audio-engine'
+import { loadMonitor, monitorGain, saveMonitor } from './monitor'
 import { projectDuration } from './ops'
 import { useEditor } from './store'
 import type { Track } from './types'
@@ -24,6 +25,7 @@ interface PlaybackState {
   /** 1 = realtime; negative plays backwards; 2/4/8 = J/L shuttle */
   rate: number
   loop: boolean
+  /** The preview volume (see monitor.ts): what you hear while editing, never the mix or an export. */
   volume: number
   muted: boolean
 }
@@ -34,9 +36,11 @@ export const usePlayback = create<PlaybackState>(() => ({
   playing: false,
   rate: 1,
   loop: false,
-  volume: 0.8,
-  muted: false,
+  ...loadMonitor(),
 }))
+
+/** The last level that could be heard, for unmuting a slider pulled down to nothing. */
+let lastAudible = usePlayback.getState().volume || 1
 
 let raf = 0
 let anchorTime = 0
@@ -170,13 +174,35 @@ export const playback = {
   toggleLoop() {
     usePlayback.setState((s) => ({ loop: !s.loop }))
   },
+  /** Preview volume, 0..1. Raising it unmutes. */
+  setVolume(volume: number) {
+    const v = Math.round(Math.min(1, Math.max(0, volume)) * 100) / 100
+    if (v > 0) lastAudible = v
+    usePlayback.setState((s) => ({ volume: v, muted: v > 0 ? false : s.muted }))
+  },
+  toggleMute() {
+    const { volume, muted } = usePlayback.getState()
+    if (muted || volume === 0) usePlayback.setState({ muted: false, volume: volume || lastAudible })
+    else usePlayback.setState({ muted: true })
+  },
   end: endFrame,
 }
 
-// Master volume follows the transport's volume / mute controls.
-audioEngine.setVolume(usePlayback.getState().volume, usePlayback.getState().muted)
-usePlayback.subscribe((s, prev) => {
-  if (s.volume !== prev.volume || s.muted !== prev.muted) audioEngine.setVolume(s.volume, s.muted)
+/** The preview volume as a gain, for anything else Lumen plays while you edit (library previews). */
+export const monitorLevel = () => monitorGain(usePlayback.getState())
+
+/** Calls back with the new gain whenever the preview volume changes. */
+export function onMonitorChange(fn: (gain: number) => void) {
+  return usePlayback.subscribe((s, prev) => {
+    if (s.volume !== prev.volume || s.muted !== prev.muted) fn(monitorGain(s))
+  })
+}
+
+// The engine's monitor stage follows the preview volume, and the setting is kept for next time.
+audioEngine.setMonitor(monitorLevel())
+onMonitorChange((gain) => {
+  audioEngine.setMonitor(gain)
+  saveMonitor(usePlayback.getState())
 })
 
 /** Whether two track lists differ only in their mixer settings (faders, pan, processing). */

@@ -11,11 +11,14 @@ export function PopoverContent({
   className,
   side = 'bottom',
   align = 'center',
+  onOpenAutoFocus,
 }: {
   children: ReactNode
   className?: string
   side?: 'top' | 'bottom' | 'left' | 'right'
   align?: 'start' | 'center' | 'end'
+  /** Where focus goes on opening (default: the first control). */
+  onOpenAutoFocus?: (event: Event) => void
 }) {
   return (
     <RadixPopover.Portal>
@@ -23,6 +26,7 @@ export function PopoverContent({
         side={side}
         align={align}
         sideOffset={8}
+        onOpenAutoFocus={onOpenAutoFocus}
         collisionPadding={10}
         className={cn(
           'popover z-[100] w-72 p-3 outline-none origin-(--radix-popover-content-transform-origin) data-[state=open]:animate-pop-in data-[state=closed]:animate-pop-out',

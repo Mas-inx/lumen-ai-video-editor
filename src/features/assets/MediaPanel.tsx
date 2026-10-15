@@ -6,7 +6,7 @@ import { Button, IconButton } from '@/components/ui/button'
 import { SearchInput } from '@/components/ui/input'
 import { ContextContent, ContextItem, ContextRoot, ContextSeparator, ContextTrigger } from '@/components/ui/menu'
 import { placeAsset } from '@/editor/placement'
-import { usePlayback } from '@/editor/playback'
+import { monitorLevel, onMonitorChange, usePlayback } from '@/editor/playback'
 import { dispatch, useEditor } from '@/editor/store'
 import type { Asset, AssetKind } from '@/editor/types'
 import { useUI } from '@/editor/ui-store'
@@ -519,9 +519,12 @@ function MediaCard({ asset, used, order }: { asset: Asset; used: boolean; order:
   )
 }
 
-/** One audio preview at a time, straight from the file. */
+/** One audio preview at a time, straight from the file, at the preview volume. */
 let previewEl: HTMLAudioElement | null = null
 const previewListeners = new Set<() => void>()
+onMonitorChange((gain) => {
+  if (previewEl) previewEl.volume = gain
+})
 function usePreviewing(url: string | undefined) {
   const [, setTick] = useState(0)
   useEffect(() => {
@@ -538,6 +541,7 @@ function usePreviewing(url: string | undefined) {
       previewEl = new Audio(url)
       previewEl.dataset.url = url
       previewEl.crossOrigin = 'anonymous'
+      previewEl.volume = monitorLevel()
       previewEl.onpause = previewEl.onended = previewEl.onplay = () => previewListeners.forEach((f) => f())
       void previewEl.play()
     }

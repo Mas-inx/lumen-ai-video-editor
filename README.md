@@ -236,7 +236,7 @@ npm run dev      # the app, with hot reload
 
 | Keys | Action |
 | --- | --- |
-| `Space` · `J K L` | Play / pause · shuttle |
+| `Space` · `J K L` · `Shift+M` | Play / pause · shuttle · mute the preview |
 | `←` `→` · `↑` `↓` | Frame step · previous / next edit point |
 | `S` · `Del` · `Shift+Del` | Split · delete · ripple delete |
 | `V` · `B` · `N` · `M` | Select tool · blade · snapping · marker |

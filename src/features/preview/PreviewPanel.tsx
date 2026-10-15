@@ -22,6 +22,7 @@ import { clamp } from '@/lib/math'
 import { formatTimecode } from '@/lib/time'
 import { AngleViewer } from './AngleViewer'
 import { PreviewStage } from './PreviewStage'
+import { PreviewVolume } from './PreviewVolume'
 import { Scopes } from './Scopes'
 
 const RES_SHORT: Record<string, string> = { '1': 'Full', '0.5': '½', '0.25': '¼', '0.125': '⅛' }
@@ -217,6 +218,7 @@ function Transport() {
           </IconButton>
         </div>
         <div className="flex items-center justify-end gap-1">
+          <PreviewVolume />
           <MasterMeter />
           <IconButton label={loop ? 'Loop on' : 'Loop off'} active={loop} onClick={() => playback.toggleLoop()}>
             <Repeat />
