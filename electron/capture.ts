@@ -286,13 +286,17 @@ function endStream(key: string, reason: string) {
   toEditor(CAPTURE_IPC.streamEnded, key, reason)
 }
 
-/** Asks a helper to stop, and makes sure it has. */
+/** Starts a helper that streams. Its input only ever carries "stop", and the helper may be gone by then. */
+function stream(file: string, args: string[]) {
+  const child = spawn(file, args, { windowsHide: true })
+  child.stdin.on('error', () => undefined)
+  return child
+}
+
+/** Asks a helper to stop, and makes sure it has. Asking twice is harmless: a second end() would throw in the main process. */
 function quit(child: ChildProcessWithoutNullStreams) {
-  try {
-    child.stdin.end('stop\n')
-  } catch {
-    /* already gone */
-  }
+  if (child.exitCode !== null || child.signalCode !== null || child.stdin.writableEnded) return
+  child.stdin.end('stop\n')
   const timer = setTimeout(() => child.kill(), 1200)
   child.once('exit', () => clearTimeout(timer))
 }
@@ -307,7 +311,7 @@ export function startAppAudio(key: string, target: { hwnd?: number; pid?: number
     const who = Number.isFinite(target.pid) ? ['--pid', String(Math.trunc(target.pid!))] : Number.isFinite(target.hwnd) ? ['--hwnd', String(Math.trunc(target.hwnd!))] : null
     if (!who) return reject(new Error('Pick a window to record its sound.'))
     streams.get(key)?.stop()
-    const child = spawn(file, ['audio', ...who], { windowsHide: true })
+    const child = stream(file, ['audio', ...who])
     let header: Buffer | null = Buffer.alloc(0)
     let pending: Buffer[] = []
     let carry = Buffer.alloc(0)
@@ -393,7 +397,7 @@ export function startCursor(key: string, target: { hwnd?: number; hz?: number })
   }
   const args = ['cursor', '--hz', String(hz)]
   if (Number.isFinite(target.hwnd)) args.push('--hwnd', String(Math.trunc(target.hwnd!)))
-  const child = spawn(file, args, { windowsHide: true })
+  const child = stream(file, args)
   let text = ''
   child.stdout.on('data', (data: Buffer) => {
     text += data.toString('utf8')
@@ -545,6 +549,22 @@ export function forgetRecording(file: string) {
 let state: CaptureSessionState = { armed: false, recording: false, hideLumen: false, minimize: false }
 let awake: number | null = null
 let minimized = false
+let timersHeld = false
+
+/**
+ * Windows 11 stops honouring an app's fine timers while all its windows are covered or minimized: they
+ * fall back to 15.6 ms ticks. Chromium captures on a timer in this process, so with a game in front of
+ * Lumen a 60 fps recording got a frame every second tick (32 a second). The helper exempts Lumen's
+ * processes while it records and hands the choice back to Windows afterwards.
+ */
+function holdTimers(hold: boolean) {
+  if (process.platform !== 'win32' || hold === timersHeld) return
+  timersHeld = hold
+  const pids = [...new Set(app.getAppMetrics().map((m) => m.pid))]
+  if (!pids.length || !helperPath()) return
+  ask(['timers', ...pids.flatMap((pid) => ['--pid', String(pid)]), ...(hold ? [] : ['--release'])]).catch(() => undefined)
+}
+
 const registered = new Set<CaptureHotkey>()
 
 function listen(key: CaptureHotkey, on: boolean) {
@@ -575,6 +595,7 @@ export function setSession(win: BrowserWindow | null, next: Partial<CaptureSessi
     powerSaveBlocker.stop(awake)
     awake = null
   }
+  holdTimers(state.recording)
   if (!win || win.isDestroyed()) return
   // Windows leaves a window marked like this out of every screen capture.
   win.setContentProtection(state.recording && state.hideLumen)

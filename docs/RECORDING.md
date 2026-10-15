@@ -47,6 +47,8 @@ Files go to `Videos\Lumen Recordings` unless you choose another folder.
 
 **Frame rate.** Each frame takes its place in the file by when it was captured, on an exact grid of the frame rate you chose. While the source is still (a window where nothing moves sends nothing), the last picture is written again, so the file keeps its frame rate. A place missed while frames are arriving is left empty and the picture before it lasts that much longer: on a graphics card shared with what is being recorded, encoding a repeat would take time from the next real frame. The record window shows how many frames a second the source is sending, and how many the encoder had no time for.
 
+**Timers.** Chromium takes a frame on a timer. From Windows 11, an app whose windows are all covered or minimized (Lumen, while you play the game you are recording) gets only coarse 15.6 ms timer ticks, and a timer set for 60 a second then fires on every second tick: 32 frames a second. Lumen does two things about it. While it records, the helper exempts Lumen's processes from that coarsening (and hands it back afterwards). And for a window, Chromium is asked for twice the frame rate, so even coarse ticks catch every place: on battery Chromium doesn't ask for fine timers at all. Chromium never sends a window faster than about 60, so this costs little; a screen is asked for its recording's own rate, because a fast display could really send twice as many full-size frames.
+
 **Sound.** The computer's sound and the microphone come from Chromium. One app's sound comes from a small helper ([`native/capture-helper`](../native/capture-helper)) using Windows' process loopback. Each is placed by its own timestamps, so picture and sound stay together through pauses.
 
 **Files.** A recording is written as a fragmented MP4: what has been recorded survives a crash, and nothing is held in memory. When it stops, the file is rewritten as an ordinary MP4 without encoding again. If Lumen closes unexpectedly mid-recording, the next start offers to recover it.
@@ -59,7 +61,8 @@ Files go to `Videos\Lumen Recordings` unless you choose another folder.
 
 - **60 frames a second is the most** Chromium's capture delivers.
 - **Scaling up costs processor time.** Recording a smaller source at 4K resizes every frame on the processor. On a laptop's built-in graphics that held about 50 frames a second in testing, where native size kept every frame the source sent. If frames are skipped, record at *Native* and export at 4K.
-- **On battery, or with the graphics chip busy,** the source itself may send fewer frames a second than you asked for. The record window shows the rate it is really sending.
+- **A game that draws fewer frames than you asked for** is recorded at the rate it draws, and a graphics chip shared by the game and the recording can lower both. The record window shows the rate the source is really sending.
+- **A screen recorded on battery** may come in at about 32 frames a second, because Chromium doesn't ask Windows for fine timers on battery. Windows, and regions of windows, aren't affected.
 - **One app's sound** needs Windows 11, or Windows 10 build 20348 or later. Elsewhere, and for whole screens, it falls back to everything the computer plays.
 - **Exclusive full screen** games can only be recorded as a screen. Use windowed or borderless to record the game's window.
 - **A window is recorded with its title bar.** Draw a region to leave it out.

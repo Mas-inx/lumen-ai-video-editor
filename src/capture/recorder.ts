@@ -129,8 +129,19 @@ export async function refreshSources(thumbnails = true): Promise<CaptureSource[]
 
 export const sourceById = (id: string) => get().sources.find((s) => s.id === id) ?? null
 
+/**
+ * The frame rate Chromium is asked for. It captures on a timer, and while Windows gives Lumen only its
+ * coarse 15.6 ms ticks (on battery Chromium doesn't ask for finer ones) a timer set for 60 a second fires
+ * on every second tick: a game recorded at 32 frames a second. Set for twice the rate it fires on every
+ * tick. Chromium never sends a window faster than about 60, so a window costs little more (measured: the
+ * game kept its frame rate, Lumen used a few percent more processor time). A screen could really send 120
+ * full-size frames on a fast display, so it is asked for the recording's own rate. The worker keeps one
+ * frame per place either way.
+ */
+const captureRate = (s: Pick<CaptureSettings, 'sourceId' | 'fps'>) => (s.sourceId.startsWith('screen') ? Math.min(60, s.fps) : Math.min(120, s.fps * 2))
+
 /** What makes one capture stream different from another: change any of these and Chromium has to be asked again. */
-const streamKey = (s: CaptureSettings, audio: CaptureAudio) => `${s.sourceId}|${s.cursor ? 'c' : '-'}|${audio === 'system' ? 's' : '-'}|${Math.min(60, s.fps)}`
+const streamKey = (s: CaptureSettings, audio: CaptureAudio) => `${s.sourceId}|${s.cursor ? 'c' : '-'}|${audio === 'system' ? 's' : '-'}|${captureRate(s)}`
 let previewKey = ''
 let previewing: Promise<MediaStream> | null = null
 
@@ -151,7 +162,7 @@ async function acquire(settings: CaptureSettings, audio: CaptureAudio): Promise<
   await desktop.capture.arm(settings.sourceId, audio === 'system')
   try {
     return await navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: { ideal: Math.min(60, settings.fps), max: 60 }, cursor: settings.cursor ? 'always' : 'never' } as MediaTrackConstraints,
+      video: { frameRate: { ideal: captureRate(settings), max: captureRate(settings) }, cursor: settings.cursor ? 'always' : 'never' } as MediaTrackConstraints,
       // The sound as it is: no echo cancelling or levelling meant for calls.
       audio: audio === 'system' ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 2, sampleRate: 48000 } : false,
     })

@@ -1,8 +1,9 @@
 // lumen-capture-helper: the three things Lumen's screen recorder cannot get from
 // Chromium - one app's sound, the cursor as data, and exact window facts - plus
-// bringing a window to the front.
+// bringing a window to the front and keeping Lumen's timers fine while it records.
 // See README.md for the command line and the stream formats.
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
 using System.Runtime.Versioning;
@@ -46,7 +47,7 @@ namespace Lumen.CaptureHelper
         internal const int ProcessLoopbackBuild = 20348;
 
         private const string Usage =
-            "Use: windows | window --hwnd <n> | focus --hwnd <n> | audio (--pid <n> | --hwnd <n>) [--exclude] | cursor [--hz <30..240>] [--hwnd <n>] | version.";
+            "Use: windows | window --hwnd <n> | focus --hwnd <n> | audio (--pid <n> | --hwnd <n>) [--exclude] | cursor [--hz <30..240>] [--hwnd <n>] | timers --pid <n> [--pid <n> ...] [--release] | version.";
 
         [MTAThread]
         private static int Main(string[] args)
@@ -103,8 +104,9 @@ namespace Lumen.CaptureHelper
             if (args.Length == 0) throw BadArguments("No command given.");
             string command = args[0];
 
-            bool hasPid = false, hasHwnd = false, exclude = false, stats = false, hasHz = false;
+            bool hasPid = false, hasHwnd = false, exclude = false, stats = false, hasHz = false, release = false;
             uint pid = 0;
+            List<uint> pids = new List<uint>();
             IntPtr hwnd = IntPtr.Zero;
             int hz = 120;
 
@@ -116,6 +118,7 @@ namespace Lumen.CaptureHelper
                     long v = Number(args, ++i, a);
                     if (v < 0 || v > uint.MaxValue) throw BadArguments("--pid needs a process id.");
                     pid = (uint)v;
+                    pids.Add(pid);
                     hasPid = true;
                 }
                 else if (a == "--hwnd")
@@ -132,8 +135,12 @@ namespace Lumen.CaptureHelper
                 }
                 else if (a == "--exclude") exclude = true;
                 else if (a == "--stats") stats = true;
+                else if (a == "--release") release = true;
                 else throw BadArguments("Unknown option \"" + a + "\".");
             }
+
+            // Only `timers` takes more than one process, and only it can release.
+            if (command != "timers" && (pids.Count > 1 || release)) throw BadArguments(pids.Count > 1 ? "--pid was given more than once." : "An option was given that \"" + command + "\" does not take.");
 
             switch (command)
             {
@@ -174,6 +181,11 @@ namespace Lumen.CaptureHelper
                     Reject(command, hasPid || exclude);
                     StopSignal.Start();
                     return CursorTracker.Run(hz, hwnd, hasHwnd, stats);
+
+                case "timers":
+                    Reject(command, hasHwnd || hasHz || exclude || stats);
+                    if (!hasPid) throw BadArguments("timers needs --pid <n>.");
+                    return Timers.Run(pids, release);
 
                 default:
                     throw BadArguments("Unknown command \"" + command + "\".");

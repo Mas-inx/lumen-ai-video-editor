@@ -4,6 +4,15 @@ Every notable change to Lumen, newest first. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+## [1.6.1] — 2026-10-15
+
+Games recorded with their window in front of Lumen keep 60 frames a second.
+
+### Fixed
+
+- **A game recorded with its window in front of Lumen came out at about 30 frames a second, not 60.** Windows 11 coarsens the timers of an app whose windows are covered, and Chromium takes each frame on a timer. Lumen now keeps its timers fine while it records, and asks Chromium for twice a window's frame rate, so a window keeps up even when the timers stay coarse (on battery). Measured on a FiveM game drawing 110 frames a second: 32 frames a second before, 59 to 61 after, with 471 of 473 frames exactly 1/60 s apart.
+- **When the Copilot or an agent threw a recording away** (`stop_recording` with `discard`, or a studio take that failed), Lumen could stop with a "JavaScript error occurred in the main process" box if the recording had one app's sound or click data: the helper was told to stop twice.
+
 ## [1.6.0] — 2026-10-13
 
 Record a screen, a window or a game straight into the edit, by hand or through the Copilot.
@@ -323,7 +332,8 @@ First release.
 - **Integrations** — Blender renders (3D titles, backgrounds, agent-written scenes), HyperFrames motion graphics, MCP host (Higgsfield, Runway, Replicate, fal.ai or any server) and Lumen's own MCP server for external agents.
 - Windows installer (NSIS, per-user or all-users).
 
-[Unreleased]: https://github.com/Mas-inx/lumen-ai-video-editor/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/Mas-inx/lumen-ai-video-editor/compare/v1.6.1...HEAD
+[1.6.1]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.6.1
 [1.6.0]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.6.0
 [1.5.0]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.5.0
 [1.4.0]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.4.0

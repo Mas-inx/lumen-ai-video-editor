@@ -8,7 +8,8 @@ provides the three things Chromium cannot:
 3. facts about **top-level windows**: owning process, exe name, exact rectangles.
 
 It can also bring a window to the front (`focus`), so a game is the active window
-while it is being recorded.
+while it is being recorded, and keep Windows honouring Lumen's timers while Lumen
+is covered (`timers`).
 
 It is C# 5 against .NET Framework 4.8, which is part of Windows 10 and 11, and it
 references nothing but `mscorlib`. x64, no admin rights, no installer, no third-party
@@ -115,6 +116,28 @@ foreground window. One JSON line, exit 0 whether or not it worked:
 - It gives up after 3 seconds (answering `"focused":false`) rather than wait on an
   app that does not respond.
 
+### `timers --pid <n> [--pid <n> ...] [--release]`
+
+From Windows 11, a process whose windows are all covered, minimized or otherwise out
+of sight no longer gets the timer resolution it asked for: its timers fall back to
+15.6 ms ticks. Chromium captures a screen or a window on a timer in Lumen's main
+process, so with a game in front of Lumen a 60 fps capture got a frame every second
+tick, 32 a second. This exempts the processes given
+(`PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION` controlled and off); `--release`
+hands the choice back to Windows. Only that bit is changed: whatever else a process
+set for itself (efficiency mode, for one) stays. One JSON line, exit 0:
+
+```
+{"needed":true,"held":true,"set":[1552,7460],"failed":[{"pid":4,"error":5}]}
+```
+
+- `failed` lists each process that could not be changed, with the Windows error code
+  (5: access denied, 87: no such process).
+- Before Windows 11 (build 22000) Windows does not do this: `needed` is false and
+  nothing is changed.
+- It changes nothing a process does by itself: a process that never asks for finer
+  timers (Chromium on battery) keeps the 15.6 ms ticks.
+
 ### `audio (--pid <n> | --hwnd <n>) [--exclude] [--stats]`
 
 The sound of that process and its child processes; with `--exclude`, everything
@@ -200,6 +223,7 @@ JSON lines on stdout, one event per line, each written at once.
 | `Cursor.cs` | `cursor` |
 | `Windows.cs` | `windows`, `window`, window geometry and process names |
 | `Focus.cs` | `focus` |
+| `Timers.cs` | `timers` |
 | `Output.cs` | clocks, stdout/stderr, JSON text, the stdin watcher |
 | `Interop.cs` | Win32 and COM declarations |
 | `app.manifest` | `asInvoker`, per-monitor-v2 DPI awareness, Windows 10/11 compatibility |

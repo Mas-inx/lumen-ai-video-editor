@@ -59,6 +59,14 @@ namespace Lumen.CaptureHelper
         public uint lPrivate;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct PROCESS_POWER_THROTTLING_STATE
+    {
+        public uint Version;
+        public uint ControlMask;
+        public uint StateMask;
+    }
+
     internal delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
 
     internal static class Native
@@ -70,6 +78,12 @@ namespace Lumen.CaptureHelper
 
         internal const uint SYNCHRONIZE = 0x00100000;
         internal const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+        internal const uint PROCESS_SET_INFORMATION = 0x0200;
+
+        // PROCESS_INFORMATION_CLASS.ProcessPowerThrottling
+        internal const int ProcessPowerThrottling = 4;
+        internal const uint PROCESS_POWER_THROTTLING_CURRENT_VERSION = 1;
+        internal const uint PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION = 0x4;
 
         internal const uint WAIT_OBJECT_0 = 0;
         internal const uint WAIT_TIMEOUT = 258;
@@ -98,6 +112,12 @@ namespace Lumen.CaptureHelper
 
         [DllImport("kernel32.dll")]
         internal static extern bool CloseHandle(IntPtr handle);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        internal static extern bool GetProcessInformation(IntPtr process, int infoClass, ref PROCESS_POWER_THROTTLING_STATE info, int size);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        internal static extern bool SetProcessInformation(IntPtr process, int infoClass, ref PROCESS_POWER_THROTTLING_STATE info, int size);
 
         [DllImport("kernel32.dll")]
         internal static extern uint GetCurrentThreadId();
