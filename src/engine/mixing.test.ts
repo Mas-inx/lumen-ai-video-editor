@@ -13,7 +13,7 @@ beforeEach(() => useEditor.getState().loadProject(createEmptyProject('Mix')))
 
 describe('mix.update', () => {
   it('sets levels and adds, edits and removes processors', () => {
-    const voice = trackId('Voice')
+    const voice = trackId('Voice any')
     dispatch('mix.update', { target: voice, patch: { volume: -6, pan: -0.25 } })
     dispatch('mix.update', { target: voice, patch: { eq: { lowCut: 80 } } })
     const mix = () => getProject().tracks.find((t) => t.id === voice)!.mix!
@@ -23,7 +23,7 @@ describe('mix.update', () => {
     expect(mix().compressor).toMatchObject({ enabled: true, threshold: -20, ratio: 3 })
     dispatch('mix.update', { target: voice, patch: { eq: null } })
     expect(mix().eq).toBeUndefined()
-    expect(useEditor.getState().past.at(-1)?.label).toBe('Edit EQ · Voice')
+    expect(useEditor.getState().past.at(-1)?.label).toBe('Edit EQ · Voice any')
   })
 
   it('mixes the master bus', () => {
@@ -84,7 +84,7 @@ describe('autoMakeupDb', () => {
 
 describe('crossfades', () => {
   it('a transition fades the next clip in and lets the one before ring out', () => {
-    const voice = trackId('Voice')
+    const voice = trackId('Voice any')
     const a = (dispatch('clip.add', { trackId: voice, kind: 'audio', start: 0, duration: 60 }) as { result: string }).result
     const b = (dispatch('clip.add', { trackId: voice, kind: 'audio', start: 60, duration: 60 }) as { result: string }).result
     dispatch('clip.setTransition', { id: b, transition: { kind: 'dissolve', duration: 12 } })

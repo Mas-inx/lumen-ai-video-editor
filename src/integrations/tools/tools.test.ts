@@ -61,7 +61,7 @@ beforeEach(() => {
   const p = createEmptyProject('Tools')
   const asset = voiceAsset()
   p.assets[asset.id] = asset
-  const voice = createClip({ kind: 'audio', trackId: p.tracks.find((t) => t.name === 'Voice')!.id, start: 0, duration: 300, assetId: asset.id, name: 'Interview' })
+  const voice = createClip({ kind: 'audio', trackId: p.tracks.find((t) => t.name === 'Voice any')!.id, start: 0, duration: 300, assetId: asset.id, name: 'Interview' })
   p.clips[voice.id] = voice
   useEditor.getState().loadProject(p)
 })

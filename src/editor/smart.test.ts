@@ -58,7 +58,7 @@ beforeEach(() => activity.clear())
 describe('findPauses', () => {
   it('finds long silences between phrases, keeping a breath either side', async () => {
     const { p, add, withAsset } = setup()
-    const voice = add('Voice', 'audio', 0, 210, { assetId: withAsset(asset(7, [[0, 2], [3.5, 5], [5.3, 7]])) })
+    const voice = add('Voice any', 'audio', 0, 210, { assetId: withAsset(asset(7, [[0, 2], [3.5, 5], [5.3, 7]])) })
     const reports = await findPauses(p)
     expect(reports).toHaveLength(1)
     expect(reports[0].clip.id).toBe(voice.id)
@@ -69,7 +69,7 @@ describe('findPauses', () => {
 
   it('follows the clip on the timeline (offset, trimmed source, speed)', async () => {
     const { p, add, withAsset } = setup()
-    add('Voice', 'audio', 30, 60, { inPoint: 30, speed: 2, assetId: withAsset(asset(10, [[0, 2], [3.5, 5]])) })
+    add('Voice any', 'audio', 30, 60, { inPoint: 30, speed: 2, assetId: withAsset(asset(10, [[0, 2], [3.5, 5]])) })
     const [r] = await findPauses(p)
     // Source 2.12s → timeline 30 + (2.12 - 1) * 30 / 2 = 46.8
     expect(r.cuts).toEqual([[47, 66]])
@@ -78,8 +78,8 @@ describe('findPauses', () => {
   it('falls back to transcript timings when the audio can’t be measured', async () => {
     const { p, add, withAsset } = setup()
     const a = asset(7, [], { transcript: [{ start: 0, end: 2, text: 'Hello there.' }, { start: 4, end: 6, text: 'Welcome back.' }] })
-    p.tracks.find((t) => t.name === 'Voice')!.muted = true
-    add('Voice', 'audio', 0, 210, { assetId: withAsset(a) })
+    p.tracks.find((t) => t.name === 'Voice any')!.muted = true
+    add('Voice any', 'audio', 0, 210, { assetId: withAsset(a) })
     const [r] = await findPauses(p)
     expect(r.from).toBe('transcript')
     expect(r.cuts).toEqual([[64, 116]])
@@ -90,7 +90,7 @@ describe('silentCuts', () => {
   it('never cuts across another speaker’s line', async () => {
     const { p, add, withAsset } = setup()
     p.tracks.push(createTrack('audio', { name: 'Interview B' }))
-    add('Voice', 'audio', 0, 210, { assetId: withAsset(asset(7, [[0, 2], [3.5, 7]])) })
+    add('Voice any', 'audio', 0, 210, { assetId: withAsset(asset(7, [[0, 2], [3.5, 7]])) })
     add('Interview B', 'audio', 0, 210, { assetId: withAsset(asset(7, [[2.3, 3.0]])) })
     expect(await silentCuts(p, await findPauses(p))).toEqual([])
   })
@@ -98,7 +98,7 @@ describe('silentCuts', () => {
   it('keeps the part of a pause where everyone is quiet', async () => {
     const { p, add, withAsset } = setup()
     p.tracks.push(createTrack('audio', { name: 'Interview B' }))
-    const a = add('Voice', 'audio', 0, 210, { assetId: withAsset(asset(7, [[0, 2], [3.5, 7]])) })
+    const a = add('Voice any', 'audio', 0, 210, { assetId: withAsset(asset(7, [[0, 2], [3.5, 7]])) })
     add('Interview B', 'audio', 0, 210, { assetId: withAsset(asset(7, [[1.9, 2.2]])) })
     expect(await silentCuts(p, await findPauses(p, { clipIds: [a.id] }))).toEqual([[70, 101]])
   })
@@ -106,8 +106,9 @@ describe('silentCuts', () => {
 
 describe('removePauses', () => {
   it('closes up the whole timeline: captions and effects follow, music plays through', async () => {
-    const { add, withAsset, load, on } = setup()
-    add('Voice', 'audio', 0, 210, { assetId: withAsset(asset(7, [[0, 2], [3.5, 5], [5.3, 7]])) })
+    const { p, add, withAsset, load, on } = setup()
+    p.tracks.push(createTrack('audio', { name: 'Sound effects' })) // not a default track any more
+    add('Voice any', 'audio', 0, 210, { assetId: withAsset(asset(7, [[0, 2], [3.5, 5], [5.3, 7]])) })
     add('Titles', 'text', 0, 60, { name: 'one' })
     add('Titles', 'text', 105, 45, { name: 'two' })
     const music = add('Music', 'audio', 0, 300, { assetId: withAsset(asset(60, [[0, 60]])) })
@@ -117,7 +118,7 @@ describe('removePauses', () => {
     const r = await removePauses()
     expect(r.removed).toBe(1)
     expect(r.seconds).toBeCloseTo(37 / 30)
-    expect(on('Voice')).toEqual([[0, 64], [64, 173]])
+    expect(on('Voice any')).toEqual([[0, 64], [64, 173]])
     expect(on('Titles')).toEqual([[0, 60], [68, 113]])
     expect(getProject().clips[music.id]).toMatchObject({ start: 0, duration: 263 })
     expect(getProject().clips[whoosh.id]).toMatchObject({ start: 64, duration: 10 })
@@ -125,14 +126,60 @@ describe('removePauses', () => {
 
     // One undo step puts everything back.
     useEditor.getState().undo()
-    expect(on('Voice')).toEqual([[0, 210]])
+    expect(on('Voice any')).toEqual([[0, 210]])
     expect(on('Titles')).toEqual([[0, 60], [105, 150]])
     expect(getProject().clips[music.id].duration).toBe(300)
   })
 
+  it('cuts a Sync track (the default "Main Sync") with the picture without it deciding where the pauses are', async () => {
+    const { add, withAsset, load, on } = setup()
+    add('Voice any', 'audio', 0, 210, { assetId: withAsset(asset(7, [[0, 2], [3.5, 5], [5.3, 7]])) })
+    // Game sound pops up at random, even through the quiet stretch (2.5s–3.2s): it must not block the cut.
+    add('Main Sync', 'audio', 0, 210, { assetId: withAsset(asset(7, [[0, 1], [2.5, 3.2], [6, 7]])) })
+    load()
+
+    const r = await removePauses()
+    expect(r.removed).toBe(1)
+    // Same stretch as without the sync track, and its audio is cut and closed up like the voice.
+    expect(on('Voice any')).toEqual([[0, 64], [64, 173]])
+    expect(on('Main Sync')).toEqual([[0, 64], [64, 173]])
+  })
+
+  it('treats any "* Sync" name as a sync track, and any "Voice *" name as a voice', async () => {
+    const { p, add, withAsset, load, on } = setup()
+    p.tracks.find((t) => t.name === 'Main Sync')!.name = 'Jimmy Sync'
+    p.tracks.find((t) => t.name === 'Voice any')!.name = 'Voice Jimmy'
+    p.tracks.push(createTrack('audio', { name: 'Voice Mike' }))
+    // Jimmy talks 0–2s and 5–7s, Mike 0–1s and 3.5–7s: only 2–3.5s is quiet for both.
+    add('Voice Jimmy', 'audio', 0, 210, { assetId: withAsset(asset(7, [[0, 2], [5, 7]])) })
+    add('Voice Mike', 'audio', 0, 210, { assetId: withAsset(asset(7, [[0, 1], [3.5, 7]])) })
+    add('Jimmy Sync', 'audio', 0, 210, { assetId: withAsset(asset(7, [[0, 7]])) })
+    load()
+
+    const r = await removePauses()
+    expect(r.removed).toBe(1)
+    expect(on('Jimmy Sync')).toEqual(on('Voice Jimmy'))
+    expect(on('Voice Mike')).toEqual(on('Voice Jimmy'))
+    expect(on('Voice Jimmy')).toHaveLength(2)
+  })
+
+  it('leaves music whole but shortens it to the length of the video', async () => {
+    const { add, withAsset, load, on } = setup()
+    add('Main', 'video', 0, 210, { assetId: withAsset(asset(7, [], { kind: 'video' })) })
+    add('Voice any', 'audio', 0, 210, { assetId: withAsset(asset(7, [[0, 2], [3.5, 5], [5.3, 7]])) })
+    add('Music', 'audio', 0, 600, { assetId: withAsset(asset(60, [[0, 60]])) })
+    load()
+
+    const r = await removePauses()
+    // The 37 frame pause closes up, so the video is 173 frames long; the music, never cut, ends with it.
+    expect(r.musicTrimmed).toBe(1)
+    expect(on('Main')).toEqual([[0, 64], [64, 173]])
+    expect(on('Music')).toEqual([[0, 173]])
+  })
+
   it('does nothing when there are no pauses', async () => {
     const { add, withAsset, load } = setup()
-    add('Voice', 'audio', 0, 90, { assetId: withAsset(asset(3, [[0, 3]])) })
+    add('Voice any', 'audio', 0, 90, { assetId: withAsset(asset(3, [[0, 3]])) })
     load()
     const before = useEditor.getState().past.length
     expect(await removePauses()).toMatchObject({ removed: 0, seconds: 0 })
@@ -152,7 +199,7 @@ describe('timelineTranscript', () => {
     })
     const id = withAsset(a)
     // The clip starts at 10 s on the timeline and plays 2.5 s → 7 s of the recording.
-    add('Voice', 'audio', 300, 135, { assetId: id, inPoint: 75 })
+    add('Voice any', 'audio', 300, 135, { assetId: id, inPoint: 75 })
     load()
     const lines = timelineTranscript(getProject())
     expect(lines.map((l) => l.text)).toEqual(['Second line', 'Third line'])
@@ -172,7 +219,7 @@ describe('addCaptions', () => {
         { start: 3, end: 7, text: 'Today we build a video editor from scratch together' },
       ],
     })
-    add('Voice', 'audio', 30, 240, { assetId: withAsset(a) })
+    add('Voice any', 'audio', 30, 240, { assetId: withAsset(a) })
     load()
     const r = addCaptions({ maxWords: 5 })
     const track = getProject().tracks.find((t) => t.role === 'captions')!
@@ -191,7 +238,7 @@ describe('addCaptions', () => {
   it('styles captions: a few big words at a time, or one word at a time with key words in colour', () => {
     const { add, withAsset, load } = setup()
     const a = asset(4, [], { transcript: [{ start: 0, end: 3, text: 'We built it in 30 days!' }] })
-    add('Voice', 'audio', 0, 120, { assetId: withAsset(a) })
+    add('Voice any', 'audio', 0, 120, { assetId: withAsset(a) })
     load()
     const captions = () => clipsOnTrack(getProject(), getProject().tracks.find((t) => t.role === 'captions')!.id)
 
@@ -242,7 +289,7 @@ describe('addCaptions', () => {
 describe('duckMusic', () => {
   it('dips the music under speech with volume keyframes', async () => {
     const { add, withAsset, load } = setup()
-    add('Voice', 'audio', 0, 300, { assetId: withAsset(asset(10, [[1, 3], [6, 8]])) })
+    add('Voice any', 'audio', 0, 300, { assetId: withAsset(asset(10, [[1, 3], [6, 8]])) })
     const music = add('Music', 'audio', 0, 300, { assetId: withAsset(asset(60, [[0, 60]])) })
     load()
     const r = await duckMusic({ depth: 10 })

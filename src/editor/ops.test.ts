@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createClip } from './defaults'
+import { createClip, createTrack } from './defaults'
 import { createEmptyProject } from './new-project'
 import { clipEnd, clipsOnTrack, deleteClips, maxTransition, normalizeProject, removeRange, splitClip, framesIn, transitionAt, transitionLead } from './ops'
 import { transitionSpot } from './placement'
@@ -113,17 +113,17 @@ describe('normalizeProject', () => {
 describe('removeRange', () => {
   it('cuts every unlocked track and closes up, keeping everything in sync', () => {
     const { p, add, on } = setup()
-    add('Voice', 'audio', 0, 100) // across the stretch: cut
+    add('Voice any', 'audio', 0, 100) // across the stretch: cut
     add('Titles', 'text', 20, 10) // before: untouched
     add('Titles', 'text', 45, 10) // inside: removed
     add('Titles', 'text', 70, 10) // after: moves left
     add('Overlay', 'video', 35, 20) // starts before, ends inside: trimmed
     add('Overlay', 'video', 55, 20) // starts inside, ends after: head trimmed
     removeRange(p, 40, 60)
-    expect(on('Voice')).toEqual([[0, 40], [40, 80]])
+    expect(on('Voice any')).toEqual([[0, 40], [40, 80]])
     expect(on('Titles')).toEqual([[20, 30], [50, 60]])
     expect(on('Overlay')).toEqual([[35, 40], [40, 55]])
-    const [left, right] = clipsOnTrack(p, p.tracks.find((t) => t.name === 'Voice')!.id)
+    const [left, right] = clipsOnTrack(p, p.tracks.find((t) => t.name === 'Voice any')!.id)
     expect(right.inPoint).toBe(60)
     // A frame of fade either side keeps the join click-free.
     expect(left.audio.fadeOut).toBe(1)
@@ -165,6 +165,7 @@ describe('removeRange', () => {
 
   it('starts kept-whole clips that begin inside the stretch at the join, trimming any overlap', () => {
     const { p, add, on } = setup()
+    p.tracks.push(createTrack('audio', { name: 'Sound effects' })) // not a default track any more
     const whoosh = add('Sound effects', 'audio', 45, 25) // starts inside: begins at the join, head intact
     const hit = add('Sound effects', 'audio', 72, 10) // after: moves left to 52
     const sting = add('Music', 'audio', 45, 10) // wholly inside: kept, at the join

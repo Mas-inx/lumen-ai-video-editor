@@ -49,7 +49,7 @@ describe('placeAsset', () => {
   it('puts each kind of sound on its own track', () => {
     expect(trackOf(placeAsset('fx', 30))).toBe('Sound effects')
     expect(trackOf(placeAsset('song', 0))).toBe('Music')
-    expect(trackOf(placeAsset('vo', 0))).toBe('Voice')
+    expect(trackOf(placeAsset('vo', 0))).toBe('Voice any')
   })
 
   it('stacks a second effect on a new Sound effects track rather than moving it in time', () => {
@@ -61,6 +61,6 @@ describe('placeAsset', () => {
   })
 
   it('falls back to the first free audio track for sounds it can’t classify', () => {
-    expect(trackOf(placeAsset('mystery', 0))).toBe('Voice')
+    expect(trackOf(placeAsset('mystery', 0))).toBe('Voice any')
   })
 })
