@@ -20,6 +20,7 @@ import {
   cloneClip,
   deleteClips,
   detachAudio,
+  splitAudioTracks,
   dropLoneGroups,
   findFreeStart,
   freezeFrame,
@@ -897,6 +898,24 @@ export const commands = {
           throw new CommandError((err as Error).message)
         }
       })
+    },
+  }),
+
+  'clip.splitAudioTracks': command({
+    description:
+      'For a video from a multi-track recording (its asset lists several audio tracks), put the chosen audio tracks on the timeline, each as its own clip on its own audio track so one can be muted or cut on its own. The clips are linked to the picture, which goes silent. `tracks` are 0-based stream numbers; streams already placed keep their edits, streams left out lose their clip, and an empty list puts the sound back in the video. `names` can relabel a stream by number (the track takes that name). Returns the new audio clip ids.',
+    input: z.object({ id, tracks: z.array(z.number().int().min(0)), names: z.record(z.string(), z.string()).default({}) }),
+    title: () => 'Choose audio tracks',
+    run(p, i) {
+      const clip = getClip(p, i.id)
+      assertEditable(p, clip)
+      const names: Record<number, string> = {}
+      for (const [k, v] of Object.entries(i.names)) if (Number.isInteger(Number(k))) names[Number(k)] = v
+      try {
+        return splitAudioTracks(p, clip, i.tracks, names).map((c) => c.id)
+      } catch (err) {
+        throw new CommandError((err as Error).message)
+      }
     },
   }),
 

@@ -6,7 +6,8 @@
  * Media is read straight from disk over lumen-media:// with byte ranges, so
  * multi-gigabyte files never have to be loaded into memory.
  */
-import { ALL_FORMATS, AudioBufferSink, CanvasSink, EncodedPacketSink, Input, UrlSource, type EncodedPacket, type InputVideoTrack, type WrappedCanvas } from 'mediabunny'
+import { ALL_FORMATS, AudioBufferSink, CanvasSink, EncodedPacketSink, Input, UrlSource, type EncodedPacket, type InputAudioTrack, type InputVideoTrack, type WrappedCanvas } from 'mediabunny'
+import type { AudioStreamInfo } from '@/editor/types'
 
 export type MediaKind = 'video' | 'audio' | 'image'
 
@@ -21,6 +22,8 @@ export interface ProbeResult {
   poster?: string
   videoCodec?: string | null
   audioCodec?: string | null
+  /** Every audio stream, only when the file holds two or more. */
+  audioTracks?: AudioStreamInfo[]
 }
 
 /** A file Lumen can't use. `detail` says why in technical terms (the codec string, the parser's error) for agents and logs. */
@@ -60,6 +63,18 @@ function loadImage(url: string): Promise<HTMLImageElement> {
 
 const round3 = (n: number) => Math.round(n * 1000) / 1000
 
+/** The audio streams of a file, or undefined unless there are two or more (one stream needs no choosing). */
+export function streamInfo(tracks: readonly Pick<InputAudioTrack, 'name' | 'numberOfChannels' | 'codec'>[]): AudioStreamInfo[] | undefined {
+  if (tracks.length < 2) return undefined
+  return tracks.map((t, index) => ({ index, name: t.name?.trim() || null, channels: t.numberOfChannels, codec: t.codec ?? null }))
+}
+
+/** The wanted audio stream of an open file: the one at `index`, or the primary stream when none is asked for. */
+async function pickAudioTrack(input: Input, index?: number): Promise<InputAudioTrack | null> {
+  if (index === undefined) return await input.getPrimaryAudioTrack()
+  return (await input.getAudioTracks())[index] ?? null
+}
+
 /** Reads everything the editor needs to know about a media file. */
 export async function probeMedia(url: string, mime: string): Promise<ProbeResult> {
   const kind = kindFromMime(mime)
@@ -69,8 +84,9 @@ export async function probeMedia(url: string, mime: string): Promise<ProbeResult
   }
   const input = openInput(url)
   try {
-    const [video, audio] = await Promise.all([input.getPrimaryVideoTrack(), input.getPrimaryAudioTrack()])
+    const [video, audio, allAudio] = await Promise.all([input.getPrimaryVideoTrack(), input.getPrimaryAudioTrack(), input.getAudioTracks().catch(() => [])])
     const audioOk = audio ? await audio.canDecode() : false
+    const audioTracks = streamInfo(allAudio)
     if (video && kind !== 'audio') {
       if (!(await video.canDecode())) {
         const codec = await video.getCodecParameterString().catch(() => null)
@@ -98,6 +114,7 @@ export async function probeMedia(url: string, mime: string): Promise<ProbeResult
         poster,
         videoCodec: video.codec,
         audioCodec: audio?.codec ?? null,
+        ...(audioTracks ? { audioTracks } : {}),
       }
     }
     if (!audio) throw new MediaError('This file has no audio or video Lumen can read.')
@@ -538,10 +555,10 @@ async function decodeWithBrowser(url: string): Promise<AudioBuffer | null> {
  * Decodes the whole audio track of a file (audio or video) into one AudioBuffer
  * at its native sample rate. Returns null when the file has no decodable audio.
  */
-export async function decodeAudio(url: string): Promise<AudioBuffer | null> {
+export async function decodeAudio(url: string, trackIndex?: number): Promise<AudioBuffer | null> {
   const input = openInput(url)
   try {
-    const track = await input.getPrimaryAudioTrack()
+    const track = await pickAudioTrack(input, trackIndex)
     if (!track) return null
     if (!(await track.canDecode())) return await decodeWithBrowser(url)
     const sampleRate = track.sampleRate
@@ -601,10 +618,10 @@ export interface AudioStream {
   close(): void
 }
 
-export async function openAudioStream(url: string): Promise<AudioStream | null> {
+export async function openAudioStream(url: string, trackIndex?: number): Promise<AudioStream | null> {
   const input = openInput(url)
   try {
-    const track = await input.getPrimaryAudioTrack()
+    const track = await pickAudioTrack(input, trackIndex)
     if (!track || !(await track.canDecode())) {
       input.dispose()
       return null

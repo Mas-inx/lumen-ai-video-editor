@@ -479,6 +479,7 @@ function TimelineMenu({ clipId, frame }: { clipId: string | null; frame: number 
   const clip = useEditor((s) => (clipId ? s.project.clips[clipId] : undefined))
   const nested = useEditor((s) => (clip?.sequenceId ? s.project.sequences?.[clip.sequenceId] : undefined))
   const range = useEditor((s) => s.project.range)
+  const assets = useEditor((s) => s.project.assets)
   const canPaste = useClipboard((s) => Boolean(s.data?.clips.length))
   const selection = () => useUI.getState().selection
   if (clip) {
@@ -535,6 +536,16 @@ function TimelineMenu({ clipId, frame }: { clipId: string | null; frame: number 
               Detach audio
             </ContextItem>
           ))}
+        {clip.kind === 'video' && (clip.assetId ? (assets[clip.assetId]?.audioTracks?.length ?? 0) > 1 : false) && (
+          <ContextItem
+            onSelect={() => {
+              useUI.getState().select([clip.id])
+              useUI.getState().setAudioTracksClip(clip.id)
+            }}
+          >
+            Audio tracks…
+          </ContextItem>
+        )}
         {clip.groupId ? (
           <ContextItem shortcut="mod+shift+g" onSelect={actions.ungroup}>
             {clip.audio.detached || clip.kind === 'audio' ? 'Unlink' : 'Ungroup'}

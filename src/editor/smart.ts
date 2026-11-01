@@ -58,6 +58,25 @@ function toTimeline(project: Project, clip: Clip, sourceSec: number) {
 
 const VOICE_TRACK = /voice|vo\b|dialog|narrat|interview|speech/i
 
+/**
+ * Tracks named like this ("Main Sync", "Jimmy Sync", or the older "Game",
+ * "Follow Main", "Synced") are cut in lock-step with the timeline — game sound
+ * that has to match the picture — but never decide where the silences are.
+ * Anything before "Sync" is a free tag. Checked before VOICE_TRACK, so a name
+ * like "Voice Sync" still follows.
+ */
+const FOLLOW_TRACK = /\b(sync|synced|game|gameplay|follow|follows|linked|lockstep)\b/i
+
+const onFollowTrack = (project: Project, clip: Clip) => {
+  const track = project.tracks.find((t) => t.id === clip.trackId)
+  return Boolean(track && track.role !== 'main' && FOLLOW_TRACK.test(track.name))
+}
+
+/** Audio that is cut along with the picture (not kept whole like music) but is not read as speech. */
+export function followClips(project: Project): Clip[] {
+  return Object.values(project.clips).filter((c) => c.kind === 'audio' && onFollowTrack(project, c))
+}
+
 /** Where speech is expected first: the main track and voice-ish tracks. */
 const speechTrack = (project: Project, clip: Clip) => {
   const track = project.tracks.find((t) => t.id === clip.trackId)
@@ -74,6 +93,7 @@ export function voiceClips(project: Project): Clip[] {
   return Object.values(project.clips)
     .filter((c) => {
       if (c.kind !== 'audio' && c.kind !== 'video') return false
+      if (onFollowTrack(project, c)) return false
       const asset = c.assetId ? project.assets[c.assetId] : undefined
       if (!asset) return false
       if (c.freeze || (c.kind === 'video' && c.audio.detached) || c.audio.volume <= -60) return false
@@ -116,7 +136,7 @@ export function timelineTranscript(project: Project, from = 0, to = Infinity): T
 export function musicClips(project: Project): Clip[] {
   const voices = new Set(voiceClips(project).map((c) => c.id))
   return Object.values(project.clips).filter((c) => {
-    if (c.kind !== 'audio' || voices.has(c.id) || !isAudible(project, c)) return false
+    if (c.kind !== 'audio' || voices.has(c.id) || onFollowTrack(project, c) || !isAudible(project, c)) return false
     const track = project.tracks.find((t) => t.id === c.trackId)
     if (track && /music|score|song|soundtrack|bed/i.test(track.name)) return true
     const asset = project.assets[c.assetId!]
@@ -233,11 +253,12 @@ export async function removePauses(opts: { clipIds?: string[]; minGap?: number }
   const cuts = await silentCuts(project, await findPauses(project, opts), opts)
   const speech = new Set(voiceClips(project).map((c) => c.id))
   const keepWhole = Object.values(project.clips)
-    .filter((c) => c.kind === 'audio' && !speech.has(c.id))
+    .filter((c) => c.kind === 'audio' && !speech.has(c.id) && !onFollowTrack(project, c))
     .map((c) => c.id)
   const joins: number[] = []
   let removed = 0
   let seconds = 0
+  let musicTrimmed = 0
   useEditor.getState().transaction('Remove pauses', 'ai', () => {
     // Last stretch first, so earlier positions stay valid as later ones close up.
     for (const [a, b] of [...cuts].reverse()) {
@@ -246,6 +267,7 @@ export async function removePauses(opts: { clipIds?: string[]; minGap?: number }
       seconds += (b - a) / fps
       joins.push(a)
     }
+    musicTrimmed = trimMusicToVideo()
   })
   // Where each join landed once every earlier stretch closed up too.
   const done = new Set(joins)
@@ -260,7 +282,27 @@ export async function removePauses(opts: { clipIds?: string[]; minGap?: number }
   const touched = voiceClips(after)
     .filter((c) => landed.some((f) => c.start === f || clipEnd(c) === f))
     .map((c) => c.id)
-  return { removed, seconds, clips: touched }
+  return { removed, seconds, clips: touched, musicTrimmed }
+}
+
+/**
+ * Music is never chopped up, but it shouldn't outlast the video: any music clip
+ * running past the end of the main track is shortened to end with it. Returns how
+ * many were trimmed. Does nothing when the main track is empty.
+ */
+function trimMusicToVideo() {
+  const project = getProject()
+  const mainIds = new Set(project.tracks.filter((t) => t.role === 'main').map((t) => t.id))
+  const videoEnd = Object.values(project.clips)
+    .filter((c) => mainIds.has(c.trackId))
+    .reduce((end, c) => Math.max(end, clipEnd(c)), 0)
+  if (videoEnd <= 0) return 0
+  let trimmed = 0
+  for (const clip of musicClips(project)) {
+    if (clip.start >= videoEnd || clipEnd(clip) <= videoEnd) continue
+    if (dispatch('clip.trim', { id: clip.id, edge: 'end', frame: videoEnd }, ai).ok) trimmed++
+  }
+  return trimmed
 }
 
 // ─── Captions ────────────────────────────────────────────────────────────
@@ -454,4 +496,3 @@ export async function suggestFor(project: Project): Promise<Suggestion | null> {
   }
   return null
 }
-

@@ -146,6 +146,14 @@ export const actions = {
     ok(dispatch('clip.reattachAudio', { ids: clips.map((c) => c.id) }))
   },
 
+  /** Opens the audio-track chooser for a video clip from a multi-track recording. */
+  chooseAudioTracks() {
+    const clip = targetClips(['video'])[0]
+    const streams = clip?.assetId ? getProject().assets[clip.assetId]?.audioTracks : undefined
+    if (!clip || !streams || streams.length < 2) return void toast('Select a video clip that has several audio tracks')
+    ui().setAudioTracksClip(clip.id)
+  },
+
   toggleAudioLink() {
     const clips = targetClips(['video'])
     if (clips.some((c) => c.audio.detached)) actions.reattachAudio()

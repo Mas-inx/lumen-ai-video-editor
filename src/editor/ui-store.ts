@@ -73,6 +73,8 @@ interface UIState {
   /** The mask being edited on the canvas (on the selected clip). */
   maskEdit: string | null
   pasteAttributesOpen: boolean
+  /** The video clip whose audio tracks (a multi-track recording) are being chosen in the dialog. */
+  audioTracksClipId: string | null
   versionsOpen: boolean
   queueOpen: boolean
   /** The multicam dialog, with the media it starts from. */
@@ -113,6 +115,7 @@ interface UIState {
   setCropMode: (v: boolean) => void
   setMaskEdit: (id: string | null) => void
   setPasteAttributesOpen: (v: boolean) => void
+  setAudioTracksClip: (id: string | null) => void
   setVersionsOpen: (v: boolean) => void
   setQueueOpen: (v: boolean) => void
   setMulticam: (v: { assetIds: string[] } | null) => void
@@ -149,6 +152,7 @@ export const useUI = create<UIState>()(
       cropMode: false,
       maskEdit: null,
       pasteAttributesOpen: false,
+      audioTracksClipId: null,
       versionsOpen: false,
       queueOpen: false,
       multicam: null,
@@ -192,6 +196,7 @@ export const useUI = create<UIState>()(
       setCropMode: (cropMode) => set({ cropMode, ...(cropMode ? { maskEdit: null } : {}) }),
       setMaskEdit: (maskEdit) => set({ maskEdit, ...(maskEdit ? { cropMode: false } : {}) }),
       setPasteAttributesOpen: (pasteAttributesOpen) => set({ pasteAttributesOpen }),
+      setAudioTracksClip: (audioTracksClipId) => set({ audioTracksClipId }),
       setVersionsOpen: (versionsOpen) => set({ versionsOpen }),
       setQueueOpen: (queueOpen) => set({ queueOpen }),
       setMulticam: (multicam) => set({ multicam }),

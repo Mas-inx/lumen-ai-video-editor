@@ -8,7 +8,7 @@ import { uid } from '@/lib/id'
 import { createClip, createTrack, TRACK_HEIGHTS } from './defaults'
 import { ANIMATABLE, propAt } from './keyframes'
 import { consumed, consumedAt, sourceFrameAt, speedAt, splitInPoints } from './timing'
-import type { AnimatableProp, Clip, ClipKind, Frame, Project, Track, Transition } from './types'
+import type { AnimatableProp, Asset, Clip, ClipKind, Frame, Project, Track, Transition } from './types'
 
 export const clipEnd = (c: Pick<Clip, 'start' | 'duration'>) => c.start + c.duration
 
@@ -831,8 +831,102 @@ export function reattachAudio(p: Project, clip: Clip) {
     else delete clip.keyframes.volume
   }
   for (const c of linked) delete p.clips[c.id]
+  // Sound split out of a multi-track recording goes back into the file too.
+  for (const c of splitAudioClips(p, clip).values()) delete p.clips[c.id]
   delete clip.audio.detached
   if (clip.groupId) dropLoneGroups(p, [clip.groupId])
+}
+
+// ─── Multi-track recordings ──────────────────────────────────────────────
+
+/** The audio clips linked to a video clip that each play one stream of its file, by stream index. */
+export function splitAudioClips(p: Project, clip: Clip): Map<number, Clip> {
+  const out = new Map<number, Clip>()
+  const video = clip.assetId ? p.assets[clip.assetId] : undefined
+  if (!video || video.source.type !== 'file' || !clip.groupId) return out
+  for (const c of Object.values(p.clips)) {
+    if (c.groupId !== clip.groupId || c.kind !== 'audio' || !c.assetId) continue
+    const a = p.assets[c.assetId]
+    if (a?.source.type === 'file' && a.source.url === video.source.url && a.source.audioTrack !== undefined) out.set(a.source.audioTrack, c)
+  }
+  return out
+}
+
+/** The audio asset that plays one stream of a video's file — made once, then reused. */
+function streamAsset(p: Project, video: Asset, index: number, label: string): Asset {
+  if (video.source.type !== 'file') throw new Error('Only a media file can have audio tracks')
+  const url = video.source.url
+  const known = Object.values(p.assets).find((a) => a.kind === 'audio' && a.source.type === 'file' && a.source.url === url && a.source.audioTrack === index)
+  if (known) return known
+  const asset: Asset = {
+    id: uid('asset'),
+    name: `${video.name} · ${label}`,
+    kind: 'audio',
+    ...(video.duration !== undefined ? { duration: video.duration } : {}),
+    hasAudio: true,
+    source: { ...video.source, poster: undefined, audioTrack: index },
+    addedAt: Date.now(),
+  }
+  p.assets[asset.id] = asset
+  return asset
+}
+
+/** A free audio track called `label` over [a, b) — reusing one with that name — or a new one at the bottom. */
+function streamTrack(p: Project, label: string, a: Frame, b: Frame): Track {
+  const same = p.tracks.find((t) => t.kind === 'audio' && !t.locked && t.name === label && clipsOnTrack(p, t.id).every((c) => clipEnd(c) <= a || c.start >= b))
+  if (same) return same
+  const track = createTrack('audio', { id: uid('track'), name: label, height: TRACK_HEIGHTS.audio })
+  p.tracks.push(track)
+  return track
+}
+
+/**
+ * Puts the chosen audio streams of a multi-track recording on the timeline, each
+ * as its own clip on its own audio track (so one — a cough on the mic — can be
+ * muted or cut without touching the rest). The clips are linked to the picture,
+ * which goes silent. Streams already split out are left as they are (their mix
+ * and edits stay); streams no longer wanted lose their clip. Choosing none puts
+ * the sound back in the video. `names` relabels a stream (and so its track).
+ * Returns the clips it added.
+ */
+export function splitAudioTracks(p: Project, clip: Clip, wanted: readonly number[], names: Readonly<Record<number, string>> = {}): Clip[] {
+  if (clip.kind !== 'video') throw new Error(`“${clip.name}” isn’t a video clip`)
+  const video = clip.assetId ? p.assets[clip.assetId] : undefined
+  const streams = video?.audioTracks
+  if (!video || !streams || streams.length < 2) throw new Error(`“${clip.name}” doesn’t have several audio tracks`)
+  const want = [...new Set(wanted)].sort((x, y) => x - y)
+  for (const i of want) if (!streams.some((s) => s.index === i)) throw new Error(`“${clip.name}” has no audio track ${i + 1}`)
+  const have = splitAudioClips(p, clip)
+  for (const [i, c] of have) if (!want.includes(i)) delete p.clips[c.id]
+  const made: Clip[] = []
+  for (const i of want) {
+    if (have.has(i)) continue
+    const info = streams.find((s) => s.index === i)!
+    const label = names[i]?.trim() || info.name || `Audio ${i + 1}`
+    const asset = streamAsset(p, video, i, label)
+    const track = streamTrack(p, label, clip.start, clipEnd(clip))
+    const sound = createClip({
+      id: uid('clip'),
+      kind: 'audio',
+      trackId: track.id,
+      start: clip.start,
+      duration: clip.duration,
+      assetId: asset.id,
+      inPoint: clip.inPoint,
+      name: label,
+      speed: clip.speed,
+      reverse: clip.reverse,
+      audio: { ...clip.audio, detached: undefined },
+    })
+    clip.groupId ??= uid('grp')
+    sound.groupId = clip.groupId
+    p.clips[sound.id] = sound
+    made.push(sound)
+  }
+  if (want.length) clip.audio.detached = true
+  else if (have.size) delete clip.audio.detached
+  if (clip.groupId) dropLoneGroups(p, [clip.groupId])
+  return made
 }
 
 // ─── Range & tracks ──────────────────────────────────────────────────────

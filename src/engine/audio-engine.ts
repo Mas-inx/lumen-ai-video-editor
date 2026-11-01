@@ -39,6 +39,9 @@ export function audioSourceUrl(asset: Asset | undefined): string | null {
   return null
 }
 
+/** The audio stream of its file an asset plays: set on the assets made by splitting a multi-track recording, otherwise the primary one. */
+const streamOf = (asset: Asset) => (asset.source.type === 'file' ? asset.source.audioTrack : undefined)
+
 /** Starts (or joins) decoding an asset's audio. */
 export function loadAudio(asset: Asset): Promise<AudioBuffer | null> {
   const url = audioSourceUrl(asset)
@@ -46,7 +49,7 @@ export function loadAudio(asset: Asset): Promise<AudioBuffer | null> {
   const hit = decoded.get(asset.id)
   if (hit && hit.url === url) return hit.promise
   const entry: Entry = { url, buffer: null, promise: Promise.resolve(null) }
-  entry.promise = decodeAudio(url).then(
+  entry.promise = decodeAudio(url, streamOf(asset)).then(
     (buffer) => {
       entry.buffer = buffer
       readyListeners.forEach((fn) => fn(asset.id))
@@ -186,7 +189,7 @@ export function audioStream(asset: Asset): Promise<AudioStream | null> {
   const hit = streams.get(asset.id)
   if (hit && hit.url === url) return hit.stream
   void hit?.stream.then((old) => old?.close())
-  const stream = openAudioStream(url)
+  const stream = openAudioStream(url, streamOf(asset))
   streams.set(asset.id, { url, stream })
   return stream
 }
