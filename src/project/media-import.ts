@@ -30,6 +30,7 @@ async function assetFromFile(file: MediaFileInfo): Promise<Asset> {
     height: meta.height,
     fps: meta.fps,
     hasAudio: meta.kind === 'image' ? undefined : meta.hasAudio,
+    ...(meta.audioTracks ? { audioTracks: meta.audioTracks } : {}),
     source: { type: 'file', url: file.url, path: file.path, mime: file.mime, fileName: file.name, size: file.size, mtime: file.mtime, poster: meta.poster },
     addedAt: Date.now(),
   }

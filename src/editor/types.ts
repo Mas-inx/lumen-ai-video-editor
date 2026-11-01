@@ -30,6 +30,11 @@ export type AssetSource =
       poster?: string
       /** The file couldn't be found when the project was opened. */
       missing?: boolean
+      /**
+       * Which audio stream of the file this asset plays (0-based, in the order the container lists them).
+       * Unset means the file's primary stream. Set on the audio assets made by splitting a multi-track recording.
+       */
+      audioTrack?: number
     }
   /** Numbered frames (PNG with alpha) rendered by Blender, HyperFrames or another generator. */
   | {
@@ -68,6 +73,16 @@ export interface AssetCue {
   data?: Record<string, string | number | boolean>
 }
 
+/** One audio stream inside a media file (a multi-track recording has several). */
+export interface AudioStreamInfo {
+  /** 0-based position among the file's audio streams. */
+  index: number
+  /** The name the recorder gave the stream (OBS can name its tracks), when it has one. */
+  name: string | null
+  channels: number
+  codec: string | null
+}
+
 export interface Asset {
   id: string
   name: string
@@ -78,6 +93,8 @@ export interface Asset {
   height?: number
   fps?: number
   hasAudio?: boolean
+  /** Every audio stream in the file, kept only when there are two or more (a multi-track recording). */
+  audioTracks?: AudioStreamInfo[]
   source: AssetSource
   /** Normalized amplitude peaks (0..1) at PEAKS_PER_SECOND, when known. */
   peaks?: number[]

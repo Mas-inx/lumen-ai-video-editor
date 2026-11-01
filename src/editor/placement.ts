@@ -7,6 +7,7 @@ import { LOOKS, TITLE_PRESETS } from './presets'
 import { adjacentAfter, adjacentBefore, clipEnd, clipsOnTrack, sourceFrames, trackAccepts } from './ops'
 import { dispatch, getProject, useEditor } from './store'
 import type { ActionSource } from './store'
+import { useUI } from './ui-store'
 import type { Asset, Clip, ClipKind, EffectKind, Project, Track, TransitionAlign, TransitionKind } from './types'
 
 const STILL_SECONDS = 5
@@ -112,6 +113,9 @@ export function placeAsset(assetId: string, frame: number, opts: PlaceOptions = 
     const res = dispatch('clip.add', { trackId, kind: asset.kind, start: frame, duration, assetId, name: asset.name, ...(inPoint ? { inPoint } : {}), ...(opts.patch ? { patch: opts.patch } : {}) })
     if (res.ok) clipId = res.result as string
   })
+  // A recording with several audio tracks (mic, game, comms…): ask which to put on the timeline.
+  // Only for the person's own actions — the AI picks tracks itself — and a file with one track needs no choosing.
+  if (clipId && asset.kind === 'video' && (asset.audioTracks?.length ?? 0) > 1 && (opts.source ?? 'user') === 'user') useUI.getState().setAudioTracksClip(clipId)
   return clipId
 }
 
