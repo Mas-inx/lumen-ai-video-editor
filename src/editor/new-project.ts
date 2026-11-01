@@ -21,15 +21,24 @@ export const CANVAS_PRESETS: CanvasPreset[] = [
 
 export const FRAME_RATES = [24, 25, 30, 50, 60]
 
-/** The standard track layout: titles and overlays over a magnetic main track, then audio. */
+/**
+ * The standard track layout: titles and overlays over a magnetic main track, then audio.
+ *
+ * Audio track names carry meaning for Remove pauses (see smart.ts):
+ *  - "Voice …"  any name containing Voice is speech: "Voice any" is the placeholder,
+ *               rename it "Voice Jimmy", add "Voice Mike" and so on. Pauses are only cut where every voice is quiet.
+ *  - "… Sync"   any name ending in Sync follows the main video's cuts without deciding them
+ *               ("Main Sync" for the game's own sound, or "Jimmy Sync" if you tag it for yourself).
+ *  - "Music"    left whole, only shortened to the video's length.
+ */
 export function defaultTracks() {
   return [
     createTrack('video', { name: 'Titles', role: 'titles', height: TRACK_HEIGHTS.titles }),
     createTrack('video', { name: 'Overlay', height: TRACK_HEIGHTS.video }),
     createTrack('video', { name: 'Main', role: 'main', height: TRACK_HEIGHTS.main }),
-    createTrack('audio', { name: 'Voice', height: TRACK_HEIGHTS.audio }),
+    createTrack('audio', { name: 'Voice any', height: TRACK_HEIGHTS.audio }),
+    createTrack('audio', { name: 'Main Sync', height: TRACK_HEIGHTS.audio }),
     createTrack('audio', { name: 'Music', height: TRACK_HEIGHTS.audio }),
-    createTrack('audio', { name: 'Sound effects', height: TRACK_HEIGHTS.sfx }),
   ]
 }
 
