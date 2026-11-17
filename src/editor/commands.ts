@@ -12,7 +12,7 @@ import { createClip, createTrack, DEFAULT_BUS, DEFAULT_COMPRESSOR, DEFAULT_EQ, D
 import { EASING_NAMES, type Easing } from './easing'
 import { ANIMATABLE, evalKeyframes } from './keyframes'
 import { MOTION_PRESETS, mergeKeyframes, presetKeyframes, PRESET_IDS } from './motion-presets'
-import { EFFECTS } from './presets'
+import { EFFECTS, effectParamsDoc } from './presets'
 import {
   clipEnd,
   clipsAt,
@@ -59,8 +59,9 @@ import {
   usesOf,
   wouldLoop,
 } from './sequences'
+import { createScene, definedFields, rangeOfClips, SCENE_STATUS_IDS, SCENE_TREATMENT_IDS } from './storyboard'
 import { averageSpeed, consumed, localForConsumed, MAX_SPEED, MIN_SPEED } from './timing'
-import type { AnimatableProp, BusMix, Clip, Project, Sequence, Track } from './types'
+import type { AnimatableProp, BusMix, Clip, Project, SceneProduced, Sequence, StoryboardScene, Track } from './types'
 
 export class CommandError extends Error {}
 
@@ -73,8 +74,8 @@ const length = z.number().int().min(1)
 const clipKind = z.enum(['video', 'image', 'audio', 'text', 'adjustment'])
 const blend = z.enum(['normal', 'screen', 'multiply', 'overlay', 'soft-light', 'lighten', 'darken', 'color-dodge', 'difference'])
 const animPreset = z.enum(['none', 'fade', 'rise', 'drop', 'pop', 'zoom', 'blur', 'wipe', 'typewriter', 'spin3d', 'flip3d'])
-const transitionKind = z.enum(['dissolve', 'dip', 'flash', 'slide', 'push', 'zoom', 'wipe', 'blur', 'cube', 'flip', 'door', 'swing', 'page', 'warp', 'shatter', 'spin'])
-const effectKind = z.enum(['blur', 'glow', 'vignette', 'grain', 'mono', 'shake', 'pulse', 'leak', 'rgb', 'sharpen', 'chromaKey', 'lumaKey', 'tilt3d', 'curve3d', 'wave3d', 'cube3d', 'mirror3d'])
+const transitionKind = z.enum(['dissolve', 'dip', 'flash', 'slide', 'push', 'zoom', 'wipe', 'blur', 'cube', 'flip', 'door', 'swing', 'page', 'warp', 'shatter', 'spin', 'morph', 'through', 'whip', 'luma', 'match'])
+const effectKind = z.enum(['blur', 'glow', 'vignette', 'grain', 'mono', 'shake', 'pulse', 'leak', 'rgb', 'sharpen', 'halation', 'rays', 'flare', 'relight', 'particles', 'chromaKey', 'lumaKey', 'tilt3d', 'curve3d', 'wave3d', 'cube3d', 'mirror3d'])
 const fontId = z.enum(['sans', 'display', 'serif', 'mono', 'hand', 'fraunces', 'archivo', 'syne', 'space-grotesk'])
 /** A built-in font, or `custom:<id>` for one imported into the project (ids in get_project → fonts). */
 const fontRef = z.union([fontId, z.templateLiteral(['custom:', z.string().min(1)])])
@@ -117,6 +118,13 @@ const wheels = z.object({ lift: wheel, gamma: wheel, gain: wheel })
 const hslBand = z.enum(['red', 'orange', 'yellow', 'green', 'aqua', 'blue', 'purple', 'magenta'])
 const hsl = z.partialRecord(hslBand, z.object({ hue: z.number().min(-60).max(60), saturation: pct, luminance: pct }))
 const lutRef = z.object({ id, amount: unit })
+const gain = z.number().min(0.25).max(4)
+/** White balance: gains per channel in linear light; 1, 1, 1 is neutral (see auto_color / the white-balance picker). */
+const balance = z.object({ r: gain, g: gain, b: gain })
+/** Levels: where black and white sit in the footage (0..1) and a midtone gamma (1 neutral, above 1 brightens). */
+const levels = z.object({ black: z.number().min(0).max(0.5), white: z.number().min(0.5).max(1), gamma: z.number().min(0.2).max(5) })
+/** A shot match: per-channel curves that line a clip up with a reference clip (see match_color). */
+const shotMatch = z.object({ red: curvePoints, green: curvePoints, blue: curvePoints, ref: z.string().optional() })
 
 const grade = z.object({
   exposure: pct,
@@ -124,16 +132,28 @@ const grade = z.object({
   saturation: pct,
   temperature: pct,
   tint: pct,
-  vignette: z.number().min(0).max(100),
+  /** Below 0 lightens the edges instead of darkening them. */
+  vignette: pct,
+  balance: balance.optional(),
+  levels: levels.optional(),
+  match: shotMatch.optional(),
   curves: curves.optional(),
   wheels: wheels.optional(),
   hsl: hsl.optional(),
   lut: lutRef.optional(),
 })
 
-/** A colour change: basic sliders, plus curves, wheels, HSL and a LUT (null removes one). */
+/** A colour change: basic sliders, plus the correction (balance, levels, match), curves, wheels, HSL and a LUT (null removes one). */
 const gradePatch = grade
-  .extend({ curves: curves.partial().nullable(), wheels: wheels.partial().nullable(), hsl: hsl.nullable(), lut: lutRef.partial().nullable() })
+  .extend({
+    balance: balance.partial().nullable(),
+    levels: levels.partial().nullable(),
+    match: shotMatch.nullable(),
+    curves: curves.partial().nullable(),
+    wheels: wheels.partial().nullable(),
+    hsl: hsl.nullable(),
+    lut: lutRef.partial().nullable(),
+  })
   .partial()
 
 /** A tracked point's path (what a clip or mask follows). */
@@ -239,7 +259,17 @@ const textStyle = z.object({
 
 const animSpec = z.object({ preset: animPreset, duration: z.number().int().min(1).max(600) })
 const subjectMatte = z.object({ assetId: z.string().min(1), from: z.number().min(0), invert: z.boolean().optional() })
-const transition = z.object({ kind: transitionKind, duration: z.number().int().min(2).max(300), align: z.enum(['before', 'center', 'after']).optional() })
+const depthMap = z.object({ assetId: z.string().min(1), from: z.number().min(0) })
+const spot = z.object({ x: z.number().min(-1).max(2), y: z.number().min(-1).max(2) })
+/** What smart_transition measured of the two shots at a cut (subjects, camera motion, a flow field, colour curves). */
+const transitionMatch = z.object({
+  from: spot.optional(),
+  to: spot.optional(),
+  motion: z.object({ x: z.number().min(-50).max(50), y: z.number().min(-50).max(50) }).optional(),
+  flow: z.object({ w: z.number().int().min(2).max(64), h: z.number().int().min(2).max(64), data: z.string().max(100_000) }).optional(),
+  color: z.object({ red: curvePoints, green: curvePoints, blue: curvePoints }).optional(),
+})
+const transition = z.object({ kind: transitionKind, duration: z.number().int().min(2).max(300), align: z.enum(['before', 'center', 'after']).optional(), match: transitionMatch.optional() })
 
 export const clipPatch = z
   .object({
@@ -261,6 +291,10 @@ export const clipPatch = z
     stabilize: stabilization.partial().nullable(),
     /** A subject matte (make one with cut_out_subject); null removes it. */
     matte: subjectMatte.nullable(),
+    /** A depth map for Relight (make one with relight_clip); null removes it. */
+    depth: depthMap.nullable(),
+    /** The style last applied (apply_style sets it); null forgets it. */
+    style: z.string().min(1).max(80).nullable(),
   })
   .partial()
 
@@ -299,6 +333,8 @@ export const clipSnapshot = z.object({
   follow: trackPath.optional(),
   stabilize: stabilization.optional(),
   matte: subjectMatte.optional(),
+  depth: depthMap.optional(),
+  style: z.string().optional(),
 })
 
 export type ClipSnapshot = z.infer<typeof clipSnapshot>
@@ -338,6 +374,14 @@ const assetCue = z.object({
   data: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
 })
 
+/** A transcript phrase (seconds into the media), with its words' timings when the transcriber gave them. */
+const speechSegment = z.object({
+  start: z.number(),
+  end: z.number(),
+  text: z.string(),
+  words: z.array(z.object({ start: z.number(), end: z.number(), text: z.string() })).optional(),
+})
+
 const cursorTrack = z.object({
   moves: z.array(z.number()),
   clicks: z.array(z.object({ t: z.number(), x: z.number(), y: z.number(), button: z.enum(['left', 'right', 'middle']), held: z.number().optional() })),
@@ -358,16 +402,58 @@ const asset = z.object({
   alpha: z.boolean().optional(),
   generated: z.boolean().optional(),
   provenance: z.object({ integration: z.string(), tool: z.string(), prompt: z.string().optional(), params: z.record(z.string(), z.unknown()).optional() }).optional(),
-  transcript: z.array(z.object({ start: z.number(), end: z.number(), text: z.string() })).optional(),
+  transcript: z.array(speechSegment).optional(),
   favorite: z.boolean().optional(),
   tags: z.array(z.string()).optional(),
+  description: z.string().max(4000).optional(),
   proxy: z.object({ path: z.string(), url: z.string(), width: z.number(), height: z.number() }).optional(),
   cues: z.array(assetCue).optional(),
   cursor: cursorTrack.optional(),
   matteOf: z
     .object({ assetId: z.string(), subject: z.enum(['person', 'any']), from: z.number(), to: z.number(), box: z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() }).optional() })
     .optional(),
+  depthOf: z.object({ assetId: z.string(), from: z.number(), to: z.number() }).optional(),
   addedAt: z.number(),
+})
+
+const hex = z.string().regex(/^#[0-9a-f]{3,8}$/i, 'a hex colour such as #ff5a36')
+
+/** Where a scene was made: the clips that make it (the stretch follows them), or a stretch in frames. */
+const producedInput = z.object({ timelineId: id.optional(), from: frame.optional(), to: frame.optional(), clipIds: z.array(id).max(1000).optional() })
+
+const sceneInput = z
+  .object({
+    title: z.string().max(200),
+    script: z.string().max(20000),
+    treatment: z.enum(SCENE_TREATMENT_IDS),
+    seconds: z.number().min(0.1).max(3600),
+    transition: z.object({ kind: transitionKind, seconds: z.number().min(0.05).max(10) }).nullable(),
+    needs: z.array(z.string().trim().min(1).max(400)).max(60),
+    assetIds: z.array(id).max(200),
+    status: z.enum(SCENE_STATUS_IDS),
+    notes: z.string().max(20000),
+    produced: producedInput.nullable(),
+  })
+  .partial()
+
+const projectBrand = z.object({
+  kitId: z.string().max(100).optional(),
+  name: z.string().min(1).max(120),
+  colors: z.array(z.object({ name: z.string().max(60), hex })).max(24),
+  fonts: z.object({ heading: fontRef, body: fontRef }),
+  logoAssetIds: z.array(id).max(12),
+  titles: z.object({ color: hex.nullable(), background: hex.nullable(), weight: z.number().min(100).max(900), uppercase: z.boolean(), tracking: z.number().min(-0.5).max(2) }),
+  captions: z.object({ style: z.enum(['clean', 'bold', 'word', 'boxed']), accent: hex.nullable(), uppercase: z.boolean().nullable() }),
+  look: z.string().max(60).nullable(),
+  motion: z.object({
+    titleIn: animPreset,
+    titleOut: animPreset,
+    seconds: z.number().min(0.05).max(10),
+    easing,
+    transition: z.union([transitionKind, z.literal('cut')]).nullable(),
+    transitionSeconds: z.number().min(0.05).max(10),
+  }),
+  style: z.string().max(80).nullable(),
 })
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
@@ -413,6 +499,39 @@ function timeline<T>(fn: () => T): T {
 
 const settingsInput = z.object({ width: z.number().int().min(16).max(8192), height: z.number().int().min(16).max(8192), fps: z.number().int().min(1).max(240), background: z.string() })
 
+// ─── Storyboard helpers ──────────────────────────────────────────────────
+
+function getScene(p: Project, sceneId: string): StoryboardScene {
+  const scene = p.storyboard?.scenes.find((s) => s.id === sceneId)
+  if (!scene) {
+    const known = p.storyboard?.scenes.map((s, n) => `${s.id} (${n + 1}. ${s.title || 'untitled'})`).slice(0, 8)
+    throw new CommandError(`Scene ${sceneId} isn’t in the storyboard${known?.length ? ` — scenes: ${known.join(', ')}` : ' — it has no scenes yet'}`)
+  }
+  return scene
+}
+
+function checkAssets(p: Project, ids: readonly string[]) {
+  const missing = ids.filter((a) => !p.assets[a])
+  if (missing.length) throw new CommandError(`No media ${missing.join(', ')} in this project — media ids are in get_project → media`)
+}
+
+/** A scene's produced stretch from what was given: clips (their stretch, unless from / to say otherwise) or frames. */
+function producedRange(p: Project, input: z.output<typeof producedInput>): SceneProduced {
+  const timelineId = input.timelineId ?? openSequenceId(p)
+  if (!getSequence(p, timelineId)) throw new CommandError(`Timeline ${timelineId} not found`)
+  const clipIds = input.clipIds?.length ? [...new Set(input.clipIds)] : undefined
+  let { from, to } = input
+  if (clipIds && (from === undefined || to === undefined)) {
+    const span = rangeOfClips(p, clipIds, timelineId)
+    if (!span) throw new CommandError('None of those clips are on that timeline — clip ids are in get_project')
+    from ??= span[0]
+    to ??= span[1]
+  }
+  if (from === undefined || to === undefined) throw new CommandError('Say where the scene was made: clipIds (the clips that make it), or from and to in frames')
+  if (to <= from) throw new CommandError('to must be after from')
+  return { timelineId, from, to, ...(clipIds ? { clipIds } : {}) }
+}
+
 /** A stored timeline, or the open one — as plain data (never a draft). */
 function plainSequence(p: Project, id: string): Sequence {
   if (id === openSequenceId(p)) return openSequence(isDraft(p) ? current(p) : p)
@@ -422,13 +541,20 @@ function plainSequence(p: Project, id: string): Sequence {
 }
 
 function applyPatch(p: Project, clip: Clip, patch: ClipPatch) {
-  const { transform, color, audio, text, animation, speed, crop, masks, angle, follow, stabilize, matte, ...flat } = patch
+  const { transform, color, audio, text, animation, speed, crop, masks, angle, follow, stabilize, matte, depth, style, ...flat } = patch
   Object.assign(clip, flat)
+  if (style === null) delete clip.style
+  else if (style) clip.style = style
   if (matte === null) delete clip.matte
   else if (matte) {
     const m = p.assets[matte.assetId]
     if (!m?.matteOf) throw new CommandError('That isn’t a subject matte — make one with cut_out_subject')
     clip.matte = matte
+  }
+  if (depth === null) delete clip.depth
+  else if (depth) {
+    if (!p.assets[depth.assetId]?.depthOf) throw new CommandError('That isn’t a depth map — make one with relight_clip')
+    clip.depth = depth
   }
   if (angle !== undefined) {
     const seq = clip.sequenceId ? p.sequences?.[clip.sequenceId] : undefined
@@ -446,8 +572,14 @@ function applyPatch(p: Project, clip: Clip, patch: ClipPatch) {
   }
   if (transform) Object.assign(clip.transform, transform)
   if (color) {
-    const { curves: cv, wheels: wh, hsl: hs, lut, ...basic } = color
+    const { curves: cv, wheels: wh, hsl: hs, lut, balance: bal, levels: lv, match: mt, ...basic } = color
     Object.assign(clip.color, basic)
+    if (bal === null) delete clip.color.balance
+    else if (bal) clip.color.balance = { r: 1, g: 1, b: 1, ...clip.color.balance, ...bal }
+    if (lv === null) delete clip.color.levels
+    else if (lv) clip.color.levels = { black: 0, white: 1, gamma: 1, ...clip.color.levels, ...lv }
+    if (mt === null) delete clip.color.match
+    else if (mt) clip.color.match = mt
     if (cv === null) delete clip.color.curves
     else if (cv) clip.color.curves = { ...IDENTITY_CURVES, ...clip.color.curves, ...cv }
     if (wh === null) delete clip.color.wheels
@@ -750,7 +882,7 @@ export const commands = {
 
   'timeline.removeRange': command({
     description:
-      'Take a stretch of time out of the whole timeline (like Extract): clips inside it are removed, clips across it lose that stretch, and everything later — on every unlocked track, plus markers — moves left to close up. Clips listed in keepWhole (music beds, ambience) are not cut: they keep playing through the join and end earlier.',
+      'Take a stretch of time out of the whole timeline (like Extract): clips inside it are removed, clips across it lose that stretch, and everything later — on every unlocked track, plus markers — moves left to close up. Clips listed in keepWhole (music beds, ambience) are not cut: they keep playing through the join and end earlier. It cuts exactly the frames given: to cut speech use remove_speech, which keeps words whole.',
     input: z.object({ start: frame, end: frame, keepWhole: z.array(id).default([]) }).refine((i) => i.end > i.start, 'end must be after start'),
     title: () => 'Remove range',
     run(p, i) {
@@ -802,7 +934,7 @@ export const commands = {
 
   'clip.setTransition': command({
     description:
-      'Set or clear the transition on the cut before this clip (from the previous clip into this one). align says where it sits on the cut: "after" (default) starts at the cut, over the start of this clip; "center" straddles the cut; "before" ends at the cut, over the end of the previous clip. Durations are in frames.',
+      'Set or clear the transition on the cut before this clip (from the previous clip into this one). align says where it sits on the cut: "after" (default) starts at the cut, over the start of this clip; "center" straddles the cut; "before" ends at the cut, over the end of the previous clip. Durations are in frames. The smart kinds — morph, through, whip, luma, match — read the two shots: set them with smart_transition, which measures the cut first (set here without match, they use neutral settings).',
     input: z.object({ id, transition: transition.nullable() }),
     title: (i) => (i.transition ? 'Add transition' : 'Remove transition'),
     run(p, i) {
@@ -988,8 +1120,7 @@ export const commands = {
 
   // Effects
   'effect.add': command({
-    description:
-      'Add an effect to clips (or update it if already present). Amount is 0–100. Keys make part of the picture transparent: chromaKey takes params { color: "#00ff00" (the screen colour), tolerance, softness, spill } and lumaKey takes { threshold, softness, invert: 0 keys out the dark, 1 the bright }, all 0–100.',
+    description: `Add an effect to clips (or update it if already present). Amount is 0–100 (for light effects, their strength). Keys make part of the picture transparent: chromaKey takes params { color: "#00ff00" (the screen colour), tolerance, softness, spill } and lumaKey takes { threshold, softness, invert: 0 keys out the dark, 1 the bright }, all 0–100. Light and lens effects run on the GPU in this order — relight, rays, glow, halation, flare, particles, leak, vignette — and take these params (leave any out for its default): ${effectParamsDoc()}. glow is bloom: threshold is how bright a part must be to glow. halation is film's red glow just outside bright edges. rays are god rays: shafts from the light through bright parts (a light off the frame, e.g. y -0.2, shines in from above). flare is a lens flare at the light. follow 1 moves the light with the brightest part of the shot. relight adds a point light shaped by the clip's depth map (relight_clip makes one; without it the light is shaped from the picture's brightness): lower ambient to let the new light take over; a low height rakes across surfaces. A vignette with color "#ffffff" lightens the edges. particles draws dust, snow, rain, embers, bokeh, sparkles or confetti in layers that move at their own speeds (amount is how many and how bright; light 1 shows dust only where the shot is lit); on an adjustment layer it falls over everything below.`,
     input: z.object({ ids: z.array(id).min(1), kind: effectKind, amount: z.number().min(0).max(100).optional(), params: effectParams.optional() }),
     title: (i) => `Add ${EFFECTS.find((e) => e.kind === i.kind)?.name ?? 'effect'}`,
     run(p, i) {
@@ -1378,13 +1509,15 @@ export const commands = {
   }),
 
   'font.remove': command({
-    description: 'Remove a font from the project; titles using it go back to the default typeface.',
+    description: 'Remove a font from the project; titles (and the project brand) using it go back to the default typeface.',
     input: z.object({ id }),
     title: () => 'Remove font',
     run(p, i) {
       if (!p.fonts?.[i.id]) throw new CommandError(`Font ${i.id} not found`)
       delete p.fonts[i.id]
       for (const c of Object.values(p.clips)) if (c.text?.font === `custom:${i.id}`) c.text.font = 'sans'
+      if (p.brand?.fonts.heading === `custom:${i.id}`) p.brand.fonts.heading = 'sans'
+      if (p.brand?.fonts.body === `custom:${i.id}`) p.brand.fonts.body = 'sans'
     },
   }),
 
@@ -1401,7 +1534,7 @@ export const commands = {
 
   'asset.update': command({
     description:
-      'Rename or favorite an asset, attach its transcript (timed phrases in seconds) or its cues (what happens in it and when: { at, kind, label }), or point it at a new file (relink: source, duration, size, audio).',
+      'Rename or favorite an asset, tag it, describe what it shows (description: subject, place, action, shot — suggest_broll finds media by it; "" clears it), attach its transcript (timed phrases in seconds, optionally with each word’s timing in `words`) or its cues (what happens in it and when: { at, kind, label }), or point it at a new file (relink: source, duration, size, audio).',
     input: z.object({
       id,
       patch: z
@@ -1409,7 +1542,8 @@ export const commands = {
           name: z.string().min(1),
           favorite: z.boolean(),
           tags: z.array(z.string()),
-          transcript: z.array(z.object({ start: z.number(), end: z.number(), text: z.string() })),
+          description: z.string().max(4000),
+          transcript: z.array(speechSegment),
           peaks: z.array(z.number()),
           hasAudio: z.boolean(),
           duration: z.number().positive(),
@@ -1423,14 +1557,18 @@ export const commands = {
         })
         .partial(),
     }),
-    title: (i) => (i.patch.source ? 'Relink media' : i.patch.proxy === null ? 'Remove proxy' : 'Edit media'),
+    title: (i) => (i.patch.source ? 'Relink media' : i.patch.proxy === null ? 'Remove proxy' : i.patch.description !== undefined && Object.keys(i.patch).length === 1 ? 'Describe media' : 'Edit media'),
     run(p, i) {
       const a = p.assets[i.id]
       if (!a) throw new CommandError('Asset not found')
-      const { proxy, ...rest } = i.patch
+      const { proxy, description, ...rest } = i.patch
       Object.assign(a, rest)
       if (proxy === null) delete a.proxy
       else if (proxy) a.proxy = proxy
+      if (description !== undefined) {
+        if (description.trim()) a.description = description.trim()
+        else delete a.description
+      }
     },
   }),
 
@@ -1440,14 +1578,20 @@ export const commands = {
     title: (i) => `Remove ${plural(i.ids.length, 'media item')}`,
     run(p, i) {
       const ids = new Set(i.ids)
-      // A media item's subject mattes go with it.
-      for (const a of Object.values(p.assets)) if (a.matteOf && ids.has(a.matteOf.assetId)) ids.add(a.id)
+      // A media item's subject mattes and depth maps go with it.
+      for (const a of Object.values(p.assets)) if ((a.matteOf && ids.has(a.matteOf.assetId)) || (a.depthOf && ids.has(a.depthOf.assetId))) ids.add(a.id)
       for (const c of Object.values(p.clips)) if (c.assetId && ids.has(c.assetId)) delete p.clips[c.id]
       // …and from the timelines that aren't open.
       for (const seq of Object.values(p.sequences ?? {})) for (const c of Object.values(seq.clips)) if (c.assetId && ids.has(c.assetId)) delete seq.clips[c.id]
       // Clips cut out with a removed matte show whole again.
       for (const c of Object.values(p.clips)) if (c.matte && ids.has(c.matte.assetId)) delete c.matte
       for (const seq of Object.values(p.sequences ?? {})) for (const c of Object.values(seq.clips)) if (c.matte && ids.has(c.matte.assetId)) delete c.matte
+      // Relit clips without their depth map shape the light from the picture's brightness instead.
+      for (const c of Object.values(p.clips)) if (c.depth && ids.has(c.depth.assetId)) delete c.depth
+      for (const seq of Object.values(p.sequences ?? {})) for (const c of Object.values(seq.clips)) if (c.depth && ids.has(c.depth.assetId)) delete c.depth
+      // Storyboard scenes and the brand let go of it too.
+      for (const s of p.storyboard?.scenes ?? []) if (s.assetIds.some((a) => ids.has(a))) s.assetIds = s.assetIds.filter((a) => !ids.has(a))
+      if (p.brand?.logoAssetIds.some((a) => ids.has(a))) p.brand.logoAssetIds = p.brand.logoAssetIds.filter((a) => !ids.has(a))
       for (const assetId of ids) delete p.assets[assetId]
     },
   }),
@@ -1615,6 +1759,108 @@ export const commands = {
     },
   }),
 
+  // Storyboard
+  'storyboard.update': command({
+    description:
+      'Set up the storyboard — the plan the video is produced from — or change its title, brief (what the video is for, who it’s for, the tone) or style (the style every scene keeps: an id from list_styles, or "brand"; null clears it). Makes the storyboard if the project has none. Add scenes with storyboard_addScenes; get_storyboard reads it all.',
+    input: z.object({ title: z.string().max(200).optional(), brief: z.string().max(20000).optional(), style: z.string().max(80).nullable().optional() }),
+    title: (_i, p) => (p.storyboard ? 'Edit storyboard' : 'New storyboard'),
+    run(p, i) {
+      const sb = (p.storyboard ??= { scenes: [] })
+      if (i.title !== undefined) sb.title = i.title
+      if (i.brief !== undefined) sb.brief = i.brief
+      if (i.style === null || i.style === '') delete sb.style
+      else if (i.style) sb.style = i.style
+    },
+  }),
+
+  'storyboard.addScenes': command({
+    description:
+      'Add scenes to the storyboard, in order, at `index` (default: after the last). Each scene: title; script (the narration, dialogue or words on screen); treatment — footage, broll, kinetic-type, infographic, generated-image, generated-video, 3d, motion-graphic or other; seconds (target length, default 5); transition into it ({ kind, seconds } — kinds as clip_setTransition takes them — or null for a straight cut); needs (what it still needs: shots, media to generate); assetIds (project media it uses); status (planned, in-progress, done); notes. Returns the new scene ids.',
+    input: z.object({ scenes: z.array(sceneInput.extend({ id: id.optional() })).min(1).max(100), index: z.number().int().min(0).optional() }),
+    title: (i) => `Add ${plural(i.scenes.length, 'scene')}`,
+    run(p, i) {
+      const sb = (p.storyboard ??= { scenes: [] })
+      const taken = new Set(sb.scenes.map((s) => s.id))
+      const scenes = i.scenes.map(({ id: sceneId, produced, assetIds, ...rest }) => {
+        const sid = sceneId ?? uid('scene')
+        if (taken.has(sid)) throw new CommandError(`There’s already a scene with id ${sid}`)
+        taken.add(sid)
+        if (assetIds) checkAssets(p, assetIds)
+        const scene = createScene(sid, { ...rest, assetIds: [...new Set(assetIds ?? [])] })
+        if (produced) scene.produced = producedRange(p, produced)
+        return scene
+      })
+      sb.scenes.splice(Math.min(i.index ?? sb.scenes.length, sb.scenes.length), 0, ...scenes)
+      return scenes.map((s) => s.id)
+    },
+  }),
+
+  'storyboard.updateScene': command({
+    description:
+      'Change a storyboard scene: title, script, treatment, seconds, transition, needs, assetIds (replaces the list), status, notes — and produced, where it was made: { clipIds } (the clips that make it; the stretch follows them through later edits) or { from, to } in frames, on timelineId (default: the open timeline); null clears it. Scene ids are in get_storyboard.',
+    input: z.object({ id, patch: sceneInput }),
+    title: (i) => {
+      const keys = Object.keys(i.patch)
+      if (keys.length === 1 && i.patch.status) return `Scene ${i.patch.status === 'done' ? 'done' : i.patch.status === 'in-progress' ? 'in progress' : 'planned'}`
+      if (keys.length === 1 && i.patch.produced !== undefined) return i.patch.produced ? 'Link scene to the timeline' : 'Unlink scene'
+      return 'Edit scene'
+    },
+    run(p, i) {
+      const scene = getScene(p, i.id)
+      const { produced, assetIds, ...rest } = i.patch
+      Object.assign(scene, definedFields(rest))
+      if (assetIds) {
+        checkAssets(p, assetIds)
+        scene.assetIds = [...new Set(assetIds)]
+      }
+      if (produced === null) delete scene.produced
+      else if (produced) scene.produced = producedRange(p, produced)
+    },
+  }),
+
+  'storyboard.moveScene': command({
+    description: 'Move a storyboard scene to another place in the order (index 0 is the first scene).',
+    input: z.object({ id, index: z.number().int().min(0) }),
+    title: () => 'Reorder scenes',
+    run(p, i) {
+      getScene(p, i.id)
+      const scenes = p.storyboard!.scenes
+      const from = scenes.findIndex((s) => s.id === i.id)
+      const to = Math.min(i.index, scenes.length - 1)
+      if (from === to) return
+      const [scene] = scenes.splice(from, 1)
+      scenes.splice(to, 0, scene)
+    },
+  }),
+
+  'storyboard.removeScenes': command({
+    description: 'Remove scenes from the storyboard. Only the plan changes: clips a scene was produced into stay on the timeline.',
+    input: z.object({ ids: z.array(id).min(1) }),
+    title: (i) => `Remove ${plural(i.ids.length, 'scene')}`,
+    run(p, i) {
+      i.ids.forEach((sceneId) => getScene(p, sceneId))
+      const gone = new Set(i.ids)
+      p.storyboard!.scenes = p.storyboard!.scenes.filter((s) => !gone.has(s.id))
+    },
+  }),
+
+  // Brand
+  'brand.set': command({
+    description:
+      'Give the project a brand — identity (named colours, heading and body fonts, logos) and house style (titles, captions, look, motion rules, base style) — or null to take it away. Fonts are built-in ids or custom:<id> fonts already in the project; logos are media ids. apply_brand_kit does this from a brand kit (embedding its fonts and logos too); get_brand_kit reads it. Clips keep what they look like until a style or the brand is applied to them.',
+    input: z.object({ brand: projectBrand.nullable() }),
+    title: (i) => (i.brand ? `Brand: ${i.brand.name}` : 'Remove brand'),
+    run(p, i) {
+      if (!i.brand) return void delete p.brand
+      for (const f of [i.brand.fonts.heading, i.brand.fonts.body]) {
+        if (f.startsWith('custom:') && !p.fonts?.[f.slice('custom:'.length)]) throw new CommandError(`Font ${f} isn’t in this project — embed it with font_add first`)
+      }
+      checkAssets(p, i.brand.logoAssetIds)
+      p.brand = { ...i.brand, logoAssetIds: [...new Set(i.brand.logoAssetIds)] }
+    },
+  }),
+
   // Project
   'project.update': command({
     description:
@@ -1645,6 +1891,12 @@ export const commands = {
         }
         for (const m of p.markers) m.frame = sc(m.frame)
         if (p.range) p.range = { in: sc(p.range.in), out: Math.max(sc(p.range.in) + 1, sc(p.range.out)) }
+        for (const s of p.storyboard?.scenes ?? []) {
+          if (s.produced?.timelineId !== openSequenceId(p)) continue
+          const { from, to } = s.produced
+          s.produced.from = sc(from)
+          s.produced.to = Math.max(sc(from) + 1, sc(to))
+        }
         p.settings.fps = fps
       }
     },

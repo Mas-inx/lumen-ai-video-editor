@@ -1,25 +1,29 @@
-import { Aperture, Blend, Clapperboard, Music, Sparkles, Type, WandSparkles } from 'lucide-react'
+import { Aperture, Blend, Clapperboard, GalleryVerticalEnd, Music, Palette, Sparkles, Type, WandSparkles } from 'lucide-react'
 import { motion } from 'motion/react'
 import type { ReactNode } from 'react'
 import { AiSparkle } from '@/components/brand'
 import { Tip } from '@/components/ui/tooltip'
 import { useUI, type LeftTab } from '@/editor/ui-store'
+import { StoryboardPanel } from '@/features/storyboard/StoryboardPanel'
 import { cn } from '@/lib/cn'
 import { AudioPanel } from './AudioPanel'
 import { EffectsPanel } from './EffectsPanel'
 import { GeneratePanel } from './GeneratePanel'
 import { LooksPanel } from './LooksPanel'
 import { MediaPanel } from './MediaPanel'
+import { StylesPanel } from './StylesPanel'
 import { TextPanel } from './TextPanel'
 import { TransitionsPanel } from './TransitionsPanel'
 
 const TABS: { id: LeftTab; label: string; icon: ReactNode; hint: string }[] = [
+  { id: 'storyboard', label: 'Story', icon: <GalleryVerticalEnd />, hint: 'Plan scenes before you make them' },
   { id: 'media', label: 'Media', icon: <Clapperboard />, hint: 'Your footage, photos & audio' },
   { id: 'audio', label: 'Audio', icon: <Music />, hint: 'Music & sound effects' },
   { id: 'text', label: 'Text', icon: <Type />, hint: 'Titles & captions' },
   { id: 'effects', label: 'Effects', icon: <Sparkles />, hint: 'Blur, glow, grain & more' },
   { id: 'transitions', label: 'Transitions', icon: <Blend />, hint: 'Between shots' },
   { id: 'looks', label: 'Looks', icon: <Aperture />, hint: 'One-click color grades' },
+  { id: 'styles', label: 'Styles', icon: <Palette />, hint: 'Type, motion and finish in one step — and your brand kit' },
 ]
 
 export function AssetsPanel() {
@@ -28,7 +32,7 @@ export function AssetsPanel() {
 
   return (
     <div className="panel flex h-full overflow-hidden">
-      <nav className="flex w-[62px] shrink-0 flex-col items-center gap-0.5 border-r border-line py-2">
+      <nav className="scrollbar-none flex w-[62px] shrink-0 flex-col items-center gap-0.5 overflow-y-auto border-r border-line py-2">
         {TABS.map((t) => (
           <RailButton key={t.id} active={tab === t.id} onClick={() => setTab(t.id)} label={t.label} hint={t.hint}>
             {t.icon}
@@ -40,12 +44,14 @@ export function AssetsPanel() {
         </RailButton>
       </nav>
       <div className="flex min-w-0 flex-1 flex-col">
+        {tab === 'storyboard' && <StoryboardPanel />}
         {tab === 'media' && <MediaPanel />}
         {tab === 'audio' && <AudioPanel />}
         {tab === 'text' && <TextPanel />}
         {tab === 'effects' && <EffectsPanel />}
         {tab === 'transitions' && <TransitionsPanel />}
         {tab === 'looks' && <LooksPanel />}
+        {tab === 'styles' && <StylesPanel />}
         {tab === 'generate' && <GeneratePanel />}
       </div>
     </div>

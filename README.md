@@ -19,7 +19,7 @@ Lumen is a desktop video editor where the AI isn't a chatbot bolted onto a timel
 [![CI](https://img.shields.io/github/actions/workflow/status/Mas-inx/lumen-ai-video-editor/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/Mas-inx/lumen-ai-video-editor/actions/workflows/ci.yml)
 ![License: MIT](https://img.shields.io/badge/license-MIT-d6ee00?style=flat-square)
 ![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-2b2c26?style=flat-square)
-![133 AI tools](https://img.shields.io/badge/AI%20tools-133-d6ee00?style=flat-square)
+![157 AI tools](https://img.shields.io/badge/AI%20tools-157-d6ee00?style=flat-square)
 ![MCP server and client](https://img.shields.io/badge/MCP-server%20%2B%20client-2b2c26?style=flat-square)
 ![Electron 44](https://img.shields.io/badge/Electron-44-2b2c26?style=flat-square&logo=electron)
 ![React 19](https://img.shields.io/badge/React-19-2b2c26?style=flat-square&logo=react)
@@ -48,7 +48,7 @@ It's an open-source alternative to editors like CapCut, Filmora and Descript —
 
 ## Contents
 
-- [Features](#features) — [editing](#a-real-editor) · [Copilot](#the-copilot-sees-hears-and-edits) · [smart edits](#smart-edits) · [generation](#generate-3d-motion-graphics-images-video-and-voice) · [export](#export) · [integrations](#connect-anything)
+- [Features](#features) — [editing](#a-real-editor) · [Copilot](#the-copilot-sees-hears-and-edits) · [smart edits](#smart-edits) · [plan, style and brand](#plan-style-and-brand) · [generation](#generate-3d-motion-graphics-images-video-and-voice) · [export](#export) · [integrations](#connect-anything)
 - [Download](#download) · [Build from source](#build-from-source) · [Documentation](#documentation) · [Roadmap](#roadmap) · [Contributing](#contributing) · [Credits](#credits)
 
 ## Features
@@ -68,15 +68,16 @@ It's an open-source alternative to editors like CapCut, Filmora and Descript —
   - render at Full, 1/2, 1/4 or 1/8 resolution, sharpened back up on playback.
 - **Smooth on modest computers.** Nothing redraws while idle, filmstrips and waveforms are painted once and reused, and the preview drops resolution when it has to.
 - **Pro editing tools:** roll, slip and slide; ripple trim and insert or overwrite on any track; in and out points to play, lift, extract or export a stretch; copy, cut, paste and *paste attributes*; crop with rounded corners; freeze frames and **speed ramps**; detached sound for J- and L-cuts; groups; and solo and reorder for tracks.
-- **2D and 3D transitions** (cube, flip, door, page curl, shatter…) placed before, on or after a cut, effects, **colour looks and grading**, and extruded **3D titles** rendered live.
-- **Real colour grading** on the GPU: tone curves, lift / gamma / gain wheels, HSL by colour range, imported **.cube LUTs**, and **scopes** (waveform, RGB parade, vectorscope, histogram) beside the program monitor.
+- **2D and 3D transitions** (cube, flip, door, page curl, shatter…) placed before, on or after a cut, and **smart transitions** that read the two shots — a morph, a zoom from one subject into the next, a whip pan that carries the camera's motion on, a luma fade and a colour match — chosen for every cut in one click and timed to the beat; effects and **particles**, **colour looks and grading**, and extruded **3D titles** rendered live.
+- **Real colour grading** on the GPU, in a colourist's order: a **correction** first — a white balance you pick off something neutral or leave to *Auto*, levels, and **matching one shot to another** — then tone curves, lift / gamma / gain wheels, HSL by colour range, imported **.cube LUTs**, and **scopes** (waveform, RGB parade, vectorscope, histogram) beside the program monitor.
+- **Light and lens effects** on the GPU: highlight bloom, film **halation**, **god rays**, **lens flares** (classic, anamorphic, starburst) that can follow the light, **light leaks** in five styles, and shaped vignettes that darken or lighten. **Relight** a shot: add a light or move where it comes from, wrapped around faces and objects by a depth map made on your computer.
 - **Compositing:** chroma and luma keys with an eyedropper and spill suppression; feathered rectangle and ellipse **masks** you drag on the canvas (on adjustment layers too, to grade just part of the frame); outlined titles in **any font** — imported, or picked from those installed on your computer, and embedded in the project.
 - **Text behind subject:** on-device AI cuts the person (or, with a GPU, any subject) out of a shot. Slip a title between them and the background, remove the background, or remove the person. One click, one undo step, frame-exact on export.
 - **Sound that drives the picture:** a Web Audio mix with per-clip volume, fades and keyframes, *Studio voice* clean-up, on-device noise reduction and 15 built-in sound effects.
 - **A real mixer:** a channel per track and a master bus, each with a fader, pan, a draggable EQ curve, a compressor and a limiter, with live meters. Transitions crossfade the sound too, and exports can be **loudness-normalized** to −14 LUFS for YouTube and Spotify, −16 for Apple, or broadcast's −23 and −24.
 - Import **MP4, MOV, WebM, MKV, MP3, WAV, FLAC, PNG, JPEG, WebP, GIF** and more — by dialog, folder or drag and drop. Files stay where they are; missing ones can be relinked. Select many at once (`Ctrl`/`Shift`-click or drag a box) to add, transcribe or remove them together.
 - `.lumen` **project files** that survive moving folders between drives, crash recovery, and undo for everything. `Ctrl+K` reaches every command.
-- **Built for long, heavy projects:** **proxies** for 4K footage (made automatically in the background; exports always use the originals), hour-long recordings that **stream** instead of filling memory, **version history** (every save, plus a snapshot every ten minutes while you edit, restorable any time) and **Collect project** to gather a project and all its media into one folder.
+- **Built for long, heavy projects:** **proxies** for 4K footage (made automatically in the background; exports always use the originals), audio over a minute that **streams** instead of filling memory, pictures, sound and players kept within fixed memory budgets, a crashed or hung editor that **reloads onto your project** with its unsaved changes, **version history** (every save, plus a snapshot every ten minutes while you edit, restorable any time) and **Collect project** to gather a project and all its media into one folder.
 - **Multiple timelines and nesting:** as many timelines per project as you like — another cut, or a vertical copy reframed in one click — and **nest** any clips into a timeline of their own to grade, speed up or cut them as one piece (double-click to step inside; picture and sound both play through).
 - **Multicam:** pick the camera recordings and Lumen **lines them up by their sound** (to about a millisecond), then press `1`–`9` while it plays to cut between angles, with every camera live in a strip under the preview.
 - **Reads the footage:** **scene detection** splits or marks a clip at every shot change; **stabilization** smooths away camera shake with just enough zoom; **motion tracking** pins a title, sticker or mask to something moving — including a blur that follows a face.
@@ -99,6 +100,7 @@ Ask in plain words — or talk to it. The Copilot plans, uses Lumen's tools, and
 | “Find where I talk about the mountains” | searches inside transcripts and jumps there |
 | “Put the title behind me” | cuts you out of the shot on your computer and slips the title between you and the background |
 | “Cut the B-roll to the music” | finds the beat and lays the clips out on it |
+| “Make the interview shots match, then warm it up” | balances each shot's white, matches the others to the best one, and grades the look on an adjustment layer |
 
 You see every step, including the frames it looked at, and **Undo all** reverts a whole answer.
 
@@ -140,20 +142,31 @@ One-click suggestions on the timeline, and tools for every AI:
 
 - **Transcribe** on the device with Whisper (GPU via WebGPU, or CPU), or with OpenAI or ElevenLabs.
 - **Remove pauses** — the whole timeline closes up around each cut, so captions, B-roll and markers stay in sync while music plays on; with several speakers it only cuts where everyone is quiet.
+- **Repeated takes** — false starts, word-for-word repeats, near repeats and stumbles found in the transcript, with the take to keep suggested and why. Hear each take, pick one, and cut the rest in one step; repeats that look deliberate are kept unless you choose.
+- **Speech cuts never cut a word** — pauses, takes and stretches of speech are cut between words, with a breath either side, and never through another speaker.
+- **Check edit** — one click finds what's wrong before you export, worst first, with one-click fixes: gaps and offline media, captions and titles against the frame and the title-safe area, black or frozen picture, clipping, loudness, abrupt cuts and silence under speech, letterboxing and blown-up media.
 - **Captions** from the transcript, on their own track, in four styles: *Clean*, *Bold*, *Word by word* (key words in an accent colour) and *Boxed*. You can also import **SRT / WebVTT** files (drop them on the timeline), and export the captions as SRT or WebVTT, on their own or next to the video.
 - **Find the beat** of a song: the tempo, beats and bars show on its waveform, cuts snap to them, and selected clips can be laid out on the beat.
 - **Duck music** under speech with volume keyframes.
-- **Reframe** between landscape, vertical, square and portrait.
+- **Reframe** between landscape, vertical, square and portrait, keeping each shot's **subject in view**.
+- **B-roll from your own media:** each line of speech matched by meaning to the media already in the project — names, tags, descriptions, prompts and what's said in it.
 - **Hear the mix** — loudness in LUFS against the −14 streaming target, peaks, clipping and silences.
+
+### Plan, style and brand
+
+- **Storyboard.** Plan a video before making it: scenes in order, each with a script, a treatment (footage, B-roll, kinetic type, infographic, generated image or video, 3D, motion graphic), a length, its transition and what it still needs. The Copilot plans it with you, produces it scene by scene and revises one scene without rebuilding the rest.
+- **Styles that are more than colour.** Editorial, Product commercial, Kinetic typography, Infographic, Cinematic and Documentary each set title typography, placement and motion, captions, transitions, a look, finishing effects, camera moves and pacing — applied to a timeline or a selection in one undo step.
+- **Brand kits** for every project: colours, typefaces, logos, title and caption styles, a look and motion rules, applied in one step, with the logo in a corner if you like.
 
 ### Generate 3D, motion graphics, images, video and voice
 
 <img src="docs/screenshots/generate.jpg" alt="Lumen's Generate panel with motion graphic templates — lower third, title card, kinetic type and stat counter" />
 
 - **Blender** — real extruded 3D titles, looping abstract backgrounds and AI-written scenes, rendered in the background and dropped into your media.
-- **HyperFrames** motion graphics, rendered inside Lumen and pixel-exact at any display scaling. Choose a lower third, title card, kinetic type, stat counter, pull quote or chapter marker, or any HTML + GSAP composition. They're designed to look made, not generated: considered type, easing that differs per element, and holds long enough to read.
+- **HyperFrames** motion graphics, rendered inside Lumen and pixel-exact at any display scaling. Choose a lower third, title card, kinetic type, stat counter, pull quote, chapter marker, a **particle title** that gathers out of thousands of particles, or a bar, line or donut **chart** built from your real numbers — or any HTML + GSAP composition. They're designed to look made, not generated: considered type, easing that differs per element, and holds long enough to read.
 - **Images and video** from your OpenAI key (GPT Image) or Gemini key (Gemini image models, Veo video), with model lists fetched live — new models show up without an update.
 - **Voiceovers, sound effects and music** with ElevenLabs.
+- **ComfyUI workflows** on your own graphics card: import them into Lumen's library, and Lumen finds each one's prompts, seed and settings, sends in a clip, a frame or any media, and brings the results into the project.
 - Anything from an **MCP server** — Higgsfield, Runway, Replicate, fal.ai or your own.
 - **GTA V cinematics** from a FiveM game with **GS Cinematic Studio**: the Copilot stages the scene, directs the cameras, renders it in the game and drops the clip on your timeline.
 - **Frame ingest:** another app on your computer sends finished frames straight to Lumen, which encodes each shot once into a full-colour (4:4:4) master, visually lossless or bit-exact. [How it works →](docs/INGEST.md)
@@ -162,7 +175,7 @@ One-click suggestions on the timeline, and tools for every AI:
 
 <img src="docs/screenshots/transitions.jpg" width="49.5%" alt="Lumen's transitions library with previews of 3D transitions — cube, flip, doorway, swing in, page curl, warp zoom — and a cube transition mid-turn in the preview" /> <img src="docs/screenshots/looks.jpg" width="49.5%" alt="Lumen's colour looks — natural, cinematic, golden hour, nordic, vivid, faded film — previewed on the edit, with kinetic type in the preview" />
 
-2D and 3D transitions, 15 effects (glow, grain, shake, RGB split, 3D tilt, curved screen…), one-click colour looks and full grading — each previewed on your own footage before you apply it.
+2D, 3D and smart transitions, 20 effects (bloom, halation, god rays, lens flares, light leaks, relighting, particles, grain, shake, RGB split, 3D tilt, curved screen…), one-click colour looks and full grading — each previewed on your own footage before you apply it.
 
 ### Export
 

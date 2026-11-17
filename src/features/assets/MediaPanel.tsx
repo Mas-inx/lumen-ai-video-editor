@@ -27,7 +27,7 @@ type Filter = 'all' | AssetKind
 
 export function MediaPanel() {
   // Subject mattes belong to their footage, not the library.
-  const assets = useEditor(useShallow((s) => Object.values(s.project.assets).filter((a) => !a.matteOf).sort((a, b) => b.addedAt - a.addedAt)))
+  const assets = useEditor(useShallow((s) => Object.values(s.project.assets).filter((a) => !a.matteOf && !a.depthOf).sort((a, b) => b.addedAt - a.addedAt)))
   const used = useEditor(useShallow((s) => [...new Set(Object.values(s.project.clips).map((c) => c.assetId).filter(Boolean))] as string[]))
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')

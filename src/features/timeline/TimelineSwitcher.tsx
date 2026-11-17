@@ -8,10 +8,12 @@ import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuSub, MenuTri
 import { CANVAS_PRESETS } from '@/editor/new-project'
 import { allSequences, clipsLength, getSequence, openSequenceId, openSequenceName, usesOf } from '@/editor/sequences'
 import { reframe } from '@/editor/smart'
+import { focusKey } from '@/editor/subject-frame'
 import { dispatch, getProject, useEditor } from '@/editor/store'
 import { openTimeline, timelineBack, useTimelineNav } from '@/editor/timeline-nav'
 import { useUI } from '@/editor/ui-store'
 import { cn } from '@/lib/cn'
+import { subjectFocus } from '@/project/reframe-actions'
 import { formatDuration } from '@/lib/time'
 
 const PRESETS = CANVAS_PRESETS.filter((p) => ['landscape', 'vertical', 'square', 'portrait'].includes(p.id))
@@ -22,12 +24,15 @@ function newTimeline(settings?: { width: number; height: number }, name?: string
   if (!res.ok) toast(res.error)
 }
 
-/** A copy of the open timeline in another shape, reframed to fit (one undo step). */
-function reshapedCopy(width: number, height: number, label: string) {
+/** A copy of the open timeline in another shape, reframed to fit with each shot's subject kept in view (one undo step). */
+async function reshapedCopy(width: number, height: number, label: string) {
+  const toastId = toast.loading('Finding the subject of each shot…')
+  const focus = await subjectFocus(getProject(), (done, total) => toast.loading(`Finding the subject of each shot… ${done} of ${total}`, { id: toastId })).catch(() => new Map())
+  toast.dismiss(toastId)
   const p = getProject()
   useEditor.getState().transaction(`${label} copy`, 'user', () => {
     const res = dispatch('sequence.duplicate', { id: openSequenceId(p), name: `${openSequenceName(p)} · ${label}`, open: true })
-    if (res.ok) reframe(width, height, 'user')
+    if (res.ok) reframe(width, height, 'user', (c) => focus.get(focusKey(c)))
   })
 }
 

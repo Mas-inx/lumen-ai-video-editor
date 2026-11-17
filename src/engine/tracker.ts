@@ -152,7 +152,7 @@ export function search(g: Gray, integral: Integral, t: Template, x0: number, y0:
  * Coarse-to-fine match: the half-size images find it within ±r, the full-size
  * ones refine it within ±2 pixels. Positions are top-left, full-size pixels.
  */
-function pyramidSearch(full: Gray, fullI: Integral, half: Gray, halfI: Integral, t: Template, th: Template | null, x0: number, y0: number, r: number) {
+export function pyramidSearch(full: Gray, fullI: Integral, half: Gray, halfI: Integral, t: Template, th: Template | null, x0: number, y0: number, r: number) {
   let x = x0
   let y = y0
   if (th) {

@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent
 import { APP_IPC, type MediaFolder } from '../shared/app'
 import { CAPTURE_IPC, type CaptureSessionState } from '../shared/capture'
 import path from 'node:path'
+import { addLogo, brandKits, saveBrandKits } from './brand'
 import { arm, beginRecording, focusWindow, captureFolder, captureFree, discardRecording, finishRecording, forgetRecording, helperState, listSources, pickCaptureFolder, recoverable, recoverRecording, resetCaptureFolder, setSession, startAppAudio, startCursor, stopStream, windowInfo } from './capture'
 import { collectProject } from './collect'
 import { abortExport, beginExport, beginFile, finishExport, forgetPicked, openPicked, pickExport, restartExport, writeExport, writeFrame, writeSidecar, type ExportRequest } from './export'
@@ -12,7 +13,7 @@ import { gpuInfo, setGraphicsSettings } from './gpu'
 import { attachEditor, completeClip, failClip, ingestState, openSession, pickIngestFolder, regenerateIngestToken, reportProgress, setIngestOptions, startIngest, stopIngest } from './ingest'
 import type { IngestResult } from '../shared/ingest'
 import { listRenders, removeRenders, renderUsage, writeRender } from './render-cache'
-import { closeNow, confirmDiscard, forgetRecent, openProject, openVersion, readRecovery, recentProjects, saveProject, saveProjectAs, setProjectState, snapshotVersion, writeRecovery } from './project'
+import { closeNow, confirmDiscard, forgetRecent, openProject, openVersion, readRecovery, recentProjects, saveProject, saveProjectAs, setProjectState, snapshotVersion, takeReopen, writeRecovery } from './project'
 import { checkForUpdates, installUpdate, updateState } from './updater'
 
 const FOLDERS: MediaFolder[] = ['snapshots', 'recordings', 'sfx', 'generated']
@@ -70,6 +71,7 @@ export function registerAppIpc(isTrustedUrl: (url: string) => boolean, getStartu
   handle(APP_IPC.projectRecovery, () => readRecovery())
   handle(APP_IPC.projectDiscardRecovery, () => writeRecovery(null))
   handle(APP_IPC.projectStartup, () => getStartupFile())
+  handle(APP_IPC.projectReopen, () => takeReopen())
   handle(APP_IPC.projectVersions, (_win, projectId: unknown) => listVersions(str(projectId)))
   handle(APP_IPC.projectReadVersion, (_win, projectId: unknown, versionId: unknown, projectPath: unknown) => openVersion(str(projectId), str(versionId), str(projectPath) || null))
   handle(APP_IPC.projectSnapshot, (_win, snap: unknown) => {
@@ -154,6 +156,11 @@ export function registerAppIpc(isTrustedUrl: (url: string) => boolean, getStartu
     setGraphicsSettings((patch ?? {}) as Record<string, never>)
     return gpuInfo()
   })
+  // Brand kits: kept for every project, checked on the way in.
+  handle(APP_IPC.brandGet, () => brandKits())
+  handle(APP_IPC.brandSave, (_win, store: unknown) => saveBrandKits(store))
+  handle(APP_IPC.brandAddLogo, (win) => addLogo(win))
+
   // The editor saves first, so this closes without the unsaved-changes prompt.
   on(APP_IPC.relaunch, (win) => {
     app.relaunch()

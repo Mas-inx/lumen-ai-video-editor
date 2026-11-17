@@ -7,6 +7,7 @@
  * multi-gigabyte files never have to be loaded into memory.
  */
 import { ALL_FORMATS, AudioBufferSink, CanvasSink, EncodedPacketSink, Input, UrlSource, type EncodedPacket, type InputVideoTrack, type WrappedCanvas } from 'mediabunny'
+import { Lru } from '@/lib/lru'
 
 export type MediaKind = 'video' | 'audio' | 'image'
 
@@ -33,12 +34,17 @@ export class MediaError extends Error {
   }
 }
 
-/** Opens a media file for reading (byte ranges over lumen-media://). */
-export const openInput = (url: string) =>
+const MB = 1024 * 1024
+
+/** Opens a media file for reading (byte ranges over lumen-media://), keeping up to `cache` bytes of what it has read. */
+export const openInput = (url: string, cache = 48 * MB) =>
   new Input({
-    source: new UrlSource(url, { maxCacheSize: 48 * 1024 * 1024, parallelism: 2, getRetryDelay: (n) => (n < 2 ? 0.2 : null) }),
+    source: new UrlSource(url, { maxCacheSize: cache, parallelism: 2, getRetryDelay: (n) => (n < 2 ? 0.2 : null) }),
     formats: ALL_FORMATS,
   })
+
+/** Audio is read a stretch at a time, in order: a small read cache is plenty (and an open stream holds no more). */
+const AUDIO_CACHE = 8 * MB
 
 export function kindFromMime(mime: string): MediaKind | null {
   if (mime.startsWith('video/')) return 'video'
@@ -137,7 +143,13 @@ export interface Filmstrip {
   done: boolean
 }
 
-const filmstrips = new Map<string, Filmstrip>()
+/**
+ * The filmstrips used most recently, up to a budget (25 strips of three minutes or
+ * more; shorter videos have fewer thumbnails). One that falls out is made again when
+ * it's next shown; its thumbnails aren't closed, as a clip on screen may still be
+ * drawing them — they go with the last reference.
+ */
+const filmstrips = new Lru<string, Filmstrip>({ budget: 256 * MB, size: (s) => s.frames.length * s.width * s.height * 4 })
 const filmstripListeners = new Set<(key: string) => void>()
 const filmstripQueue: { key: string; url: string; duration: number }[] = []
 let filmstripBusy = false
@@ -199,12 +211,18 @@ async function buildFilmstrip(key: string, url: string, duration: number) {
         filmstripListeners.forEach((fn) => fn(key))
       }
     }
+    // A strip let go while it's being made isn't finished: it's made again if it's shown again.
+    const kept = () => filmstrips.peek(key) === strip
     try {
-      for await (const wrapped of sink.canvasesAtTimestamps(times)) await take(wrapped)
+      for await (const wrapped of sink.canvasesAtTimestamps(times)) {
+        if (!kept()) return
+        await take(wrapped)
+      }
     } catch {
       // Part of the file can't be decoded: the rest one frame at a time, leaving that part out.
-      while (i < times.length) await take(await sink.getCanvas(times[i]).catch(() => null))
+      while (i < times.length && kept()) await take(await sink.getCanvas(times[i]).catch(() => null))
     }
+    if (!kept()) return
     strip.done = true
     filmstripListeners.forEach((fn) => fn(key))
   } finally {
@@ -537,45 +555,38 @@ async function decodeWithBrowser(url: string): Promise<AudioBuffer | null> {
 /**
  * Decodes the whole audio track of a file (audio or video) into one AudioBuffer
  * at its native sample rate. Returns null when the file has no decodable audio.
+ * Each decoded piece goes straight into the buffer (sized from the track's length
+ * up front) and is let go, so the sound is never held twice over.
  */
 export async function decodeAudio(url: string): Promise<AudioBuffer | null> {
-  const input = openInput(url)
+  const input = openInput(url, AUDIO_CACHE)
   try {
     const track = await input.getPrimaryAudioTrack()
     if (!track) return null
     if (!(await track.canDecode())) return await decodeWithBrowser(url)
     const sampleRate = track.sampleRate
     const channels = Math.max(1, Math.min(2, track.numberOfChannels))
-    const parts: { buffer: AudioBuffer; timestamp: number }[] = []
+    const known = await track.computeDuration().catch(() => 0)
+    let out = new AudioBuffer({ length: Math.max(1, Math.ceil((known || 10) * sampleRate)), numberOfChannels: channels, sampleRate })
     let end = 0
-    let start = Infinity
     for await (const chunk of new AudioBufferSink(track).buffers()) {
-      parts.push({ buffer: chunk.buffer, timestamp: chunk.timestamp })
-      start = Math.min(start, chunk.timestamp)
-      end = Math.max(end, chunk.timestamp + chunk.buffer.duration)
-    }
-    if (!parts.length) return null
-    // Timestamps are relative to the file; anything before 0 is encoder priming.
-    const origin = Math.min(0, start)
-    const length = Math.max(1, Math.ceil((end - origin) * sampleRate))
-    const out = new AudioBuffer({ length, numberOfChannels: channels, sampleRate })
-    for (const { buffer, timestamp } of parts) {
-      const offset = Math.round((timestamp - origin) * sampleRate)
+      // Timestamps are relative to the file; anything before 0 is encoder priming, left out.
+      const offset = Math.round(chunk.timestamp * sampleRate)
+      const skip = Math.max(0, -offset)
+      const at = Math.max(0, offset)
+      const n = chunk.buffer.length - skip
+      if (n <= 0) continue
+      // More sound than the track said (or it didn't say): grow, with room to spare.
+      if (at + n > out.length) out = resized(out, Math.max(at + n, Math.ceil(out.length * 1.25)))
       for (let c = 0; c < channels; c++) {
-        const src = buffer.getChannelData(Math.min(c, buffer.numberOfChannels - 1))
-        const room = length - offset
-        if (room <= 0) continue
-        out.copyToChannel(room >= src.length ? src : src.subarray(0, room), c, Math.max(0, offset))
+        const src = chunk.buffer.getChannelData(Math.min(c, chunk.buffer.numberOfChannels - 1))
+        out.copyToChannel(skip ? src.subarray(skip) : src, c, at)
       }
+      end = Math.max(end, at + n)
     }
-    if (origin < 0) {
-      // Drop the priming samples so the buffer starts at media time 0.
-      const skip = Math.round(-origin * sampleRate)
-      const trimmed = new AudioBuffer({ length: Math.max(1, length - skip), numberOfChannels: channels, sampleRate })
-      for (let c = 0; c < channels; c++) trimmed.copyToChannel(out.getChannelData(c).subarray(skip), c)
-      return trimmed
-    }
-    return out
+    if (!end) return null
+    // A few samples of silence past the end (rounding, a last frame shorter than its packet) don't matter; more is cut off.
+    return out.length - end <= Math.ceil(sampleRate * 0.05) ? out : resized(out, end)
   } catch (err) {
     console.warn('Audio decode failed, trying the browser decoder', err)
     return await decodeWithBrowser(url)
@@ -584,11 +595,18 @@ export async function decodeAudio(url: string): Promise<AudioBuffer | null> {
   }
 }
 
+/** A copy of `buffer`, `length` samples long: cut short, or with silence after. */
+function resized(buffer: AudioBuffer, length: number) {
+  const out = new AudioBuffer({ length, numberOfChannels: buffer.numberOfChannels, sampleRate: buffer.sampleRate })
+  for (let c = 0; c < buffer.numberOfChannels; c++) out.copyToChannel(buffer.getChannelData(c).subarray(0, Math.min(length, buffer.length)), c)
+  return out
+}
+
 // ─── Streaming audio ─────────────────────────────────────────────────────
 
 /**
- * A long recording read a window at a time instead of decoded whole — an hour
- * of stereo audio is well over a gigabyte once decoded. Playback, export,
+ * A recording read a window at a time instead of decoded whole — an hour of
+ * stereo audio is well over a gigabyte once decoded. Playback, export,
  * waveforms and analysis read just the stretch they need.
  */
 export interface AudioStream {
@@ -598,49 +616,101 @@ export interface AudioStream {
   duration: number
   /** Decoded audio for source seconds [from, to), clamped to the file; sample 0 is `from`. */
   read(from: number, to: number): Promise<AudioBuffer | null>
+  /** Lets go of the file's reader and decoder (and what they've read) until the next read, which opens it again. */
+  rest(): void
   close(): void
 }
 
-export async function openAudioStream(url: string): Promise<AudioStream | null> {
-  const input = openInput(url)
+/** What reading an audio track takes — the part a stream lets go of while it rests. */
+async function openAudioTrack(url: string) {
+  const input = openInput(url, AUDIO_CACHE)
   try {
     const track = await input.getPrimaryAudioTrack()
-    if (!track || !(await track.canDecode())) {
-      input.dispose()
-      return null
-    }
-    const sink = new AudioBufferSink(track)
-    const duration = await track.computeDuration()
-    const sampleRate = track.sampleRate
-    const channels = Math.max(1, Math.min(2, track.numberOfChannels))
-    // Reads share one decoder, so they queue rather than interleave.
-    let queue: Promise<unknown> = Promise.resolve()
-    const read = (from: number, to: number) => {
-      const job = queue.then(async () => {
-        const a = Math.max(0, from)
-        const b = Math.min(duration, to)
-        if (b - a <= 0) return null
-        const length = Math.max(1, Math.round((b - a) * sampleRate))
-        const out = new AudioBuffer({ length, numberOfChannels: channels, sampleRate })
-        for await (const chunk of sink.buffers(a, b)) {
-          const offset = Math.round((chunk.timestamp - a) * sampleRate)
-          for (let c = 0; c < channels; c++) {
-            const src = chunk.buffer.getChannelData(Math.min(c, chunk.buffer.numberOfChannels - 1))
-            const skip = Math.max(0, -offset)
-            const at = Math.max(0, offset)
-            const n = Math.min(src.length - skip, length - at)
-            if (n > 0) out.copyToChannel(src.subarray(skip, skip + n), c, at)
-          }
-        }
-        return out
-      })
-      queue = job.catch(() => {})
-      return job
-    }
-    return { sampleRate, channels, duration, read, close: () => input.dispose() }
+    if (track && (await track.canDecode())) return { input, track, sink: new AudioBufferSink(track) }
   } catch (err) {
     console.warn('Couldn’t open the audio for streaming', err)
-    input.dispose()
+  }
+  input.dispose()
+  return null
+}
+
+export async function openAudioStream(url: string): Promise<AudioStream | null> {
+  let open = await openAudioTrack(url)
+  if (!open) return null
+  const { track } = open
+  let duration: number
+  try {
+    duration = await track.computeDuration()
+  } catch (err) {
+    console.warn('Couldn’t open the audio for streaming', err)
+    open.input.dispose()
     return null
+  }
+  const sampleRate = track.sampleRate
+  const channels = Math.max(1, Math.min(2, track.numberOfChannels))
+  let closed = false
+  // Reads share one decoder, so they queue rather than interleave; resting waits its turn too.
+  let queue: Promise<unknown> = Promise.resolve()
+  const after = <T>(work: () => Promise<T>) => {
+    const job = queue.then(work)
+    queue = job.catch(() => {})
+    return job
+  }
+  const read = (from: number, to: number) =>
+    after(async () => {
+      const a = Math.max(0, from)
+      const b = Math.min(duration, to)
+      if (closed || b - a <= 0) return null
+      open ??= await openAudioTrack(url)
+      if (!open) return null
+      const length = Math.max(1, Math.round((b - a) * sampleRate))
+      const out = new AudioBuffer({ length, numberOfChannels: channels, sampleRate })
+      for await (const chunk of open.sink.buffers(a, b)) {
+        const offset = Math.round((chunk.timestamp - a) * sampleRate)
+        for (let c = 0; c < channels; c++) {
+          const src = chunk.buffer.getChannelData(Math.min(c, chunk.buffer.numberOfChannels - 1))
+          const skip = Math.max(0, -offset)
+          const at = Math.max(0, offset)
+          const n = Math.min(src.length - skip, length - at)
+          if (n > 0) out.copyToChannel(src.subarray(skip, skip + n), c, at)
+        }
+      }
+      return out
+    })
+  const rest = () =>
+    void after(async () => {
+      open?.input.dispose()
+      open = null
+    })
+  return {
+    sampleRate,
+    channels,
+    duration,
+    read,
+    rest,
+    close: () => {
+      closed = true
+      rest()
+    },
+  }
+}
+
+/** Sound that's already decoded, read like a stream (files only the browser's own decoder can read). */
+export function bufferStream(buffer: AudioBuffer): AudioStream {
+  const { sampleRate, numberOfChannels: channels } = buffer
+  return {
+    sampleRate,
+    channels,
+    duration: buffer.duration,
+    read: async (from, to) => {
+      const a = Math.max(0, Math.round(from * sampleRate))
+      const b = Math.min(buffer.length, Math.round(to * sampleRate))
+      if (b <= a) return null
+      const out = new AudioBuffer({ length: b - a, numberOfChannels: channels, sampleRate })
+      for (let c = 0; c < channels; c++) out.copyToChannel(buffer.getChannelData(c).subarray(a, b), c)
+      return out
+    },
+    rest: () => {},
+    close: () => {},
   }
 }

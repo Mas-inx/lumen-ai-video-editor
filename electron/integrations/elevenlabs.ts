@@ -84,13 +84,15 @@ interface Word {
   end: number
 }
 
-/** Groups words into caption-sized phrases: sentence ends, long pauses, or ~10 words. */
+const ms = (s: number) => Math.round(s * 1000) / 1000
+
+/** Groups words into caption-sized phrases: sentence ends, long pauses, or ~10 words. Each phrase keeps its words' timings (speech cuts land between words). */
 export function phrases(words: Word[]): TranscriptSegment[] {
   const out: TranscriptSegment[] = []
   let cur: Word[] = []
   const flush = () => {
     if (!cur.length) return
-    out.push({ start: cur[0].start, end: cur[cur.length - 1].end, text: cur.map((w) => w.text).join(' ') })
+    out.push({ start: cur[0].start, end: cur[cur.length - 1].end, text: cur.map((w) => w.text).join(' '), words: cur.map((w) => ({ start: ms(w.start), end: ms(w.end), text: w.text })) })
     cur = []
   }
   words.forEach((w, i) => {

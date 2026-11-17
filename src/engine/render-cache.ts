@@ -20,7 +20,7 @@ import { toast } from 'sonner'
 import { create } from 'zustand'
 import { clipEnd, projectDuration, transitionLead } from '@/editor/ops'
 import { usePlayback } from '@/editor/playback'
-import { is3dEffect, is3dTransition } from '@/editor/presets'
+import { is3dEffect, is3dTransition, isSmartTransition } from '@/editor/presets'
 import { getProject, useEditor } from '@/editor/store'
 import type { Asset, Clip, Project, Sequence } from '@/editor/types'
 import { useUI, type RenderRes } from '@/editor/ui-store'
@@ -134,7 +134,7 @@ function dependencies(project: Project, clips: Iterable<Clip>) {
   const luts = new Map<string, string>()
   const sequences = new Map<string, string>()
   const visit = (c: Clip) => {
-    for (const id of [c.assetId, c.matte?.assetId]) {
+    for (const id of [c.assetId, c.matte?.assetId, c.depth?.assetId]) {
       if (!id || assets.has(id)) continue
       const a = project.assets[id]
       assets.set(id, a ? hashOnce(a, assetPicture) : 'missing')
@@ -213,7 +213,7 @@ export function chunkKey(project: Project, index: number, res: RenderRes = useUI
 
 // ─── How heavy a stretch is ──────────────────────────────────────────────
 
-const EFFECT_COST: Partial<Record<string, number>> = { blur: 1, glow: 1.2, rgb: 1, grain: 0.3, leak: 0.3, vignette: 0.2 }
+const EFFECT_COST: Partial<Record<string, number>> = { blur: 1, glow: 1.2, halation: 1, rays: 1.2, flare: 0.5, relight: 1.2, particles: 0.6, rgb: 1, grain: 0.3, leak: 0.4, vignette: 0.2 }
 
 /** Roughly how much work drawing one frame is, in "plain video layers". */
 function frameCost(project: Project, frame: number) {
@@ -228,7 +228,7 @@ function frameCost(project: Project, frame: number) {
     if (clip.crop) cost += 0.2
     if (clip.text && clip.text.extrude > 0) cost += 2.5
     const tr = clip.transitionIn
-    if (tr && local < tr.duration) cost += is3dTransition(tr.kind) ? 2.5 : 1
+    if (tr && local < tr.duration) cost += is3dTransition(tr.kind) || isSmartTransition(tr.kind) ? 2.5 : 1
     const kf = clip.keyframes
     if (kf.rotateX?.length || kf.rotateY?.length || kf.z?.length || clip.transform.rotateX || clip.transform.rotateY || clip.transform.z) cost += 2.5
   }

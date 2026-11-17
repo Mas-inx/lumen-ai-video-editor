@@ -5,6 +5,7 @@
  * user picked (or that a project it opened references).
  */
 
+import type { BrandLogo, BrandStore } from './brand'
 import type { CaptureAPI } from './capture'
 import type { IngestClip, IngestQuality, IngestResult, IngestSession, IngestState } from './ingest'
 
@@ -40,6 +41,14 @@ export interface RecoveryInfo {
   /** The project file the unsaved changes belong to, if it had been saved before. */
   path: string | null
   name: string
+}
+
+/** What the editor lands on when its page was loaded again after it stopped (a crash, running out of memory, a hang). */
+export interface ReopenInfo {
+  /** The project file it had open, if the project had been saved. */
+  path: string | null
+  /** Its unsaved changes are in the crash-recovery copy: open that. */
+  recover: boolean
 }
 
 export type CloseChoice = 'save' | 'discard' | 'cancel'
@@ -139,6 +148,7 @@ export const APP_IPC = {
   projectDiscardRecovery: 'lumen:project:discard-recovery',
   projectState: 'lumen:project:state',
   projectStartup: 'lumen:project:startup',
+  projectReopen: 'lumen:project:reopen',
   projectVersions: 'lumen:project:versions',
   projectReadVersion: 'lumen:project:read-version',
   projectSnapshot: 'lumen:project:snapshot',
@@ -182,6 +192,10 @@ export const APP_IPC = {
   gpuInfo: 'lumen:app:gpu-info',
   graphicsSet: 'lumen:app:graphics-set',
   relaunch: 'lumen:app:relaunch',
+
+  brandGet: 'lumen:brand:get',
+  brandSave: 'lumen:brand:save',
+  brandAddLogo: 'lumen:brand:add-logo',
 
   /** main → renderer */
   openRequest: 'lumen:project:open-request',
@@ -277,10 +291,12 @@ export interface AppAPI {
     autosave(snapshot: { text: string; path: string | null; name: string } | null): Promise<void>
     recovery(): Promise<RecoveryInfo | null>
     discardRecovery(): Promise<void>
-    /** Keeps the window title and close-confirmation in sync with the editor. */
-    setState(state: { name: string; path: string | null; dirty: boolean }): void
+    /** Keeps the window title, close-confirmation and crash recovery in sync with the editor. */
+    setState(state: { id: string; name: string; path: string | null; dirty: boolean }): void
     /** A project file Lumen was launched with (double-clicked .lumen file). */
     startupFile(): Promise<string | null>
+    /** After the editor's page stopped and was loaded again: the project to land back on (null on a normal start). */
+    reopen(): Promise<ReopenInfo | null>
     /** Native "Save changes?" prompt. */
     confirmDiscard(name: string): Promise<CloseChoice>
     onOpenRequest(cb: (path: string) => void): () => void
@@ -352,6 +368,14 @@ export interface AppAPI {
     setGraphics(patch: Partial<GraphicsSettings>): Promise<GpuInfo>
     /** Closes and reopens Lumen at once — save the project first. */
     relaunch(): void
+  }
+  /** Brand kits: colours, typefaces, logos and house style kept for every project (see shared/brand.ts). */
+  brand: {
+    get(): Promise<BrandStore>
+    /** Stores the kits; returns them as stored. */
+    save(store: BrandStore): Promise<BrandStore>
+    /** An image the user picks, copied into Lumen's brand folder. Null if cancelled. */
+    addLogo(): Promise<BrandLogo | null>
   }
   updates: {
     state(): Promise<UpdateState>

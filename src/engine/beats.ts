@@ -78,17 +78,60 @@ function fft(re: Float32Array, im: Float32Array, t: ReturnType<typeof fftTables>
 
 // ─── Onsets ──────────────────────────────────────────────────────────────
 
-/** Mono, low-passed and decimated to about 11 kHz. */
-function prepare(channels: Float32Array[], sampleRate: number) {
-  const factor = Math.max(1, Math.round(sampleRate / 11025))
-  const len = Math.floor(channels[0].length / factor)
-  const out = new Float32Array(len)
-  for (let i = 0; i < len; i++) {
-    let s = 0
-    for (let k = 0; k < factor; k++) for (const ch of channels) s += ch[i * factor + k]
-    out[i] = s / (factor * channels.length)
+/** How much of a piece is listened to: plenty to find its tempo and beats. */
+export const BEAT_SECONDS = 15 * 60
+
+/**
+ * The sound beat detection works on: mono, low-passed and decimated to about
+ * 11 kHz. It can be fed a stretch at a time — a long file streamed through it is
+ * never held whole — and gives the same samples as feeding it all at once.
+ */
+export class BeatInput {
+  readonly rate: number
+  private readonly factor: number
+  private parts: Float32Array[] = []
+  /** The end of the last stretch that didn't fill a step, per channel: it starts the next. */
+  private carry: Float32Array[] = []
+
+  constructor(sampleRate: number) {
+    this.factor = Math.max(1, Math.round(sampleRate / 11025))
+    this.rate = sampleRate / this.factor
   }
-  return { samples: out, rate: sampleRate / factor }
+
+  push(channels: Float32Array[]) {
+    if (!channels.length) return
+    const factor = this.factor
+    const joined = this.carry.length
+      ? channels.map((ch, c) => {
+          const before = this.carry[c] ?? this.carry[0]
+          const all = new Float32Array(before.length + ch.length)
+          all.set(before)
+          all.set(ch, before.length)
+          return all
+        })
+      : channels
+    const len = Math.floor(joined[0].length / factor)
+    const out = new Float32Array(len)
+    for (let i = 0; i < len; i++) {
+      let s = 0
+      for (let k = 0; k < factor; k++) for (const ch of joined) s += ch[i * factor + k]
+      out[i] = s / (factor * joined.length)
+    }
+    this.parts.push(out)
+    this.carry = joined.map((ch) => ch.slice(len * factor))
+  }
+
+  /** Everything pushed so far, in one piece. */
+  samples() {
+    if (this.parts.length === 1) return this.parts[0]
+    const out = new Float32Array(this.parts.reduce((n, p) => n + p.length, 0))
+    let o = 0
+    for (const p of this.parts) {
+      out.set(p, o)
+      o += p.length
+    }
+    return out
+  }
 }
 
 interface Envelope {
@@ -263,9 +306,16 @@ export function downbeatPhase(beats: number[], low: Float32Array) {
 
 /** Tempo, beats and downbeats of decoded audio (seconds from the start of `channels`). */
 export async function detectBeats(channels: Float32Array[], sampleRate: number, opts: { maxSeconds?: number } = {}): Promise<BeatGrid> {
-  const limit = Math.floor(sampleRate * (opts.maxSeconds ?? 15 * 60))
-  const clipped = channels.map((c) => (c.length > limit ? c.subarray(0, limit) : c))
-  const { samples, rate } = prepare(clipped, sampleRate)
+  const limit = Math.floor(sampleRate * (opts.maxSeconds ?? BEAT_SECONDS))
+  const input = new BeatInput(sampleRate)
+  input.push(channels.map((c) => (c.length > limit ? c.subarray(0, limit) : c)))
+  return beatsIn(input)
+}
+
+/** Tempo, beats and downbeats of what's been pushed into `input` (seconds from its start). */
+export async function beatsIn(input: BeatInput): Promise<BeatGrid> {
+  const samples = input.samples()
+  const rate = input.rate
   const env = await onsetEnvelope(samples, rate)
   if (env.onset.length < env.fps * 2) return { bpm: 0, times: [], downbeats: [], confidence: 0 }
   const { period, confidence } = estimatePeriod(env.onset, env.fps)

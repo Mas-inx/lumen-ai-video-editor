@@ -91,6 +91,21 @@ For anything longer than one title (an intro, an explainer, an ident):
 - Prefer solid fills to gradients. Legibility comes from placement and a soft, close shadow (or a solid band), never a frosted panel.
 - Align everything to a grid and keep margins consistent. Make asymmetry deliberate: a lower third sits on the lower-left third, a title holds the optical centre.
 
+## Numbers on screen
+
+- Chart only real figures — from the script, a document, the transcript or the user. Never invent or round them into a better story.
+- One chart, one point. Say the point in the title ("Viewers doubled in a week", not "Viewers") and highlight the item that makes it.
+- Pick the form for the question: bars compare categories, a line shows change over time, a donut shows one share (or the parts of a whole, six at most).
+- render_motion_graphic `chart` chooses round ticks, fits the labels and counts the values up; give it the unit (prefix / suffix), the decimals that matter and a source.
+- Give it time: the default length adds reading time per item. Don't cut a chart short to hit a beat; move the beat.
+
+## Particle titles
+
+- A particle title (render_motion_graphic `particle-title`) is a hero moment: an opening title, a reveal, an end card. Once per piece, never for lower thirds or captions.
+- Match the style to the film: `dust` for calm and atmosphere, `sparks` for energy and launches, `embers` for drama and warmth, `digital` for tech and data.
+- Choose where the particles come from on purpose: from the left reads as arriving, from below as rising, from everywhere as gathering.
+- One to four words in a heavy face (`display`, `art`, `wide`); let the subtitle carry the rest.
+
 ## Workflow
 
 1. Write the idea in one line: what should the viewer feel or understand?
@@ -102,7 +117,7 @@ For anything longer than one title (an intro, an explainer, an ident):
    - holds from reading time;
    - beat timing if there's music.
 3. Design the key frames first: the hook, the hero moment and the end frame must each work as a still poster before you animate between them.
-4. Make it: render_motion_graphic (pick a style, font, accent and bpm on purpose), or render_hyperframes_html for something bespoke (use_skill hyperframes-compositions).
+4. Make it: render_motion_graphic (lower thirds, title cards, kinetic type, counters, quotes, chapter markers, particle titles, bar / line / donut charts — pick a style, font, accent and bpm on purpose), or render_hyperframes_html for something bespoke (use_skill hyperframes-compositions).
 5. Check it: get_frame at the end of the entrance, mid-hold and the start of the exit. Fix anything that looks templated, cramped, off-grid or too short to read before you say you're done. For a full piece, run the review below.
 
 ## Review before you call it done

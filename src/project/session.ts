@@ -237,7 +237,7 @@ export function showHome(show = true) {
 let lastState = ''
 function syncWindow() {
   if (!desktop) return
-  const state = { name: getProject().name, path: useSession.getState().path, dirty: isDirty() }
+  const state = { id: getProject().id, name: getProject().name, path: useSession.getState().path, dirty: isDirty() }
   const key = JSON.stringify(state)
   if (key === lastState) return
   lastState = key
@@ -287,8 +287,13 @@ export async function startSession() {
     if (await saveProject()) desktop!.project.closeWindow()
   })
   syncWindow()
-  const [startup, recovery] = await Promise.all([desktop.project.startupFile(), desktop.project.recovery()])
+  const [startup, recovery, reopen] = await Promise.all([desktop.project.startupFile(), desktop.project.recovery(), desktop.project.reopen()])
   useSession.setState({ recovery })
   await refreshRecent()
-  if (startup) await openProject(startup)
+  // The editor stopped and was loaded again: back onto the project — with its unsaved changes when there were any.
+  if (reopen?.recover && recovery) {
+    await recover()
+    toast.success('Your unsaved changes were recovered', { description: 'Save to keep them.' })
+  } else if (reopen?.path) await openProject(reopen.path)
+  else if (startup) await openProject(startup)
 }

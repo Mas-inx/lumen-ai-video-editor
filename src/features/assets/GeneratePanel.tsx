@@ -1,4 +1,4 @@
-import { AudioLines, Box, Clapperboard, KeyRound, Plug, Sparkles, Trash } from 'lucide-react'
+import { AudioLines, Box, Clapperboard, KeyRound, Plug, Sparkles, Trash, Workflow } from 'lucide-react'
 import { AnimatePresence } from 'motion/react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
@@ -27,6 +27,7 @@ import {
   type GenProvider,
 } from '@/integrations/store'
 import { Generate3D } from './Generate3D'
+import { GenerateComfy } from './GenerateComfy'
 import { GenerateMotion } from './GenerateMotion'
 import { useGenerate, type GenerateMode } from './generate-store'
 import { Chip, PanelHeader, SectionLabel } from './shared'
@@ -57,25 +58,31 @@ export function GeneratePanel() {
           <Plug />
         </IconButton>
       </PanelHeader>
-      <div className="px-3.5 pb-3">
+      {/* A container: at the panel's narrowest the engines show just their icons. */}
+      <div className="@container px-3.5 pb-3">
         <Segmented
           stretch
           size="md"
           value={engine}
           onChange={(e) => useGenerate.setState({ engine: e })}
           options={[
-            { value: 'media', icon: <Sparkles />, label: 'Media' },
-            { value: '3d', icon: <Box />, label: '3D' },
-            { value: 'motion', icon: <Clapperboard />, label: 'Motion' },
+            { value: 'media', icon: <Sparkles />, label: <EngineLabel>Media</EngineLabel>, title: 'Media' },
+            { value: '3d', icon: <Box />, label: <EngineLabel>3D</EngineLabel>, title: '3D' },
+            { value: 'motion', icon: <Clapperboard />, label: <EngineLabel>Motion</EngineLabel>, title: 'Motion' },
+            // ComfyUI's own name doesn't fit beside the others: its icon, with the name on hover.
+            { value: 'comfyui', icon: <Workflow />, title: 'ComfyUI workflows' },
           ]}
         />
       </div>
       {engine === 'media' && <MediaGenerator />}
       {engine === '3d' && <Generate3D />}
       {engine === 'motion' && <GenerateMotion />}
+      {engine === 'comfyui' && <GenerateComfy />}
     </>
   )
 }
+
+const EngineLabel = ({ children }: { children: ReactNode }) => <span className="@max-[17rem]:hidden">{children}</span>
 
 function useGenerators(mode: Mode): Generator[] {
   const providers = useAi((s) => s.providers)

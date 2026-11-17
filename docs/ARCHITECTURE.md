@@ -20,6 +20,7 @@ shared/
   skills.ts         SKILL.md parsing (the same format as Claude's skills)
   ingest.ts         frame ingest: the request contract, qualities and the master's codec strings
   capture.ts        recording: sources, settings, the picture's size, a recording's clock, the pointer as data
+  brand.ts          brand kits: their shape, and the checks every kit passes before it's stored or applied
 src/
   editor/           the document and its rules (framework-free, unit-tested)
     types.ts          project model — integer frames at the project's fps
@@ -36,13 +37,22 @@ src/
     beat-grid.ts      a music clip's beats on the timeline, through its trims and speed
     cues.ts           what happens in a silent clip (a sender's cue sheet), through its trims and speed
     color-math.ts     tone curves (monotone cubic), colour wheels, HSL bands
+    color-correct.ts  the correction: white balance in linear light, levels, shot matching by quantiles, auto balance
     lut.ts            .cube LUT parsing (3D and 1D, custom domains)
     clipboard.ts      copy / paste of clips and their media, across projects
     smart.ts          speech-aware edits: pauses, captions, ducking, reframing
+    subject-frame.ts  where a shot's subject is, and where to put the picture so it stays in a reframed canvas
+    storyboard.ts     the storyboard: scenes in order, their running times, and the stretch each produced scene covers now
+    styles.ts         the style engine: six house styles, planned as command steps and applied as one transaction
+    broll.ts          B-roll by meaning: BM25 over each media item's name, tags, description, prompt, folder and speech
     playback.ts       transport, clocked by the audio engine
   engine/           pixels and samples
     compositor.ts     tracks, transforms, keyframes, animations, transitions, grades, effects, masks, titles
-    gl-grade.ts       the GPU grade: sharpen, keys, curves, wheels, HSL and 3D LUTs in one WebGL2 shader
+    gl-grade.ts       the GPU grade: sharpen, keys, correction, curves, wheels, HSL and 3D LUTs in one WebGL2 shader
+    gl-fx.ts          light and lens effects after the grade: relight, god rays, bloom & halation (one blur pyramid),
+                      lens flares, particles, light leaks, vignettes
+    gl-transition.ts  smart transitions on the GPU: morph, zoom through, whip pan, luma fade, colour match
+    cut-match.ts      reading a cut: block-matched flow between its frames, choosing a transition, timing it to the beat
     scopes.ts         waveform, RGB parade, vectorscope and histogram of the rendered frame
     fonts.ts          built-in and embedded fonts (from files or the system), registered with the page
     three/            3D stage: 3D transitions, 3D layer effects, extruded titles
@@ -70,7 +80,8 @@ src/
     graphics-report.ts  the graphics cards, what they accelerate, and every encoder tried
   project/          session (new/open/save/recover, versions, collect), import, proxies, transcription, Whisper worker,
                     subtitle files, and the footage tools wired to the editor (analysis-actions.ts); subject
-                    mattes (segment.ts + its worker) and text behind subject (subject.ts); beat analysis (beats.ts);
+                    mattes (segment.ts + its worker) and text behind subject (subject.ts); depth maps for relighting
+                    (depth.ts + its worker); colour correction measured from footage (color-actions.ts); beat analysis (beats.ts);
                     frame ingest (ingest.ts, its encoder worker and the colour conversion)
   capture/          recording: recorder.ts (streams, start / pause / stop, clips on the timeline), the encoder
                     worker, zooms on clicks (autozoom.ts) and what they do to a clip (click-actions.ts)
@@ -79,7 +90,8 @@ src/
     skills.ts         built-in skills (skills/*.md) and which tools point at them
     tools/            vision.ts (see) · inspect.ts (hear and read) · control.ts (act) · footage.ts (timelines,
                       subtitles, scenes, multicam, stabilizing, tracking, render queue) · web.ts · skills.ts ·
-                      subject.ts · beats.ts · kit.ts
+                      subject.ts · beats.ts · color.ts (correction, relighting) · creative.ts (storyboard, styles,
+                      brand kits, B-roll) · kit.ts
   features/         UI: home, timeline, preview, media and generate panels, inspector,
                     Copilot, integrations hub, command palette, export
 electron/
@@ -91,6 +103,8 @@ electron/
   export.ts         streamed export (and proxy) writes, image-sequence folders, destinations picked
                     now and written later (the render queue), subtitle files beside exports
   updater.ts        updates from GitHub Releases (electron-updater)
+  crash.ts          a crashed or hung editor: reload onto the project (or its recovery copy) or quit, without looping
+  brand.ts          brand kits stored under userData, logos copied beside them
   render-cache.ts   rendered preview chunks on disk, per project, capped at 8 GB
   offscreen.ts      offscreen windows that render exact pixels at any display scaling
   ingest.ts         the frame-ingest receiver: loopback HTTP, a two-frame queue per clip
@@ -166,6 +180,20 @@ A clip with `sequenceId` plays another timeline. `sequenceView()` presents a sto
 - **The audio engine** mixes a nested timeline through its own track buses into a gain stage for the clip that plays it (its volume, fades and crossfades), mapped onto the played timeline by an offset — recursively, for playback and export alike.
 - **Loops** can't happen: a timeline can't be nested in anything it contains (`wouldLoop`), and the open timeline is never looked up as a nested one.
 
+## Light and colour
+
+- **The grade** runs in one WebGL2 shader per clip ([`gl-grade.ts`](../src/engine/gl-grade.ts)). Its first stage is the **correction** — white balance (gains in linear light), levels and a shot match — composed on the CPU into one curve per channel and looked up from a half-float table, so the whole correction costs three texture reads.
+- **Light and lens effects** ([`gl-fx.ts`](../src/engine/gl-fx.ts)) run after it, on the layer: relight → god rays → bloom & halation → lens flare → light leak → vignette.
+  - Bloom and halation share one bright pass and a dual-filter blur pyramid (half size down to 1/64); each mixes the pyramid's levels with its own weights, so a radius is a smooth bell over the levels and a wider glow spreads the same light instead of brightening.
+  - God rays are a radial blur of the bright parts toward the light (Mitchell, *GPU Gems 3*, ch. 13); flares, leaks and vignettes are drawn analytically, in fractions of the frame, so every render size looks alike.
+  - A light that *follows* is found per frame from a 48-pixel-wide copy of the layer (the centre of its brightest pixels), with no state between frames, so exports and stills match the preview.
+  - Glows spill into see-through parts of a layer as premultiplied light, faded before the layer's own edge; rays and flares stay inside the shot.
+- **Particles** are drawn analytically too: a grid scrolls with the particles' velocity, one particle per cell at a hashed place, a layer per depth with its own scale and speed. Thousands cost a few lookups a pixel, and every frame of an export draws the same ones.
+- **Smart transitions** ([`gl-transition.ts`](../src/engine/gl-transition.ts)) draw each shot on its own and carry one into the other with what was read at the cut ([`cut-match.ts`](../src/engine/cut-match.ts), [`transition-actions.ts`](../src/project/transition-actions.ts)): the last frame of the outgoing shot and the first of the incoming one, from the media itself. A 24 × 14 flow field comes from the tracker's coarse-to-fine block matching between them (outliers out by a median, holes filled from neighbours, softened); subjects from the reframing focus finder; the camera's motion from the stabilizer's frame motion; colour curves from the shot matcher. The reading is stored on the transition, so preview and export draw the same; one set without a reading (dragged on, pasted, set by an agent) is read in the background. Beat timing never moves a cut: the transition is centred on it, or starts or ends at it, so its middle — where the shots swap — lands on the beat.
+- **Relight** shades the picture with a point light: surface directions come from the clip's depth map (or, without one, a soft relief from its brightness), with wrap lighting, distance falloff and a Blinn–Phong highlight.
+- **Depth maps** are made like subject mattes: Depth Anything V2 (small) in a worker, at up to 30 frames a second, 640 pixels wide. Monocular depth comes out on a different scale every frame, so the range is held steady (2nd–98th percentiles, eased frame to frame) and small changes are blended with the frame before. The map is a grayscale H.264 video kept as a hidden media item, decoded beside the clip like a matte.
+- **Measuring footage** for auto balance, levels and matching reads small frames of the media itself (never the graded preview). Auto balance is grey world in linear light without near-black, blown-out or strongly coloured pixels — selected by their average, which favours no channel. A match maps each channel's quantiles onto the reference's (after the reference's own correction), with slopes limited so a small sample can't stretch the footage wildly.
+
 ## Reading the footage
 
 Scene detection, multicam sync, tracking and stabilization decode media with Mediabunny (never the preview's players) and write their results through commands, so they undo like any edit:
@@ -240,7 +268,9 @@ Claude on an API key is asked for `display: 'summarized'`; without it, recent Cl
 ## Integrations
 
 - **Blender.** Lumen finds Blender, writes a JSON spec and runs `blender -b --factory-startup -P runner.py`. The runner builds the scene — 3D titles with Lumen's fonts, a studio world for real metal reflections, baked keyframes so motion blur works; looping abstract backgrounds; or agent-written `bpy` (which needs the user's approval) — renders EEVEE to a PNG sequence and streams progress. With the BlenderMCP add-on, agents can also drive an open Blender (port 9876).
+- **ComfyUI** ([`electron/integrations/comfyui/`](../electron/integrations/comfyui)). The user's own ComfyUI, at an address they set (http only for this computer, the LAN or a VPN; an optional auth header kept with the other secrets). Workflows live in a library under userData: API-format JSON, ComfyUI's saved format (converted with the server's `/object_info`, refusing what it can't map exactly), or a PNG ComfyUI saved. Each workflow's inputs are found from its graph — prompts told apart by the sampler socket they reach, seed, steps, size, media loaders — and a run sets them by role or by node and input. Inputs are uploaded into ComfyUI's `input/lumen/`; a run is queued with its websocket already open, followed over it (history as a fallback), and its outputs are downloaded into the project's media as a job.
 - **HyperFrames.** Compositions are HTML + GSAP. Lumen loads them in a hidden, sandboxed, transparent Chromium window with the HyperFrames runtime injected, seeks each frame with the runtime's `renderSeek` and captures PNGs — no FFmpeg or headless-Chrome download.
+  - **Templates** ([`electron/integrations/hyperframes/`](../electron/integrations/hyperframes)): the page and its helpers in `page.ts`, the type templates in `templates.ts`, and the particle title and charts, which draw more than they lay out, in `particle-title.ts` and `charts.ts` (chart data is read in [`shared/motion.ts`](../shared/motion.ts), shared with the Generate panel and the AI tool). Every frame is worked out from the timeline's time alone, with seeded randomness, so a frame renders the same however it's reached. A page that has to load something before it can draw — the particle title samples its own text once its font is in — registers the promise in `window.__hf.buildReady`, and no frame is captured until it settles.
   - **Display scaling:** Windows clamps a window to the work area in DIPs. So for a scale k, the window is sized at 1/k with a device scale factor of k and a zoom of 1/k. That gives exact, centred pixels at any display scaling.
 - **MCP host.** Any MCP server by URL (Streamable HTTP, SSE fallback) or command (stdio). One-click catalog: Higgsfield, Runway and Replicate (OAuth), fal.ai (API key), Blender MCP. OAuth runs in the browser with a loopback redirect; tokens and header keys are encrypted with the OS keychain. Tools get forms generated from their JSON Schema; image and audio results land in the project.
 - **Lumen's MCP server.** A Streamable HTTP endpoint on `127.0.0.1:47910/mcp`, token-protected, refusing browser origins, forwarding every request to the editor page, which runs it through the same command system.
@@ -254,7 +284,9 @@ Claude on an API key is asked for `display: 'summarized'`; without it, recent Cl
 
 - **Versions** live in `userData/versions/<project id>/` (so they follow a project when its file moves): one per save, one every ten minutes of unsaved editing, and one before a restore. Identical back-to-back snapshots are skipped; the newest 30 stay, older ones thin to one a day for 60 days.
 - **Proxies** are made in the editor with Mediabunny (540p H.264, a key frame every second, no sound) and streamed into `userData/media/proxies/`. Projects reference them by path; a missing proxy is dropped on open and made again. Only the preview's `<video>` players use them.
-- **Long audio** (over ten minutes) is never decoded whole: an `AudioStream` reads any window of the file, playback schedules eight-second chunks about twelve seconds ahead, and each export block reads just the source it needs.
+- **Long audio** (over a minute) is never decoded whole: an `AudioStream` reads any window of the file, playback schedules eight-second chunks about twelve seconds ahead, and each export block reads just the source it needs. At most 24 streams keep their readers open; the rest let go until they're read again.
+- **Memory budgets.** Decoded short audio (512 MiB, reversed and denoised copies included), stills (512 MiB), image-sequence frames (768 MiB) and filmstrips (256 MiB) live in LRU caches ([`src/lib/lru.ts`](../src/lib/lru.ts)); whole-file decodes run three at a time, nearest the playhead first ([`src/lib/limiter.ts`](../src/lib/limiter.ts)). Video players unused for 900 drawn frames, beyond the eight most recent idle ones, are released; scratch canvases unused for 300 frames are emptied ([`scratch.ts`](../src/engine/scratch.ts)); an export's frame feeder drops a clip's decoder at the first frame that doesn't draw it.
+- **A crashed or hung editor** ([`electron/crash.ts`](../electron/crash.ts)) gets a native dialog: reload onto the project (the recovery copy when it holds this project's unsaved changes) or quit. Stopping again within two minutes of a reload steps down to starting without the project, then to quitting only.
 
 ## Updates
 

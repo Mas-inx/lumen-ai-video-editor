@@ -17,13 +17,16 @@ import {
   Film,
   Flag,
   FolderOpen,
+  GalleryVerticalEnd,
   Grid3x3,
   FolderArchive,
   History,
   Keyboard,
+  Lightbulb,
   SlidersVertical,
   Magnet,
   Music,
+  Palette,
   Play,
   Plus,
   Redo2,
@@ -33,12 +36,14 @@ import {
   SkipBack,
   SkipForward,
   Sparkles,
+  Stamp,
   Trash,
   Type,
   Undo2,
   UnfoldHorizontal,
   Upload,
   VolumeX,
+  Wand2,
 } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import { AiSparkle } from '@/components/brand'
@@ -201,6 +206,12 @@ export function CommandPalette() {
           <Item icon={<Crosshair />} keywords={['track', 'tracking', 'follow', 'pin', 'motion']} onSelect={run(() => actions.trackMotion())}>
             Track motion…
           </Item>
+          <Item icon={<Wand2 />} keywords={['colour', 'color', 'correct', 'white balance', 'auto', 'levels', 'cast', 'grade']} onSelect={run(() => void actions.autoColor())}>
+            Auto colour (white balance and levels)
+          </Item>
+          <Item icon={<Lightbulb />} keywords={['relight', 'light', 'lighting', 'depth', 'key light']} onSelect={run(() => void actions.relight())}>
+            Relight clip
+          </Item>
         </Command.Group>
 
         <Command.Group heading="Playback">
@@ -242,6 +253,12 @@ export function CommandPalette() {
           </Item>
           <Item icon={<Aperture />} onSelect={panel('looks')}>
             Show color looks
+          </Item>
+          <Item icon={<Palette />} keywords={['style', 'editorial', 'cinematic', 'documentary', 'kinetic', 'commercial', 'infographic', 'typography']} onSelect={panel('styles')}>
+            Show styles
+          </Item>
+          <Item icon={<GalleryVerticalEnd />} keywords={['storyboard', 'plan', 'scenes', 'script', 'director']} onSelect={panel('storyboard')}>
+            Show the storyboard
           </Item>
           <Item icon={<AiSparkle />} onSelect={panel('generate')}>
             Generate with AI
@@ -302,6 +319,9 @@ export function CommandPalette() {
           </Item>
           <Item icon={<SlidersVertical />} keywords={['audio', 'volume', 'eq', 'compressor', 'meters']} onSelect={run(() => ui().setRightTab('mixer'))}>
             Open the mixer
+          </Item>
+          <Item icon={<Stamp />} keywords={['brand', 'logo', 'colours', 'colors', 'fonts', 'identity']} onSelect={run(() => ui().setBrandOpen(true))}>
+            Brand kit…
           </Item>
         </Command.Group>
 

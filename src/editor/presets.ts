@@ -2,6 +2,7 @@ import type {
   AnimPreset,
   ClipAnimation,
   ColorGrade,
+  Effect,
   EffectKind,
   TextStyle,
   TransitionKind,
@@ -41,7 +42,7 @@ export const LOOKS: Look[] = [
 
 // ─── Transitions ─────────────────────────────────────────────────────────
 
-export const TRANSITIONS: { kind: TransitionKind; name: string; description: string; is3d?: boolean }[] = [
+export const TRANSITIONS: { kind: TransitionKind; name: string; description: string; is3d?: boolean; smart?: boolean }[] = [
   { kind: 'dissolve', name: 'Cross Dissolve', description: 'Blend smoothly between shots' },
   { kind: 'dip', name: 'Dip to Black', description: 'Fade out, then in' },
   { kind: 'flash', name: 'Flash', description: 'Bright white pop on the cut' },
@@ -58,21 +59,217 @@ export const TRANSITIONS: { kind: TransitionKind; name: string; description: str
   { kind: 'warp', name: 'Warp Zoom', description: 'Fly through into the next shot', is3d: true },
   { kind: 'shatter', name: 'Shatter', description: 'Burst into pieces', is3d: true },
   { kind: 'spin', name: '3D Spin', description: 'Spin away in depth', is3d: true },
+  { kind: 'morph', name: 'Morph', description: 'Warp one shot into the next', smart: true },
+  { kind: 'through', name: 'Zoom Through', description: 'Into one subject, out of the next', smart: true },
+  { kind: 'whip', name: 'Whip Pan', description: 'Carries the camera’s motion on', smart: true },
+  { kind: 'luma', name: 'Luma Fade', description: 'The next shot’s light leads in', smart: true },
+  { kind: 'match', name: 'Colour Match', description: 'Starts in this shot’s colours', smart: true },
 ]
 
 export const is3dTransition = (kind: TransitionKind) => TRANSITIONS.some((t) => t.kind === kind && t.is3d)
 
+/** Transitions that read the two shots at their cut (drawn on the GPU from a TransitionMatch). */
+export const isSmartTransition = (kind: TransitionKind) => TRANSITIONS.some((t) => t.kind === kind && t.smart)
+
 // ─── Effects ─────────────────────────────────────────────────────────────
 
-export const EFFECTS: { kind: EffectKind; name: string; description: string; amount: number; is3d?: boolean; params?: Record<string, number | string> }[] = [
+/**
+ * A setting an effect takes, as the inspector shows it. `default` is the value
+ * when the effect has no such param — for effects that predate the setting,
+ * that keeps old projects looking as they did; new effects start from the
+ * preset's `params`.
+ */
+export type EffectControl =
+  | { key: string; label: string; type: 'slider'; min: number; max: number; default: number; unit?: string; hint?: string }
+  | { key: string; label: string; type: 'color'; default: string; hint?: string }
+  | { key: string; label: string; type: 'select'; default: string; options: { value: string; label: string }[]; hint?: string }
+  | { key: string; label: string; type: 'switch'; default: number; hint?: string }
+  /** A position on the frame: `key` is x and `keyY` is y, as fractions (beyond 0..1 is off the frame). */
+  | { key: string; keyY: string; label: string; type: 'point'; default: [number, number]; min: number; max: number; hint?: string }
+
+export interface EffectPreset {
+  kind: EffectKind
+  name: string
+  description: string
+  amount: number
+  is3d?: boolean
+  /** Light and lens effects get their own section in the library. */
+  light?: boolean
+  /** What a new effect of this kind starts with. */
+  params?: Record<string, number | string>
+  controls?: EffectControl[]
+}
+
+const slider = (key: string, label: string, def: number, hint?: string, min = 0, max = 100, unit?: string): EffectControl => ({ key, label, type: 'slider', min, max, default: def, ...(unit ? { unit } : {}), ...(hint ? { hint } : {}) })
+const lightAt = (x: number, y: number, label = 'Light'): EffectControl => ({ key: 'x', keyY: 'y', label, type: 'point', default: [x, y], min: -0.5, max: 1.5, hint: 'Drag the light — it can sit off the frame too' })
+const follow: EffectControl = { key: 'follow', label: 'Follow', type: 'switch', default: 0, hint: 'Moves with the brightest light in the shot' }
+
+export const EFFECTS: EffectPreset[] = [
   { kind: 'blur', name: 'Gaussian Blur', description: 'Soften the whole frame', amount: 30 },
-  { kind: 'glow', name: 'Glow', description: 'Dreamy highlight bloom', amount: 45 },
-  { kind: 'vignette', name: 'Vignette', description: 'Darken the edges', amount: 50 },
+  {
+    kind: 'glow',
+    name: 'Glow & Bloom',
+    description: 'Highlights bleed into the shadows',
+    amount: 45,
+    light: true,
+    params: { threshold: 55, radius: 50, tint: '#ffffff' },
+    controls: [
+      slider('threshold', 'Threshold', 0, 'How bright a part must be to glow — 0 glows the whole picture'),
+      slider('radius', 'Radius', 47, 'How far the light spreads'),
+      { key: 'tint', label: 'Colour', type: 'color', default: '#ffffff' },
+    ],
+  },
+  {
+    kind: 'halation',
+    name: 'Halation',
+    description: 'Film’s red glow around bright edges',
+    amount: 50,
+    light: true,
+    params: { threshold: 68, radius: 32, tint: '#ff3d14' },
+    controls: [
+      slider('threshold', 'Threshold', 68, 'How bright an edge must be to halate'),
+      slider('radius', 'Radius', 32, 'How far the glow reaches past the edge'),
+      { key: 'tint', label: 'Colour', type: 'color', default: '#ff3d14' },
+    ],
+  },
+  {
+    kind: 'rays',
+    name: 'God Rays',
+    description: 'Shafts of light through haze',
+    amount: 60,
+    light: true,
+    params: { x: 0.5, y: 0.1, follow: 0, threshold: 62, length: 60, haze: 25, tint: '#fff1d6' },
+    controls: [
+      lightAt(0.5, 0.1),
+      follow,
+      slider('threshold', 'Threshold', 62, 'Which bright parts cast rays'),
+      slider('length', 'Length', 60),
+      slider('haze', 'Haze', 25, 'Atmosphere around the light'),
+      { key: 'tint', label: 'Colour', type: 'color', default: '#fff1d6' },
+    ],
+  },
+  {
+    kind: 'flare',
+    name: 'Lens Flare',
+    description: 'A bright light catching the lens',
+    amount: 60,
+    light: true,
+    params: { x: 0.28, y: 0.26, follow: 0, style: 'classic', size: 50, ghosts: 60, tint: '#ffd9a8' },
+    controls: [
+      lightAt(0.28, 0.26),
+      follow,
+      {
+        key: 'style',
+        label: 'Lens',
+        type: 'select',
+        default: 'classic',
+        options: [
+          { value: 'classic', label: 'Classic' },
+          { value: 'anamorphic', label: 'Anamorphic' },
+          { value: 'star', label: 'Starburst' },
+        ],
+      },
+      slider('size', 'Size', 50),
+      slider('ghosts', 'Reflections', 60, 'The rings and discs the lens throws across the frame'),
+      { key: 'tint', label: 'Colour', type: 'color', default: '#ffd9a8' },
+    ],
+  },
+  {
+    kind: 'leak',
+    name: 'Light Leak',
+    description: 'Light spilling onto the film',
+    amount: 55,
+    light: true,
+    params: { style: 'burst', color: '#ff8a3d', color2: '#ff3d7f', speed: 40, angle: 30, seed: 1 },
+    controls: [
+      {
+        key: 'style',
+        label: 'Style',
+        type: 'select',
+        default: 'drift',
+        options: [
+          { value: 'drift', label: 'Drifting glow' },
+          { value: 'burst', label: 'Burst' },
+          { value: 'streak', label: 'Streaks' },
+          { value: 'edge', label: 'Edge burn' },
+          { value: 'prism', label: 'Prism' },
+        ],
+      },
+      { key: 'color', label: 'Colour', type: 'color', default: '#ff9646' },
+      { key: 'color2', label: 'Second colour', type: 'color', default: '#ff4678' },
+      slider('speed', 'Speed', 40),
+      slider('angle', 'Direction', 30, 'Where the light comes from', 0, 360, '°'),
+      slider('seed', 'Variation', 1, 'A different leak with the same settings'),
+    ],
+  },
+  {
+    kind: 'relight',
+    name: 'Relight',
+    description: 'Add a light, change where it falls',
+    amount: 60,
+    light: true,
+    params: { x: 0.25, y: 0.3, height: 45, reach: 55, ambient: 75, soft: 40, shine: 20, color: '#fff0dc' },
+    controls: [
+      lightAt(0.25, 0.3),
+      slider('height', 'Height', 45, 'Low rakes across the surface; high lights it from the front'),
+      slider('reach', 'Reach', 55, 'How far the light carries'),
+      slider('ambient', 'Existing light', 75, 'Lower it to let the new light take over'),
+      slider('soft', 'Softness', 40, 'Wraps the light around shapes'),
+      slider('shine', 'Shine', 20, 'Highlights where the light catches'),
+      { key: 'color', label: 'Colour', type: 'color', default: '#fff0dc' },
+    ],
+  },
+  {
+    kind: 'particles',
+    name: 'Particles',
+    description: 'Dust, snow, rain, embers, bokeh…',
+    amount: 60,
+    light: true,
+    params: { style: 'dust', size: 40, speed: 35, wind: 15, depth: 60, light: 0, color: '#ffffff', seed: 1 },
+    controls: [
+      {
+        key: 'style',
+        label: 'Kind',
+        type: 'select',
+        default: 'dust',
+        options: [
+          { value: 'dust', label: 'Dust in the air' },
+          { value: 'snow', label: 'Snow' },
+          { value: 'rain', label: 'Rain' },
+          { value: 'embers', label: 'Embers' },
+          { value: 'bokeh', label: 'Bokeh' },
+          { value: 'sparkles', label: 'Sparkles' },
+          { value: 'confetti', label: 'Confetti' },
+        ],
+      },
+      slider('size', 'Size', 40),
+      slider('speed', 'Speed', 35),
+      slider('wind', 'Wind', 15, 'Sideways drift — below 0 blows left', -100, 100),
+      slider('depth', 'Depth', 60, 'Layers near and far, moving at their own speeds'),
+      { key: 'light', label: 'Catch light', type: 'switch', default: 0, hint: 'Shows only where the shot is lit, like dust in a sunbeam' },
+      { key: 'color', label: 'Colour', type: 'color', default: '#ffffff', hint: 'Tints them (confetti keeps its colours)' },
+      slider('seed', 'Variation', 1, 'A different scatter with the same settings'),
+    ],
+  },
+  {
+    kind: 'vignette',
+    name: 'Vignette',
+    description: 'Darken or lighten the edges',
+    amount: 50,
+    light: true,
+    params: { size: 55, feather: 55, roundness: 60, x: 0.5, y: 0.5, color: '#000000' },
+    controls: [
+      slider('size', 'Size', 55, 'How much of the middle stays clear'),
+      slider('feather', 'Feather', 55),
+      slider('roundness', 'Roundness', 60, '0 follows the frame’s corners, 100 is a circle'),
+      { key: 'x', keyY: 'y', label: 'Centre', type: 'point', default: [0.5, 0.5], min: 0, max: 1, hint: 'Drag to move the clear middle' },
+      { key: 'color', label: 'Colour', type: 'color', default: '#000000', hint: 'Black darkens the edges, white lightens them' },
+    ],
+  },
   { kind: 'grain', name: 'Film Grain', description: 'Organic 16mm texture', amount: 40 },
   { kind: 'mono', name: 'Monochrome', description: 'Rich black & white', amount: 100 },
   { kind: 'shake', name: 'Camera Shake', description: 'Handheld energy', amount: 35 },
   { kind: 'pulse', name: 'Zoom Pulse', description: 'Beat-synced punch-in', amount: 40 },
-  { kind: 'leak', name: 'Light Leak', description: 'Warm drifting flare', amount: 55 },
   { kind: 'rgb', name: 'RGB Split', description: 'Chromatic glitch offset', amount: 30 },
   { kind: 'sharpen', name: 'Sharpen', description: 'Crisp up soft footage', amount: 40 },
   { kind: 'chromaKey', name: 'Chroma Key', description: 'Remove a green or blue screen', amount: 100, params: { color: '#00d84a', tolerance: 32, softness: 18, spill: 60 } },
@@ -85,6 +282,53 @@ export const EFFECTS: { kind: EffectKind; name: string; description: string; amo
 ]
 
 export const is3dEffect = (kind: EffectKind) => EFFECTS.some((e) => e.kind === kind && e.is3d)
+
+/** What an effect does when it has no `key` param (see EffectControl). */
+function controlDefault(kind: EffectKind, key: string): number | string | undefined {
+  for (const c of EFFECTS.find((e) => e.kind === kind)?.controls ?? []) {
+    if (c.key === key) return c.type === 'point' ? c.default[0] : c.default
+    if (c.type === 'point' && c.keyY === key) return c.default[1]
+  }
+  return undefined
+}
+
+/** An effect's setting as a number: its param, else what the effect does without one. */
+export function fxNumber(fx: Pick<Effect, 'kind' | 'params'>, key: string, fallback = 0): number {
+  const v = fx.params?.[key]
+  if (typeof v === 'number' && Number.isFinite(v)) return v
+  const d = controlDefault(fx.kind, key)
+  return typeof d === 'number' ? d : fallback
+}
+
+/** An effect's setting as text (a colour, a style): its param, else what the effect does without one. */
+export function fxString(fx: Pick<Effect, 'kind' | 'params'>, key: string, fallback = ''): string {
+  const v = fx.params?.[key]
+  if (typeof v === 'string' && v) return v
+  const d = controlDefault(fx.kind, key)
+  return typeof d === 'string' ? d : fallback
+}
+
+function describeControl(c: EffectControl) {
+  switch (c.type) {
+    case 'slider':
+      return `${c.key} ${c.min}–${c.max}`
+    case 'color':
+      return `${c.key} "#rrggbb"`
+    case 'select':
+      return `${c.key}: ${c.options.map((o) => o.value).join(' | ')}`
+    case 'switch':
+      return `${c.key} 0 | 1`
+    case 'point':
+      return `${c.key}, ${c.keyY} (fractions of the frame, ${c.min}–${c.max})`
+  }
+}
+
+/** The settings each effect takes, in words: the AI's reference (in effect_add's description). */
+export function effectParamsDoc() {
+  return EFFECTS.filter((e) => e.controls?.length)
+    .map((e) => `${e.kind} { ${e.controls!.map(describeControl).join(', ')} }`)
+    .join('; ')
+}
 
 // ─── Animations ──────────────────────────────────────────────────────────
 

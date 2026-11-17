@@ -28,6 +28,8 @@ Short-form lives or dies in the first 1–2 seconds and on rhythm. Edit for a vi
   - land the hook's last word, reveals and transitions on beats.
 - **Use punch-ins with intent:** in on emphasis, out on context (clip_animate `punch` at a beat, or a scaled cut). Hard cuts beat animated zooms. Use speed ramps sparingly, on action.
 - **Keep transitions mostly hard cuts.** A whip, push or match cut at most once or twice per video.
+  - When a cut needs one, `smart_transition` reads the two shots: a whip pan that carries the camera's own motion on, a morph between shots framed alike, a zoom from one subject into the next, or a colour match between shots that differ in colour — timed so the shots swap on the beat.
+  - For a montage or a B-roll run, `auto_transitions` chooses one per cut (it says why for each); check a few with get_frame and swap any that fight the edit.
 
 ## Captions
 

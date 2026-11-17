@@ -19,6 +19,10 @@ import { deleteRenders, renderPreviews } from '@/engine/render-cache'
 import { analyzeBeats, beatsOf, cutToBeats } from '@/project/beats'
 import { onSegmentProgress, type MatteProgress, type Subject } from '@/project/segment'
 import { cutOutSubject, textBehindSubject } from '@/project/subject'
+import { autoColor, matchColor } from '@/project/color-actions'
+import { depthMap, onDepthProgress, relightClip } from '@/project/depth'
+import { autoTransitions } from '@/project/transition-actions'
+import { TRANSITIONS } from '@/editor/presets'
 import { addCaptions, untranscribed } from '@/editor/smart'
 import type { CaptionStyle } from '@/editor/subtitles'
 import { ensureTranscripts } from '@/project/transcribe'
@@ -26,14 +30,18 @@ import { ensureTranscripts } from '@/project/transcribe'
 const ui = () => useUI.getState()
 
 /**
- * Runs a subject-matte job with a progress toast (the model's one-time
- * download included) and a Cancel button.
+ * Runs an on-device model job (subject mattes, depth maps) with a progress
+ * toast (the model's one-time download included) and a Cancel button.
  */
-async function withMatteProgress<T>(title: string, run: (opts: { onProgress: (p: MatteProgress) => void; signal: AbortSignal }) => Promise<T>) {
+async function withMatteProgress<T>(
+  title: string,
+  run: (opts: { onProgress: (p: MatteProgress) => void; signal: AbortSignal }) => Promise<T>,
+  listen: typeof onSegmentProgress | typeof onDepthProgress = onSegmentProgress,
+) {
   const ctl = new AbortController()
   const id = toast.loading(title, { action: { label: 'Cancel', onClick: () => ctl.abort() }, duration: Infinity })
   const show = (description: string) => toast.loading(title, { id, description, action: { label: 'Cancel', onClick: () => ctl.abort() }, duration: Infinity })
-  const off = onSegmentProgress((m) => {
+  const off = listen((m) => {
     if (m.type === 'progress' && m.status === 'progress' && m.total) show(`Downloading the model (once) — ${Math.round((m.loaded ?? 0) / 1048576)} of ${Math.round(m.total / 1048576)} MB`)
     else if (m.type === 'ready') show(`Model ready (${m.device === 'webgpu' ? 'GPU' : 'CPU'})`)
   })
@@ -342,6 +350,72 @@ export const actions = {
   /** Cuts a clip down to its subject, or (invert) removes the subject. */
   async cutOutSubject(clipId: string, subject: Subject = 'person', invert = false) {
     await withMatteProgress(invert ? 'Removing the subject…' : 'Cutting out the subject…', (o) => cutOutSubject(clipId, { ...o, subject, invert }))
+  },
+
+  /** Makes a clip's depth map on this computer, so Relight follows the shapes in the shot. */
+  async makeDepthMap(clipId: string) {
+    const clip = getProject().clips[clipId]
+    if (!clip) return
+    await withMatteProgress(
+      'Making the depth map…',
+      async (o) => {
+        const depth = await depthMap(clip, o)
+        ok(dispatch('clip.update', { ids: [clipId], patch: { depth } }, { label: 'Depth map' }))
+      },
+      onDepthProgress,
+    )
+  },
+
+  /** Relights a clip (the selection, or the clip under the playhead): its depth map, then a new light. */
+  async relight(clipId?: string) {
+    const id = clipId ?? targetClips(['video', 'image'])[0]?.id
+    if (!id) return void toast('Select a video or image clip to relight')
+    await withMatteProgress('Relighting…', (o) => relightClip(id, o), onDepthProgress)
+  },
+
+  /** Reads every cut without a transition and gives it the smart transition that suits it, timed to the music. */
+  async autoTransitions() {
+    const ctl = new AbortController()
+    const cancel = { label: 'Cancel', onClick: () => ctl.abort() }
+    const id = toast.loading('Reading the cuts…', { action: cancel, duration: Infinity })
+    try {
+      const res = await autoTransitions({ signal: ctl.signal, onProgress: (done, total) => toast.loading('Reading the cuts…', { id, description: `${done} of ${total}`, action: cancel, duration: Infinity }) })
+      if (!res.placed.length) {
+        toast(res.skipped ? 'Every cut already has a transition' : 'No cuts to put transitions on', { id, description: res.skipped ? undefined : 'Put clips next to each other on a track first.', action: undefined, duration: 3000 })
+        return
+      }
+      const kinds = [...new Set(res.placed.map((p) => TRANSITIONS.find((t) => t.kind === p.kind)?.name ?? p.kind))].join(', ')
+      const onBeat = res.placed.filter((p) => p.beat !== undefined).length
+      toast.success(`Transitions on ${plural(res.placed.length, 'cut')}`, { id, description: `${kinds}${onBeat ? ` · ${onBeat} on the beat` : ''}`, action: undefined, duration: 4000 })
+    } catch (err) {
+      if (ctl.signal.aborted) toast('Stopped', { id, description: undefined, action: undefined, duration: 2000 })
+      else toast.error('Couldn’t choose transitions', { id, description: err instanceof Error ? err.message : String(err), action: undefined, duration: 6000 })
+    }
+  },
+
+  /** Automatic white balance and levels for clips (the selection, or the clip under the playhead). */
+  async autoColor(clipIds?: string[]) {
+    const ids = clipIds ?? targetClips(['video', 'image']).map((c) => c.id)
+    if (!ids.length) return void toast('Select a video or image clip to correct')
+    const id = toast.loading('Measuring the footage…')
+    try {
+      await autoColor(ids)
+      toast.success(ids.length > 1 ? `Corrected ${plural(ids.length, 'clip')}` : 'Colour corrected', { id, duration: 2500 })
+    } catch (err) {
+      toast.error('Couldn’t correct the colour', { id, description: err instanceof Error ? err.message : String(err) })
+    }
+  },
+
+  /** Matches clips to a reference clip: its tones and colour (and, with copyLook, its grade). */
+  async matchColor(clipIds: string[], refId: string, copyLook = false) {
+    const id = toast.loading('Matching the colour…')
+    try {
+      const res = await matchColor(clipIds, refId, { copyLook })
+      const gain = res.length ? Math.round((1 - res.reduce((s, r) => s + r.after / Math.max(1e-6, r.before), 0) / res.length) * 100) : 0
+      toast.success(res.length > 1 ? `Matched ${plural(res.length, 'clip')}` : 'Matched', { id, description: gain > 0 ? `About ${gain}% closer to the reference` : undefined, duration: 3000 })
+    } catch (err) {
+      toast.error('Couldn’t match the colour', { id, description: err instanceof Error ? err.message : String(err) })
+    }
   },
 
   /** Finds a music clip's beat (tempo, beats and downbeats); its waveform then shows them and cuts snap to them. */

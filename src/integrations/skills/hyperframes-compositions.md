@@ -7,6 +7,8 @@ description: Use when writing a custom HyperFrames composition (render_hyperfram
 
 render_hyperframes_html renders your HTML page frame by frame into a transparent clip. Follow the motion-design-craft skill for taste, and motion-graphic-styles when the piece has a named look. This skill covers mechanics.
 
+Check render_motion_graphic first: lower thirds, title cards, kinetic type, stat counters, pull quotes, chapter markers, particle titles and bar, line and donut charts are crafted templates already. Write your own page for anything else.
+
 ## The page
 
 ```html
@@ -99,6 +101,7 @@ Techniques that read as crafted:
   ```
 
   `draw(t)` works everything out from `t` alone: closed-form motion, particles from seeded start values, no state kept between calls.
+- **Setup that has to load first.** When drawing needs something that loads (a font to sample text from, an image to read), register its promise with the runtime: `window.__hf = window.__hf || {}; window.__hf.buildReady = { ...window.__hf.buildReady, text: promise }`. No frame is captured until it settles; when it does, draw the current time again.
 - **Stepped time.** For hand-made and retro looks, hold motion on a lower frame rate: `ease: "steps(12)"` on a 1 s tween, or draw from `Math.floor(t * 12) / 12`. Key per-drawing jitter to that stepped frame number.
 - **Smear, not blur.** Each frame is one sharp capture; there is no motion blur. On a fast move, stretch the shape along its path for 1–2 frames.
 - **Grain against banding.** Large soft gradients band. Lay 3–5% noise over them (an `feTurbulence` rect or a small tiled noise canvas).

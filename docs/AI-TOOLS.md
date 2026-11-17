@@ -1,6 +1,6 @@
 # Lumen AI tools
 
-Every AI that works in Lumen — the Copilot's API models, your own Claude Code or Codex, and any agent connected to Lumen's MCP server — uses this same set of **133 tools**. This page is generated from the tool registry ([`src/integrations/agent-tools.ts`](../src/integrations/agent-tools.ts) and [`src/integrations/tools/`](../src/integrations/tools)).
+Every AI that works in Lumen — the Copilot's API models, your own Claude Code or Codex, and any agent connected to Lumen's MCP server — uses this same set of **157 tools**. This page is generated from the tool registry ([`src/integrations/agent-tools.ts`](../src/integrations/agent-tools.ts) and [`src/integrations/tools/`](../src/integrations/tools)).
 
 - **Times:** the helper tools take seconds; editor commands take integer frames at the project's fps (see `get_project`).
 - **Pictures:** `get_frame`, `get_contact_sheet`, `get_media_frames` and `get_editor_screenshot` return an image block along with JSON — over MCP as `image` content, and to the Copilot's models as real images.
@@ -14,12 +14,13 @@ Every AI that works in Lumen — the Copilot's API models, your own Claude Code 
 - [See](#see) — 4 tools
 - [Hear and read](#hear-and-read) — 8 tools
 - [Act](#act) — 11 tools
-- [Smart edits](#smart-edits) — 9 tools
-- [Generate and import](#generate-and-import) — 18 tools
+- [Smart edits](#smart-edits) — 17 tools
+- [Plan and style](#plan-and-style) — 6 tools
+- [Generate and import](#generate-and-import) — 22 tools
 - [Timelines and footage](#timelines-and-footage) — 8 tools
 - [Record](#record) — 9 tools
 - [Web, files and skills](#web-files-and-skills) — 8 tools
-- [Editor commands](#editor-commands) — 58 tools
+- [Editor commands](#editor-commands) — 64 tools
 
 ## See
 
@@ -97,7 +98,7 @@ Search the media library by name, tag or kind — and, for transcribed media, by
 
 | Parameter | Type | Description |
 | --- | --- | --- |
-| `query` | string | Words to look for in names, tags, file paths and transcripts |
+| `query` | string | Words to look for in names, tags, descriptions, file paths and transcripts |
 | `kind` | `video` · `audio` · `image` | Only this kind |
 | `tag` | string | Only media with this tag |
 | `unused` | boolean | Only media not on the timeline yet |
@@ -273,7 +274,7 @@ Transcribe an audio or video asset and attach the timed transcript to it (powers
 
 ### `find_pauses`
 
-Measure the long pauses in the speech on the timeline (from the audio itself, or transcripts). Returns the timeline spans remove_pauses would cut, in seconds (only where every speaker is quiet), and which clips were analysed.
+Measure the long pauses in the speech on the timeline (from the audio itself, or transcripts). Returns the timeline spans remove_pauses would cut, in seconds (only where every speaker is quiet, and never through a word the transcript has there), and which clips were analysed.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
@@ -282,7 +283,7 @@ Measure the long pauses in the speech on the timeline (from the audio itself, or
 
 ### `remove_pauses`
 
-Cut long pauses out of the speech (keeping a little breath around each line). The whole timeline closes up around each cut, so captions, B-roll, effects and markers stay in sync; music beds play on through the joins. Only cuts where every speaker is quiet. One undo step.
+Cut long pauses out of the speech (keeping a little breath around each line). The whole timeline closes up around each cut, so captions, B-roll, effects and markers stay in sync; music beds play on through the joins. Only cuts where every speaker is quiet, and never through a word the transcript has inside a pause (words_kept says which). One undo step.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
@@ -313,12 +314,13 @@ Lower music clips under speech with volume keyframes (short ramps, merged phrase
 
 ### `reframe`
 
-Change the canvas size (e.g. 1080x1920 for vertical) and reframe: footage that filled the old frame is scaled to fill the new one, titles are moved and resized to match.
+Change the canvas size (e.g. 1080x1920 for vertical) and reframe: footage that filled the old frame is scaled to fill the new one and moved to keep its subject in view — from the shot’s subject matte when it has one (cut_out_subject), otherwise from where the detail, faces and colour are — and titles are moved and resized to match. One undo step. Check the result with get_contact_sheet; nudge a shot with clip_update transform.x if its subject sits wrong.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
 | `width` **(required)** | number | Canvas width in pixels |
 | `height` **(required)** | number | Canvas height in pixels |
+| `follow_subject` | boolean | Keep each shot’s subject in view (default true); false keeps shots centred |
 
 ### `detect_beats`
 
@@ -352,6 +354,162 @@ Cut the subject out of a video or image clip with on-device AI segmentation (the
 | `subject` | `person` · `any` | What to cut out (default person) |
 | `text` | string | text-behind: the words of a new title (1–3 words read best) |
 | `title_id` | string | text-behind: put this existing title behind the subject instead of adding one |
+
+### `auto_color`
+
+Colour-correct video or image clips automatically, each on its own: a white balance that takes the light’s colour cast out (gains per channel in linear light, so whites go white) and levels that set black and white points with a gentle midtone. Measured from the footage as it came in, before any grade; written to color.balance and color.levels (the correction stage, which runs before the creative grade). One undo step. Do this first, then grade the look on top (clip_update color: exposure, contrast, wheels, curves, hsl, lut). Fine-tune with clip_update color.balance { r, g, b } or color.levels { black, white, gamma }; null removes either. It is careful with mood (a sunset stays warm); for a deliberately coloured scene, use white_balance false.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `clip_ids` **(required)** | string[] | Video or image clips to correct |
+| `white_balance` | boolean | Take out the colour cast (default true) |
+| `levels` | boolean | Set the black and white points (default true) |
+
+### `match_color`
+
+Match clips to a reference shot so they cut together: each clip’s footage is lined up with how the reference looks after its own correction — shadows, midtones, highlights and colour cast — as per-channel curves in color.match (the correction stage). The match replaces each clip’s own balance and levels. copy_look true also copies the reference’s creative grade (exposure, contrast, saturation, temperature, tint, vignette, wheels, curves, HSL, LUT), for shots of one scene. One undo step. Returns how far each clip was from the reference before and after (0 = identical tone and colour). Correct the reference first (auto_color) so the others follow a good shot.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `clip_ids` **(required)** | string[] | Clips to match |
+| `reference_id` **(required)** | string | The clip to match them to |
+| `copy_look` | boolean | Also copy the reference’s creative grade (default false) |
+
+### `relight_clip`
+
+Relight a video or image clip: add a point light, or change where the light comes from. Lumen first makes the clip’s depth map on this computer (Depth Anything, downloaded once; about the clip’s length on a GPU, several times that on the CPU; reused afterwards), then adds the Relight effect shaped by it — surfaces turn toward or away from the light and near things catch more of it. One undo step. x, y place the light as fractions of the frame (beyond 0..1 is off the frame); height 0–100 (low rakes across surfaces, high lights from the front); ambient 0–100 is how much of the existing light stays (lower it to make the new light the key light — e.g. 45 to move the light from one side to the other); color is the light’s colour; amount 0–100 its strength. depth false skips the depth map (the light is shaped from the picture’s brightness — quicker, flatter). Adjust later with effect_update (params x, y, height, reach, ambient, soft, shine, color). Check with get_frame.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `clip_id` **(required)** | string | The video or image clip |
+| `x` | number | Light position across, fraction of the frame (default 0.25) |
+| `y` | number | Light position down, fraction of the frame (default 0.3) |
+| `height` | number | 0–100: low rakes across, high lights from the front (default 45) |
+| `ambient` | number | 0–100: how much of the existing light stays (default 75) |
+| `color` | string | The light’s colour, "#rrggbb" (default warm white) |
+| `amount` | number | 0–100: strength of the new light (default 60) |
+| `depth` | boolean | Make a depth map so the light follows the shapes (default true) |
+
+### `find_repeated_takes`
+
+Find repeated takes in the speech on the timeline. The transcript is split into sentences, and lines a voice said more than once are grouped: restart (a false start that stops and starts again), repeat (said twice word for word), similar (said again with small changes), stumble (words said twice in a row inside a sentence, e.g. “we can — we can do this”). Each group lists its takes (sentence ids, text, timeline seconds), the take to keep (1-based), why, and a confidence 0–1. sure (confidence ≥ 0.75) means cutting the other takes loses nothing; below that the takes differ, or the repetition looks deliberate (emphasis, a rhetorical triple, a call to action at the start and the end) — judge it yourself or ask, and keep both when unsure. A take that says something the others don’t is never the one suggested to go. Only wording is compared: the sentences list (ids, text, times) lets you find the same line said again in other words. Cut with remove_speech. Speech must be transcribed first (transcribe_media).
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `from_seconds` | number | Only takes from here on |
+| `to_seconds` | number | Only takes up to here |
+| `sentences` | boolean | Also list the sentences, for finding paraphrased repeats (default true) |
+
+### `remove_speech`
+
+Cut speech out of the timeline safely, as one undo step: takes of a repeated-take group (keep one: the others and the asides between them go), whole sentences by id, or timeline ranges in seconds. Cuts land in the gaps between words, never inside one, with a breath kept either side; a range that would split a word is moved to the nearest gap (and says so), and a cut through another voice is refused. Like remove_pauses, the whole timeline closes up — captions, B-roll, markers, effects and keyframes stay in sync; music beds play on through the joins. Returns each cut (what was removed, where the join landed and what is said right after it now), what was refused and why, and the repeats still left around the cuts. dry_run plans the cuts without changing anything.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `takes` | object[] | Groups from find_repeated_takes to resolve: keep is the take number to keep (1-based) |
+| `sentence_ids` | string[] | Sentences to cut whole (ids from find_repeated_takes) |
+| `ranges` | number[][] | Timeline stretches to cut, [from_seconds, to_seconds] each |
+| `sure_takes` | boolean | Also cut every group find_repeated_takes is sure of (confidence ≥ 0.75), keeping its suggested take |
+| `dry_run` | boolean | Only plan the cuts and report them |
+
+### `check_quality`
+
+Check the edit for problems before you call it done — run it after editing. Looks at the timeline (gaps and black under sound, offline media, clips running past their media, hidden or muted tracks), captions (overlapping, too short to read, staying on after their words, shown while nobody speaks), titles and captions against the frame and its title-safe area (measured where the compositor draws them), the rendered picture (black or frozen stretches, sampled from real frames), the sound (clipping, loudness against the target, sound that cuts off or jumps in at a cut, silence where the transcript has words) and the picture’s fit (small media blown up, letterboxing on the main track, a canvas the wrong shape for the footage). Each issue has its timeline time, a severity and a suggested fix; many carry a fix as commands to run with batch_edit (a fix that cuts time moves what follows it, so check again before running another one). Critical issues mean the edit isn’t finished: fix them, then check again. Rendering the picture and sound takes a few seconds per minute of video.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `from_seconds` | number | Only check from here |
+| `to_seconds` | number | Only check up to here |
+| `picture` | boolean | Render frames and titles to check them (default true) |
+| `sound` | boolean | Render the mix to check it (default true) |
+| `target_lufs` | number | Loudness to aim for (default −14, online video; −16 podcasts, −23 broadcast) |
+
+### `smart_transition`
+
+Put a smart transition on the cut before a clip. Lumen first reads the two shots at the cut — where each one's subject is, how the camera moves, how the outgoing frame lines up with the incoming one, how their colours differ — and the transition carries that across: morph (both frames warp along how their content lines up while they cross — best when the shots are framed alike), through (zoom into the outgoing shot’s subject and out of the incoming one’s), whip (a motion-blurred whip pan in the camera’s own direction — for moving shots), luma (the incoming shot appears through its brightest parts first), match (the incoming shot starts in the outgoing one’s colours and eases into its own — for shots that differ in colour). kind "auto" (default) picks the one that suits the cut and says why. Unless seconds or align is given, it is timed so the shots swap on a nearby beat of the music (centred on the cut, or starting or ending at it). One undo step. Check it with get_frame at the cut.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `clip_id` **(required)** | string | The clip after the cut |
+| `kind` | `auto` · `morph` · `through` · `whip` · `luma` · `match` | Which transition (default auto) |
+| `seconds` | number | Length (default: timed to a nearby beat, else the cut’s current length or 0.7 s) |
+| `align` | `before` · `center` · `after` | Where it sits on the cut: before ends at it, center straddles it, after starts at it |
+| `on_beat` | boolean | Time it so the shots swap on a nearby beat (default true) |
+
+### `auto_transitions`
+
+Choose a transition for every cut between picture clips on the open timeline (or between from_seconds and to_seconds): each cut is read and gets the smart transition that suits it — morph (both frames warp along how their content lines up while they cross — best when the shots are framed alike), through (zoom into the outgoing shot’s subject and out of the incoming one’s), whip (a motion-blurred whip pan in the camera’s own direction — for moving shots), luma (the incoming shot appears through its brightest parts first), match (the incoming shot starts in the outgoing one’s colours and eases into its own — for shots that differ in colour) — timed so the shots swap on the music's beat where there is one. Cuts that already have a transition keep it unless replace is true. One undo step. Returns each cut with the transition chosen and why. Use it for montages and B-roll sequences; a talking-head edit usually reads better with plain cuts.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `from_seconds` | number | Start of the stretch (default: the start) |
+| `to_seconds` | number | End of the stretch (default: the end) |
+| `replace` | boolean | Also replace transitions that are already there (default false) |
+| `on_beat` | boolean | Time them to the music’s beat (default true) |
+
+## Plan and style
+
+The storyboard a video is produced from, house styles and brand kits, and B-roll from the project's own media.
+
+### `get_storyboard`
+
+The storyboard — the plan this video is produced from: its title, brief and style, and every scene in order — number, id, title, status, treatment, target seconds and where it starts in the plan, script, transition in, needs, linked media, notes and, once produced, where it is on the timeline now (it follows its clips through later edits). With totals. Plan and change it with storyboard_update, storyboard_addScenes, storyboard_updateScene, storyboard_moveScene and storyboard_removeScenes.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `scene_id` | string | Only this scene |
+
+### `list_styles`
+
+The styles apply_style puts on a timeline. Each is more than a colour look: title typography (font, weight, case, tracking, size), where titles sit and how they move in and out, the caption style, the transition on cuts, the look, finishing effects and camera move on footage, pacing (shot lengths, cutting on the beat) and the render_motion_graphic settings that match. Also says which style the storyboard and the brand use.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `style_id` | `editorial` · `commercial` · `kinetic` · `infographic` · `cinematic` · `documentary` | Just this one |
+
+### `apply_style`
+
+Apply a style from list_styles as ONE undo step: titles take its typography, place and in/out animations; captions its caption style; cuts between shots its transition (or straight cuts); footage its look, finishing effects and camera move. To the whole open timeline, or just clip_ids or a storyboard scene’s clips. Effects and camera moves of a style applied before are swapped out; effects and motion added by hand are kept. A project with a brand keeps its typefaces and colours unless keep_brand is false; style_id "brand" applies the brand on its own style.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `style_id` **(required)** | `editorial` · `commercial` · `kinetic` · `infographic` · `cinematic` · `documentary` · `brand` | The style |
+| `clip_ids` | string[] | Only these clips (default: the whole open timeline) |
+| `scene_id` | string | Only the clips of this storyboard scene |
+| `include` | `titles` · `captions` · `transitions` · `footage`[] | Which parts (default all) |
+| `keep_brand` | boolean | Keep the project brand’s typefaces and colours (default true) |
+
+### `suggest_broll`
+
+Find B-roll already in the project for what is said — do this before generating anything new. Matches each sentence of the speech on the timeline (from_seconds / to_seconds), or of `text`, or of a storyboard scene’s script, against everything the project knows about its video and stills: names, tags, descriptions, file and folder names, generation prompts, cue sheets and transcripts — by word stems and related words, rare words counting most. Returns ranked candidates per sentence (score 0–1, the words that matched, where), a varied pick for each, and the moment to use when the match is in something said or cued in the media. Media with nothing to go on is listed as undescribed: look at it (get_media_frames), describe it (asset_update → description) and ask again. Generate only for sentences with no good candidate.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `text` | string | Sentences to match instead of the timeline’s speech (a script, a voice-over draft) |
+| `scene_id` | string | Match this storyboard scene’s script |
+| `from_seconds` | number | Timeline speech from here |
+| `to_seconds` | number | Timeline speech up to here |
+| `per_sentence` | integer | Candidates per sentence (1–10, default 3) |
+| `kind` | `video` · `image` | Only video or only stills |
+| `unused_only` | boolean | Only media that isn’t on the timeline yet |
+
+### `get_brand_kit`
+
+The brand: the project’s own (what apply_brand_kit gave it) and the brand kits kept in Lumen for every project — named colours, heading and body typefaces, logos (image files you can import), title and caption styles, look, motion rules (title animations, easing, transitions), the style it builds on and the corner logo. Use the brand’s fonts, colours and motion in every title, graphic and generated asset, so every scene and every project looks like the same brand.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `kit_id` | string | A kit (default: the active one) |
+
+### `apply_brand_kit`
+
+Apply a brand kit (get_brand_kit; default: the active one) to the project as ONE undo step: its fonts are embedded, its logos come in as media, the project gets the brand (brand_set) — then the open timeline, or clip_ids, takes its house style: titles its typefaces, colours, case and title motion; captions its caption style and accent; cuts its transition; footage its look, on top of the style it builds on; and with "logo" its logo goes in its corner. Everything stays editable.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `kit_id` | string | A kit (default: the active one) |
+| `clip_ids` | string[] | Only these clips (default: the whole open timeline) |
+| `include` | `titles` · `captions` · `transitions` · `footage` · `logo`[] | Which parts (default all) |
 
 ## Generate and import
 
@@ -424,11 +582,13 @@ Render a crafted HyperFrames motion graphic from a template and add it to the pr
 - counter: { value, prefix, suffix, decimals, label, accent, font }
 - quote: { text, author, accent, font }
 - chapter: { number, title, accent, font }
-Fonts: editorial (Fraunces), serif (Instrument Serif), display (Bricolage Grotesque), art (Syne), wide (Archivo), tech (Space Grotesk), sans (Geist), mono. Accent: pick from the footage or brand, not a default. bpm (the music’s tempo, from analyze_audio or detect_beats) lands changes on the beat. Leave duration out: it grows with the words so there’s time to read.
+- particle-title: { title (a "|" breaks lines), subtitle (revealed once the title has formed), style: "dust" (fine, soft — default) | "sparks" (bright, fast, short trails) | "embers" (warm, rising; burns away upward) | "digital" (square pixels moving in steps), direction: "left" | "right" | "below" | "everywhere" (where the particles come from; each style has its own default), color (the title), accent (a share of the particles), font, seed (an integer: another scatter, the same motion) } — thousands of particles sampled from the title’s own letterforms stream in, settle into crisp type, and scatter at the end. A hero moment, not a lower third.
+- chart: { kind: "bar" (default) | "line" | "donut", title, subtitle, data (label/value pairs: [{ label, value }], { label: value } or "Label: value" lines), prefix, suffix ("$", "%", "km"; taken from the data when written there), decimals, highlight (a label, or "max" | "min" | "last": picked out in the accent; a line chart calls its value out), orientation (bars: "vertical" | "horizontal"; chosen from the labels when left out), source, color, accent, font; donut: value (fills the ring, out of max — 100 unless given) and label, or leave value out to split the ring by data } — real numbers only: the scale, ticks and label fit are worked out from them.
+Fonts: editorial (Fraunces), serif (Instrument Serif), display (Bricolage Grotesque), art (Syne), wide (Archivo), tech (Space Grotesk), sans (Geist), mono. Accent: pick from the footage or brand, not a default. bpm (the music’s tempo, from analyze_audio or detect_beats) lands changes on the beat. Leave duration out: it grows with the words (and a chart’s data) so there’s time to read.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
-| `template` **(required)** | `lower-third` · `title-card` · `kinetic` · `counter` · `quote` · `chapter` | Template |
+| `template` **(required)** | `lower-third` · `title-card` · `kinetic` · `counter` · `quote` · `chapter` · `particle-title` · `chart` | Template |
 | `params` **(required)** | object | Template parameters (see description) |
 | `duration_seconds` | number | Clip length (default: long enough to read it) |
 | `place` | boolean | Put the finished clip on the timeline at the playhead (default true). |
@@ -578,6 +738,57 @@ Status of a render or generation job. Waits up to wait_seconds for it to finish.
 | --- | --- | --- |
 | `job_id` **(required)** | string | Job id |
 | `wait_seconds` | number | Seconds to wait for the render before returning (default 90, max 600; through Lumen’s MCP server at most 15). If it is still running, poll get_job. |
+
+### `comfyui_status`
+
+Whether the user’s own ComfyUI is reachable, and what it runs on: its address and version, the graphics cards with their memory (GB, total and free), how many runs it has going and waiting, and how many workflows are in Lumen’s ComfyUI library. ComfyUI runs on the user’s hardware, so its runs cost nothing — prefer it for heavy image and video work when it’s connected. When it isn’t reachable, error says what to do.
+
+_No parameters._
+
+### `comfyui_list_workflows`
+
+The ComfyUI workflows in Lumen’s library, each with what it lets you set — inputs: { node, input, role, label, value, min, max }, role being prompt, negative, text, seed, steps, cfg, denoise, width, height, frames, batch, fps, image, video or audio (positive and negative prompts are told apart by the sampler input they reach) — and what it makes (outputs: { node, kind } with kind image, video, audio, 3d, text, preview or file). comfyui_run_workflow takes these: its prompt, negative_prompt, seed, steps, cfg, denoise, width and height set every input of that role; inputs sets any one by node and input; media fills the image, video and audio inputs.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `workflow` | string | Only this workflow (id or name) |
+
+### `comfyui_run_workflow`
+
+Run one of the user’s ComfyUI workflows (see comfyui_list_workflows) on their ComfyUI and graphics card, and bring everything it saves — images, video, sound — into the project’s media; text it shows (captions, tags, analysis) comes back in text, and 3D models are saved on disk (files) for Blender or the like. Returns the new media ids (asset_ids).
+prompt and negative_prompt set the workflow’s prompts; the seed is new and random on every run unless you give one or keep_seed; steps, cfg, denoise, width and height set every input with that role; inputs sets any input by node id and input name.
+media fills image, video and audio inputs from the project: a media item (asset_id; time_seconds picks the frame of a video going into an image input), a clip on the timeline (clip_id: a video input gets the stretch of footage the clip uses where the loader can skip into a file, an image input gets the clip’s frame under the playhead), or a frame of the timeline as the export renders it (timeline_seconds; the default when an item names nothing else). Without node, an item goes into the workflow’s only input of its kind.
+place puts the results on the timeline one after another (default false). A run can take minutes: when it is still going after wait_seconds the answer says so with its job_id — check it with get_job; it still lands in the media (and on the timeline, when place is set). Errors from ComfyUI — a missing model, a custom node it lacks, the graphics card running out of memory — come back as they are, with what to do.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `workflow` **(required)** | string | Workflow id or name (from comfyui_list_workflows) |
+| `prompt` | string | Text for the workflow’s positive prompt(s) |
+| `negative_prompt` | string | Text for its negative prompt(s) |
+| `seed` | integer | Seed for every seed input (default: a new random one each run) |
+| `keep_seed` | boolean | Keep the seeds saved in the workflow instead |
+| `steps` | integer | Sampling steps |
+| `cfg` | number | CFG scale |
+| `denoise` | number | Denoise, 0–1 (how much an image-to-image or video-to-video run changes its input) |
+| `width` | integer | Width of what it makes, in pixels |
+| `height` | integer | Height of what it makes, in pixels |
+| `inputs` | object[] | Set any input by node id and input name (from comfyui_list_workflows); these win over the settings above |
+| `media` | object[] | Project media for the workflow’s image, video and audio inputs |
+| `output_nodes` | string[] | Keep only what these output nodes make (default: everything saved; previews only when nothing is) |
+| `name` | string | What to call the results in the media |
+| `place` | boolean | Also put the results on the timeline, one after another (default false) |
+| `at_seconds` | number | Where to place them (default: the playhead) |
+| `wait_seconds` | number | Seconds to wait for the run before answering (default 90, max 600; through Lumen’s MCP server at most 15) |
+
+### `comfyui_import_workflow`
+
+Add a ComfyUI workflow to Lumen’s library so comfyui_run_workflow can run it: its JSON — ComfyUI’s API format (Workflow › Export (API)) or its normal saved format, which Lumen converts using the connected ComfyUI’s node definitions — or a file on this computer (.json, or a .png ComfyUI saved: it carries its workflow). The user is asked first, since a workflow runs on their computer. Returns the workflow with what it lets you set.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `json` | string | The workflow’s JSON |
+| `path` | string | Or: the absolute path of a .json or .png file |
+| `name` | string | What to call it (default: the file’s name) |
 
 ## Timelines and footage
 
@@ -959,7 +1170,7 @@ Delete clips. With ripple, later clips on the same track shift left to close the
 
 ### `timeline_removeRange`
 
-Take a stretch of time out of the whole timeline (like Extract): clips inside it are removed, clips across it lose that stretch, and everything later — on every unlocked track, plus markers — moves left to close up. Clips listed in keepWhole (music beds, ambience) are not cut: they keep playing through the join and end earlier.
+Take a stretch of time out of the whole timeline (like Extract): clips inside it are removed, clips across it lose that stretch, and everything later — on every unlocked track, plus markers — moves left to close up. Clips listed in keepWhole (music beds, ambience) are not cut: they keep playing through the join and end earlier. It cuts exactly the frames given: to cut speech use remove_speech, which keeps words whole.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
@@ -986,7 +1197,7 @@ Duplicate clips; each copy is placed right after its original on the same track.
 
 ### `clip_setTransition`
 
-Set or clear the transition on the cut before this clip (from the previous clip into this one). align says where it sits on the cut: "after" (default) starts at the cut, over the start of this clip; "center" straddles the cut; "before" ends at the cut, over the end of the previous clip. Durations are in frames.
+Set or clear the transition on the cut before this clip (from the previous clip into this one). align says where it sits on the cut: "after" (default) starts at the cut, over the start of this clip; "center" straddles the cut; "before" ends at the cut, over the end of the previous clip. Durations are in frames. The smart kinds — morph, through, whip, luma, match — read the two shots: set them with smart_transition, which measures the cut first (set here without match, they use neutral settings).
 
 | Parameter | Type | Description |
 | --- | --- | --- |
@@ -1068,12 +1279,12 @@ Speed ramp: make a video or audio clip change speed smoothly over its length. `p
 
 ### `effect_add`
 
-Add an effect to clips (or update it if already present). Amount is 0–100. Keys make part of the picture transparent: chromaKey takes params { color: "#00ff00" (the screen colour), tolerance, softness, spill } and lumaKey takes { threshold, softness, invert: 0 keys out the dark, 1 the bright }, all 0–100.
+Add an effect to clips (or update it if already present). Amount is 0–100 (for light effects, their strength). Keys make part of the picture transparent: chromaKey takes params { color: "#00ff00" (the screen colour), tolerance, softness, spill } and lumaKey takes { threshold, softness, invert: 0 keys out the dark, 1 the bright }, all 0–100. Light and lens effects run on the GPU in this order — relight, rays, glow, halation, flare, particles, leak, vignette — and take these params (leave any out for its default): glow { threshold 0–100, radius 0–100, tint "#rrggbb" }; halation { threshold 0–100, radius 0–100, tint "#rrggbb" }; rays { x, y (fractions of the frame, -0.5–1.5), follow 0 | 1, threshold 0–100, length 0–100, haze 0–100, tint "#rrggbb" }; flare { x, y (fractions of the frame, -0.5–1.5), follow 0 | 1, style: classic | anamorphic | star, size 0–100, ghosts 0–100, tint "#rrggbb" }; leak { style: drift | burst | streak | edge | prism, color "#rrggbb", color2 "#rrggbb", speed 0–100, angle 0–360, seed 0–100 }; relight { x, y (fractions of the frame, -0.5–1.5), height 0–100, reach 0–100, ambient 0–100, soft 0–100, shine 0–100, color "#rrggbb" }; particles { style: dust | snow | rain | embers | bokeh | sparkles | confetti, size 0–100, speed 0–100, wind -100–100, depth 0–100, light 0 | 1, color "#rrggbb", seed 0–100 }; vignette { size 0–100, feather 0–100, roundness 0–100, x, y (fractions of the frame, 0–1), color "#rrggbb" }. glow is bloom: threshold is how bright a part must be to glow. halation is film's red glow just outside bright edges. rays are god rays: shafts from the light through bright parts (a light off the frame, e.g. y -0.2, shines in from above). flare is a lens flare at the light. follow 1 moves the light with the brightest part of the shot. relight adds a point light shaped by the clip's depth map (relight_clip makes one; without it the light is shaped from the picture's brightness): lower ambient to let the new light take over; a low height rakes across surfaces. A vignette with color "#ffffff" lightens the edges. particles draws dust, snow, rain, embers, bokeh, sparkles or confetti in layers that move at their own speeds (amount is how many and how bright; light 1 shows dust only where the shot is lit); on an adjustment layer it falls over everything below.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
 | `ids` **(required)** | string[] |  |
-| `kind` **(required)** | `blur` · `glow` · `vignette` · `grain` · `mono` · `shake` · `pulse` · `leak` · `rgb` · `sharpen` · `chromaKey` · `lumaKey` · `tilt3d` · `curve3d` · `wave3d` · `cube3d` · `mirror3d` |  |
+| `kind` **(required)** | `blur` · `glow` · `vignette` · `grain` · `mono` · `shake` · `pulse` · `leak` · `rgb` · `sharpen` · `halation` · `rays` · `flare` · `relight` · `particles` · `chromaKey` · `lumaKey` · `tilt3d` · `curve3d` · `wave3d` · `cube3d` · `mirror3d` |  |
 | `amount` | number | (≥ 0, ≤ 100) |
 | `params` | object |  |
 
@@ -1223,7 +1434,7 @@ Mix a track (its id) or the master bus ("master"): fader volume in dB (-60 to +1
 
 | Parameter | Type | Description |
 | --- | --- | --- |
-| `target` **(required)** | string or string |  |
+| `target` **(required)** | `master` or string |  |
 | `patch` **(required)** | object |  |
 
 ### `timeline_setRange`
@@ -1297,7 +1508,7 @@ Embed a font file (base64) in the project so titles can use it as `custom:<id>`.
 
 ### `font_remove`
 
-Remove a font from the project; titles using it go back to the default typeface.
+Remove a font from the project; titles (and the project brand) using it go back to the default typeface.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
@@ -1313,7 +1524,7 @@ Register a media asset in the project library.
 
 ### `asset_update`
 
-Rename or favorite an asset, attach its transcript (timed phrases in seconds) or its cues (what happens in it and when: { at, kind, label }), or point it at a new file (relink: source, duration, size, audio).
+Rename or favorite an asset, tag it, describe what it shows (description: subject, place, action, shot — suggest_broll finds media by it; "" clears it), attach its transcript (timed phrases in seconds, optionally with each word’s timing in `words`) or its cues (what happens in it and when: { at, kind, label }), or point it at a new file (relink: source, duration, size, audio).
 
 | Parameter | Type | Description |
 | --- | --- | --- |
@@ -1413,6 +1624,59 @@ Cut to another camera angle of a multicam clip at a frame: the clip is split the
 | `frame` **(required)** | integer | (≥ 0) |
 | `angle` **(required)** | integer | (≥ 1, ≤ 16) |
 | `clipId` | string |  |
+
+### `storyboard_update`
+
+Set up the storyboard — the plan the video is produced from — or change its title, brief (what the video is for, who it’s for, the tone) or style (the style every scene keeps: an id from list_styles, or "brand"; null clears it). Makes the storyboard if the project has none. Add scenes with storyboard_addScenes; get_storyboard reads it all.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `title` | string |  |
+| `brief` | string |  |
+| `style` | string or null |  |
+
+### `storyboard_addScenes`
+
+Add scenes to the storyboard, in order, at `index` (default: after the last). Each scene: title; script (the narration, dialogue or words on screen); treatment — footage, broll, kinetic-type, infographic, generated-image, generated-video, 3d, motion-graphic or other; seconds (target length, default 5); transition into it ({ kind, seconds } — kinds as clip_setTransition takes them — or null for a straight cut); needs (what it still needs: shots, media to generate); assetIds (project media it uses); status (planned, in-progress, done); notes. Returns the new scene ids.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `scenes` **(required)** | object[] |  |
+| `index` | integer | (≥ 0) |
+
+### `storyboard_updateScene`
+
+Change a storyboard scene: title, script, treatment, seconds, transition, needs, assetIds (replaces the list), status, notes — and produced, where it was made: { clipIds } (the clips that make it; the stretch follows them through later edits) or { from, to } in frames, on timelineId (default: the open timeline); null clears it. Scene ids are in get_storyboard.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `id` **(required)** | string |  |
+| `patch` **(required)** | object |  |
+
+### `storyboard_moveScene`
+
+Move a storyboard scene to another place in the order (index 0 is the first scene).
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `id` **(required)** | string |  |
+| `index` **(required)** | integer | (≥ 0) |
+
+### `storyboard_removeScenes`
+
+Remove scenes from the storyboard. Only the plan changes: clips a scene was produced into stay on the timeline.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `ids` **(required)** | string[] |  |
+
+### `brand_set`
+
+Give the project a brand — identity (named colours, heading and body fonts, logos) and house style (titles, captions, look, motion rules, base style) — or null to take it away. Fonts are built-in ids or custom:<id> fonts already in the project; logos are media ids. apply_brand_kit does this from a brand kit (embedding its fonts and logos too); get_brand_kit reads it. Clips keep what they look like until a style or the brand is applied to them.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `brand` **(required)** | object or null |  |
 
 ### `project_update`
 

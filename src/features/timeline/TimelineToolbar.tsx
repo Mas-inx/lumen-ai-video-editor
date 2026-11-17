@@ -11,7 +11,9 @@ import { formatDuration } from '@/lib/time'
 import { suggestFor, type Suggestion } from '@/editor/smart'
 import { useCopilot } from '@/features/copilot/store'
 import { actions } from '@/features/shell/actions'
+import { EditCheck } from './EditCheck'
 import { RenderMenu } from './RenderMenu'
+import { TakesReview } from './TakesReview'
 import { TimelineSwitcher } from './TimelineSwitcher'
 
 export function TimelineToolbar() {
@@ -68,6 +70,8 @@ export function TimelineToolbar() {
         <CopilotHint />
       </div>
 
+      <TakesReview />
+      <EditCheck />
       <RenderMenu />
       <div className="mx-1 h-4 w-px bg-line-2" />
 

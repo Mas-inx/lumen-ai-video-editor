@@ -44,6 +44,7 @@ Add an entry to the right file in `src/integrations/tools/`:
 - When something's wrong, throw an error that says how to recover (the kit's `clipById` / `assetById` already list valid ids).
 - Group multi-step edits in `useEditor.getState().transaction(...)`, and roll back with `savepoint()` / `rollbackTo()` if a step fails.
 - Cover it in [`src/integrations/tools/tools.test.ts`](src/integrations/tools/tools.test.ts).
+- Rewrite [`docs/AI-TOOLS.md`](docs/AI-TOOLS.md) from the registry: `LUMEN_WRITE_DOCS=1 npx vitest run src/integrations/tools/docs.test.ts` (a test fails while the page is out of date). A tool the page doesn't list yet goes in the section `SECTION_OF` names in that file.
 
 ## Tests
 

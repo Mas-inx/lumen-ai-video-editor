@@ -4,6 +4,7 @@
  * are project pixels, so 2D and 3D layers line up perfectly.
  */
 import * as THREE from 'three'
+import { onScratchReleased, scratchCanvas as pooledCanvas } from '../scratch'
 
 export interface Stage {
   renderer: THREE.WebGLRenderer
@@ -86,15 +87,15 @@ export function cropUV(geometry: THREE.BufferGeometry, u0: number, v0: number, u
 
 export const rad = (deg: number) => (deg * Math.PI) / 180
 
-/** A reusable 2D scratch canvas keyed by name. */
-const scratch = new Map<string, HTMLCanvasElement>()
+// A scratch canvas that's let go takes its texture with it.
+onScratchReleased((canvas) => {
+  textures.get(canvas)?.tex.dispose()
+  textures.delete(canvas)
+})
+
+/** A reusable 2D scratch canvas keyed by name, cleared (let go once frames stop needing it: see scratch.ts). */
 export function scratchCanvas(name: string, w: number, h: number) {
-  let c = scratch.get(name)
-  if (!c) scratch.set(name, (c = document.createElement('canvas')))
-  if (c.width !== w || c.height !== h) {
-    c.width = w
-    c.height = h
-  }
+  const c = pooledCanvas(`3d:${name}`, w, h)
   const ctx = c.getContext('2d')!
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.globalAlpha = 1

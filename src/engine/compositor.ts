@@ -8,19 +8,22 @@
 import { propAt } from '@/editor/keyframes'
 import { followOffset, stabilizeAt, type Correction } from '@/editor/motion'
 import { clipEnd, transitionAt } from '@/editor/ops'
-import { is3dEffect, is3dTransition } from '@/editor/presets'
+import { is3dEffect, is3dTransition, isSmartTransition } from '@/editor/presets'
 import { angleTrackOf, angleTracks, sequenceView } from '@/editor/sequences'
 import { sourceFrameAt, speedAt } from '@/editor/timing'
 import type { AnimPreset, BlendMode, Clip, Crop, Effect, EffectKind, Mask, Project, Track, Transition } from '@/editor/types'
 import { clamp, easeInOutCubic, easeOutBack, easeOutCubic, lerp, noise1 } from '@/lib/math'
 import { gradeFilter, gradeOverlays } from './color'
 import { fontCss, fontFileUrl } from './fonts'
+import { gpuFx, needsFx } from './gl-fx'
 import { gpuGrade, needsGpuGrade } from './gl-grade'
+import { gpuTransition } from './gl-transition'
 import { usePlayback } from '@/editor/playback'
 import { useUI } from '@/editor/ui-store'
 import { grainCanvas } from './grain'
 import { applyMatte } from './matte-gl'
 import { beginVideoFrame, endVideoFrame, getImage, isExporting, sequenceFrame, sourceSize, videoFrame } from './media'
+import { scratchCanvas as pooledCanvas, sweepScratch } from './scratch'
 import { renderLayer3D } from './three/layer'
 import { createStage, frameStage, scratchCanvas as scratchLayer, type Stage } from './three/stage'
 import { renderText3D } from './three/text'
@@ -74,15 +77,6 @@ const BLEND: Record<BlendMode, GlobalCompositeOperation> = {
   difference: 'difference',
 }
 
-function sized(canvas: HTMLCanvasElement | null, w: number, h: number) {
-  const c = canvas ?? document.createElement('canvas')
-  if (c.width !== w || c.height !== h) {
-    c.width = w
-    c.height = h
-  }
-  return c
-}
-
 // ─── Nesting ─────────────────────────────────────────────────────────────
 // A nested timeline renders into a canvas of its own, one level down. Scratch
 // canvases are per level, so drawing a nested clip never disturbs the level
@@ -92,14 +86,9 @@ function sized(canvas: HTMLCanvasElement | null, w: number, h: number) {
 const MAX_DEPTH = 8
 let depth = 0
 let keyPrefix = ''
-const scratchCanvases = new Map<string, HTMLCanvasElement>()
 
-function scratch(name: string, w: number, h: number) {
-  const key = `${name}@${depth}`
-  const c = sized(scratchCanvases.get(key) ?? null, w, h)
-  scratchCanvases.set(key, c)
-  return c
-}
+/** This level's scratch canvas called `name` (let go once frames stop needing it: see scratch.ts). */
+const scratch = (name: string, w: number, h: number) => pooledCanvas(`${name}@${depth}`, w, h)
 
 /** The key a clip's player and frame decoder go by. */
 export const renderKey = (clip: Pick<Clip, 'id'>, prefix = '') => prefix + clip.id
@@ -182,6 +171,7 @@ export function renderFrame(ctx: CanvasRenderingContext2D, project: Project, fra
   drawTracks(ctx, project, frame, bounds)
   ctx.restore()
   endVideoFrame()
+  sweepScratch()
   return { bounds }
 }
 
@@ -261,6 +251,27 @@ function drawTransition(
   p: number,
   bounds: Map<string, ClipBounds>,
 ) {
+  if (isSmartTransition(tr.kind)) {
+    // Composite each shot on its own, then carry one into the other on the GPU with what was measured at the cut.
+    const W = ctx.canvas.width
+    const H = ctx.canvas.height
+    const a = scratchLayer(`transition-a@${depth}`, W, H)
+    drawClip(a.ctx, project, prev, frame, {}, bounds)
+    const b = scratchLayer(`transition-b@${depth}`, W, H)
+    drawClip(b.ctx, project, clip, frame, {}, bounds)
+    const out = gpuTransition(tr.kind, p, a.canvas, b.canvas, tr.match)
+    ctx.save()
+    resetCtx(ctx)
+    if (out) ctx.drawImage(out, 0, 0, W, H)
+    else {
+      // No WebGL2: a plain dissolve.
+      ctx.drawImage(a.canvas, 0, 0, W, H)
+      ctx.globalAlpha = easeInOutCubic(p)
+      ctx.drawImage(b.canvas, 0, 0, W, H)
+    }
+    ctx.restore()
+    return
+  }
   if (is3dTransition(tr.kind)) {
     // Composite each shot on its own, then hand both to the 3D stage.
     const W = ctx.canvas.width
@@ -469,7 +480,7 @@ function drawClip(ctx: CanvasRenderingContext2D, project: Project, clip: Clip, f
     return
   }
 
-  const { canvas: layer, rect, full, graded } = renderMediaLayer(project, clip, local, W, H)
+  const { canvas: layer, rect, full, graded, lit } = renderMediaLayer(project, clip, local, W, H)
   if (wipe < 1) {
     ctx.beginPath()
     ctx.rect(-W / 2, -H / 2, W * wipe, H)
@@ -480,7 +491,8 @@ function drawClip(ctx: CanvasRenderingContext2D, project: Project, clip: Clip, f
   ctx.filter = graded ? blurFilter(blur * k) : gradeFilter(clip.color, { mono, blur: blur * k })
   ctx.drawImage(layer, -W / 2, -H / 2, W, H)
 
-  const glow = fx(clip, 'glow')
+  // Glow is drawn with the other light effects on the GPU; this is the fallback without WebGL2.
+  const glow = lit ? undefined : fx(clip, 'glow')
   if (glow) {
     ctx.globalCompositeOperation = 'screen'
     ctx.globalAlpha = opacity * (glow.amount / 100) * 0.75
@@ -589,7 +601,7 @@ function draw3D(ctx: CanvasRenderingContext2D, project: Project, clip: Clip, loc
  * Content + grade washes + per-clip texture effects, drawn untransformed.
  * Returns the layer, the rect the visible picture covers and the rect of the whole picture before cropping.
  */
-function renderMediaLayer(project: Project, clip: Clip, local: number, W: number, H: number): { canvas: HTMLCanvasElement; rect: Rect; full: Rect; graded: boolean } {
+function renderMediaLayer(project: Project, clip: Clip, local: number, W: number, H: number): { canvas: HTMLCanvasElement; rect: Rect; full: Rect; graded: boolean; lit: boolean } {
   // A nested timeline is drawn first, one level down, before this level's layer is touched.
   const nested = clip.sequenceId ? nestedPicture(project, clip, local, W, H) : null
   const layerCanvas = scratch('layer', W, H)
@@ -657,32 +669,68 @@ function renderMediaLayer(project: Project, clip: Clip, local: number, W: number
   }
 
   const overlays = seeThrough || graded ? [] : gradeOverlays(clip.color)
-  const vignette = clip.color.vignette + (fx(clip, 'vignette')?.amount ?? 0)
-  const grain = fx(clip, 'grain')
-  const leak = fx(clip, 'leak')
-  if (overlays.length || vignette || grain || leak) {
-    lctx.save()
+  const clipToPicture = () => {
     if (shape) lctx.clip(shape)
     else {
       lctx.beginPath()
       lctx.rect(rect.x, rect.y, rect.w, rect.h)
       lctx.clip()
     }
+  }
+  if (overlays.length) {
+    lctx.save()
+    clipToPicture()
     for (const o of overlays) {
       lctx.globalCompositeOperation = 'soft-light'
       lctx.globalAlpha = o.alpha
       lctx.fillStyle = o.color
       lctx.fillRect(0, 0, W, H)
     }
+    lctx.restore()
+  }
+
+  // Light and lens effects, on the GPU: they keep to the picture's own alpha, like everything here.
+  let lit = false
+  if (needsFx(clip)) {
+    const depth = clip.depth && fx(clip, 'relight') ? depthPicture(project, clip, local, W, H, t, stab) : null
+    const out = gpuFx(layerCanvas, { effects: clip.effects, vignette: clip.color.vignette, t: local / fps, depth })
+    if (out) {
+      lctx.clearRect(0, 0, W, H)
+      lctx.drawImage(out, 0, 0)
+      lit = true
+    }
+  }
+
+  const grain = fx(clip, 'grain')
+  const fallback = lit ? null : legacyLight(clip)
+  if (grain || fallback) {
+    lctx.save()
+    clipToPicture()
     // Only on the picture itself: keyed-out and masked-off areas stay clear.
     lctx.globalCompositeOperation = 'source-atop'
     lctx.globalAlpha = 1
-    if (vignette) drawVignette(lctx, W, H, Math.min(100, vignette) / 100)
-    if (leak) drawLeak(lctx, W, H, local / fps, leak.amount / 100)
+    if (fallback) fallback(lctx, W, H, local / fps)
     if (grain) drawGrain(lctx, W, H, local, grain.amount / 100)
     lctx.restore()
   }
-  return { canvas: layerCanvas, rect, full, graded }
+  return { canvas: layerCanvas, rect, full, graded, lit }
+}
+
+/**
+ * Without WebGL2, the vignette and light leak as Lumen drew them before the GPU
+ * pass (the newer light effects need the GPU). Null when there's nothing to draw.
+ */
+function legacyLight(clip: Clip) {
+  const fxVignette = fx(clip, 'vignette')
+  const dark = Math.max(0, clip.color.vignette) + (fxVignette ? fxVignette.amount : 0)
+  const light = Math.max(0, -clip.color.vignette)
+  const leak = fx(clip, 'leak')
+  if (!dark && !light && !leak) return null
+  return (ctx: CanvasRenderingContext2D, W: number, H: number, t: number) => {
+    if (dark) drawVignette(ctx, W, H, Math.min(100, dark) / 100)
+    if (light) drawVignette(ctx, W, H, Math.min(100, light) / 100, '255,255,255')
+    if (leak) drawLeak(ctx, W, H, t, leak.amount / 100)
+  }
 }
 
 /** Players and decoders of a clip's subject matte go by the clip's key plus this. */
@@ -724,6 +772,33 @@ function applySubjectMatte(lctx: CanvasRenderingContext2D, project: Project, cli
     }
     lctx.putImageData(layer, 0, 0)
   }
+}
+
+/** Players and decoders of a clip's depth map go by the clip's key plus this. */
+const DEPTH_KEY = '#depth'
+
+/**
+ * A clip's depth map at this frame, drawn exactly like its picture (same fit,
+ * same stabilization), for Relight. Null while it loads (Relight then shapes
+ * its light from the picture's brightness).
+ */
+function depthPicture(project: Project, clip: Clip, local: number, W: number, H: number, t: number, stab?: Correction): HTMLCanvasElement | null {
+  const d = clip.depth!
+  const asset = project.assets[d.assetId]
+  if (!asset || asset.source.type !== 'file' || asset.source.missing) return null
+  let frame: CanvasImageSource | null = null
+  if (asset.kind === 'image') {
+    const img = getImage(asset.source.url)
+    if (img instanceof HTMLImageElement) frame = img
+  } else frame = videoFrame(renderKey(clip, keyPrefix) + DEPTH_KEY, asset.source.url, Math.max(0, t - d.from), usePlayback.getState().playing, playRate(clip, local))
+  if (!frame) return null
+  const dc = scratch('depth', W, H)
+  const dctx = dc.getContext('2d')!
+  resetCtx(dctx)
+  dctx.fillStyle = '#000'
+  dctx.fillRect(0, 0, W, H)
+  drawContain(dctx, frame, W, H, stab)
+  return dc
 }
 
 /**
@@ -812,10 +887,17 @@ function drawAdjustment(ctx: CanvasRenderingContext2D, project: Project, clip: C
   }
   actx.globalCompositeOperation = 'source-over'
   actx.globalAlpha = 1
-  const vignette = clip.color.vignette + (fx(clip, 'vignette')?.amount ?? 0)
-  if (vignette) drawVignette(actx, W, H, Math.min(100, vignette) / 100)
-  const leak = fx(clip, 'leak')
-  if (leak) drawLeak(actx, W, H, local / fps, leak.amount / 100)
+  // Light and lens effects over everything beneath (2D vignette and leak without WebGL2).
+  let lit = false
+  if (needsFx(clip)) {
+    const out = gpuFx(adjustCanvas, { effects: clip.effects, vignette: clip.color.vignette, t: local / fps })
+    if (out) {
+      actx.clearRect(0, 0, W, H)
+      actx.drawImage(out, 0, 0)
+      lit = true
+    }
+  }
+  if (!lit) legacyLight(clip)?.(actx, W, H, local / fps)
   const grain = fx(clip, 'grain')
   if (grain) drawGrain(actx, W, H, local, grain.amount / 100)
   if (clip.masks?.length) applyMasks(actx, clip.masks, W, H, local)
@@ -963,10 +1045,10 @@ function drawSlate(ctx: CanvasRenderingContext2D, W: number, H: number, label: s
   ctx.fillText(label, W / 2, H / 2)
 }
 
-function drawVignette(ctx: CanvasRenderingContext2D, W: number, H: number, amount: number) {
+function drawVignette(ctx: CanvasRenderingContext2D, W: number, H: number, amount: number, rgb = '0,0,0') {
   const g = ctx.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, W * 0.72)
-  g.addColorStop(0, 'rgba(0,0,0,0)')
-  g.addColorStop(1, `rgba(0,0,0,${(0.85 * amount).toFixed(3)})`)
+  g.addColorStop(0, `rgba(${rgb},0)`)
+  g.addColorStop(1, `rgba(${rgb},${(0.85 * amount).toFixed(3)})`)
   ctx.fillStyle = g
   ctx.fillRect(0, 0, W, H)
 }
@@ -1013,6 +1095,8 @@ export function renderToCanvas(project: Project, frame: number, width: number, o
 export function allRenderKeys(project: Project, prefix = '', level = 0, out = new Set<string>()): Set<string> {
   for (const c of Object.values(project.clips)) {
     out.add(prefix + c.id)
+    if (c.matte) out.add(prefix + c.id + MATTE_KEY)
+    if (c.depth) out.add(prefix + c.id + DEPTH_KEY)
     if (!c.sequenceId || level >= MAX_DEPTH) continue
     const view = sequenceView(project, c.sequenceId)
     if (view && view !== project) allRenderKeys(view, `${prefix}${c.id}>`, level + 1, out)
@@ -1054,6 +1138,8 @@ export function mediaDrawnAt(project: Project, frame: number, prefix = '', level
       } else {
         out.push({ clip: c, local: l, view: project, key: renderKey(c, prefix) })
         if (c.matte) out.push({ clip: { ...c, assetId: c.matte.assetId }, local: l, view: project, key: renderKey(c, prefix) + MATTE_KEY, offset: c.matte.from })
+        if (c.depth && c.effects.some((e) => e.kind === 'relight' && e.enabled))
+          out.push({ clip: { ...c, assetId: c.depth.assetId }, local: l, view: project, key: renderKey(c, prefix) + DEPTH_KEY, offset: c.depth.from })
       }
     }
   }

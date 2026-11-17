@@ -1,6 +1,9 @@
-import fs from 'node:fs'
 import type { MotionTemplate } from '../../../shared/integrations'
-import { packageFile } from '../paths'
+import { chart, chartDuration } from './charts'
+import { color, esc, FONT_STACKS, isSerif, maskedWords, num, page, readingTime, SHADOW, stack, type Frame } from './page'
+import { particleTitle } from './particle-title'
+
+export { COMPOSITION_ID, fontFaces, FONT_STACKS, readingTime } from './page'
 
 /**
  * Motion-graphics templates, authored as HyperFrames compositions: plain
@@ -13,115 +16,11 @@ import { packageFile } from '../paths'
  * of fades; a different ease for each element's role — entrances decelerate,
  * exits accelerate and are shorter; holds long enough to read; and, given a
  * tempo, changes that land on the beat.
+ *
+ * The page they're built on and its helpers are in page.ts; the particle
+ * title and the charts, which draw more than they lay out, have files of
+ * their own.
  */
-
-export const COMPOSITION_ID = 'lumen'
-
-const esc = (s: unknown) =>
-  String(s ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-
-const color = (value: unknown, fallback: string) => (typeof value === 'string' && /^#[0-9a-f]{3,8}$/i.test(value) ? value : fallback)
-const num = (value: unknown, fallback: number) => (typeof value === 'number' && Number.isFinite(value) ? value : Number.isFinite(Number(value)) && value !== '' && value !== null ? Number(value) : fallback)
-
-let faces = ''
-
-/**
- * Lumen's typefaces, inlined: a file:// page can't load file:// fonts (CORS),
- * data: URLs always work. Templates and custom compositions get them all.
- */
-export function fontFaces() {
-  if (faces) return faces
-  const data = (pkg: string, file: string) => `data:font/woff2;base64,${fs.readFileSync(packageFile(pkg, file)).toString('base64')}`
-  faces = `
-    @font-face { font-family: 'Geist'; font-weight: 100 900; src: url('${data('@fontsource-variable/geist', 'files/geist-latin-wght-normal.woff2')}') format('woff2'); }
-    @font-face { font-family: 'Geist Mono'; font-weight: 100 900; src: url('${data('@fontsource-variable/geist-mono', 'files/geist-mono-latin-wght-normal.woff2')}') format('woff2'); }
-    @font-face { font-family: 'Bricolage Grotesque'; font-weight: 200 800; font-stretch: 75% 100%; src: url('${data('@fontsource-variable/bricolage-grotesque', 'files/bricolage-grotesque-latin-wght-normal.woff2')}') format('woff2'); }
-    @font-face { font-family: 'Instrument Serif'; font-style: normal; src: url('${data('@fontsource/instrument-serif', 'files/instrument-serif-latin-400-normal.woff2')}') format('woff2'); }
-    @font-face { font-family: 'Instrument Serif'; font-style: italic; src: url('${data('@fontsource/instrument-serif', 'files/instrument-serif-latin-400-italic.woff2')}') format('woff2'); }
-    @font-face { font-family: 'Fraunces'; font-style: normal; font-weight: 100 900; src: url('${data('@fontsource-variable/fraunces', 'files/fraunces-latin-standard-normal.woff2')}') format('woff2'); }
-    @font-face { font-family: 'Fraunces'; font-style: italic; font-weight: 100 900; src: url('${data('@fontsource-variable/fraunces', 'files/fraunces-latin-standard-italic.woff2')}') format('woff2'); }
-    @font-face { font-family: 'Archivo'; font-weight: 100 900; font-stretch: 62% 125%; src: url('${data('@fontsource-variable/archivo', 'files/archivo-latin-standard-normal.woff2')}') format('woff2'); }
-    @font-face { font-family: 'Archivo'; font-style: italic; font-weight: 100 900; font-stretch: 62% 125%; src: url('${data('@fontsource-variable/archivo', 'files/archivo-latin-standard-italic.woff2')}') format('woff2'); }
-    @font-face { font-family: 'Syne'; font-weight: 400 800; src: url('${data('@fontsource-variable/syne', 'files/syne-latin-wght-normal.woff2')}') format('woff2'); }
-    @font-face { font-family: 'Space Grotesk'; font-weight: 300 700; src: url('${data('@fontsource-variable/space-grotesk', 'files/space-grotesk-latin-wght-normal.woff2')}') format('woff2'); }`
-  return faces
-}
-
-/** Template font choices: each one a deliberate voice. */
-export const FONT_STACKS: Record<string, string> = {
-  sans: "'Geist', system-ui, sans-serif",
-  display: "'Bricolage Grotesque', 'Geist', sans-serif",
-  serif: "'Instrument Serif', Georgia, serif",
-  editorial: "'Fraunces', Georgia, serif",
-  wide: "'Archivo', 'Geist', sans-serif",
-  art: "'Syne', 'Geist', sans-serif",
-  tech: "'Space Grotesk', 'Geist', sans-serif",
-  mono: "'Geist Mono', ui-monospace, monospace",
-}
-const stack = (key: unknown, fallback: string) => FONT_STACKS[String(key ?? fallback)] ?? FONT_STACKS[fallback]
-const isSerif = (key: unknown) => key === 'serif' || key === 'editorial'
-
-interface Frame {
-  width: number
-  height: number
-  duration: number
-}
-
-/** Seconds a reader needs for some text once it has landed: 0.3 s a word plus a second, at least 1.5 s. */
-export const readingTime = (text: string) => Math.max(1.5, 1 + 0.3 * text.split(/\s+/).filter(Boolean).length)
-
-/** Words in masks: each word slides inside its own clip, so type wipes on instead of fading. */
-const maskedWords = (text: string, cls = 'w') =>
-  text
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((w) => `<span class="mask"><span class="${cls}">${esc(w)}</span></span>`)
-    .join(' ')
-
-function page(f: Frame, css: string, body: string, script: string, params: Record<string, unknown>) {
-  // Templates are authored at 1080p; --s scales them to the output's short side.
-  const s = Math.min(f.width, f.height) / 1080
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=${f.width}, height=${f.height}" />
-<meta data-composition-id="${COMPOSITION_ID}" data-width="${f.width}" data-height="${f.height}" />
-<script src="__GSAP__"></script>
-<style>
-${fontFaces()}
-* { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { width: ${f.width}px; height: ${f.height}px; overflow: hidden; background: transparent; }
-body { --s: ${s}; -webkit-font-smoothing: antialiased; text-rendering: geometricPrecision; font-kerning: normal; font-feature-settings: "kern", "liga"; }
-#stage { position: relative; width: 100%; height: 100%; overflow: hidden; }
-.clip { position: absolute; inset: 0; visibility: hidden; }
-.mask { display: inline-block; overflow: hidden; vertical-align: top; padding-bottom: 0.1em; margin-bottom: -0.1em; }
-.mask > * { display: inline-block; will-change: transform; }
-${css}
-</style>
-</head>
-<body>
-<div id="stage">
-  <div class="clip" id="root" data-start="0" data-duration="${f.duration}" data-track-index="0">${body}</div>
-</div>
-<script>
-const P = ${JSON.stringify(params).replace(/</g, '\\u003c')};
-const D = ${f.duration};
-const tl = gsap.timeline({ paused: true });
-${script}
-window.__timelines = window.__timelines || {};
-window.__timelines["${COMPOSITION_ID}"] = tl;
-</script>
-</body>
-</html>`
-}
-
-/** Legibility over footage without a box: a soft, close shadow that reads as nothing. */
-const SHADOW = 'text-shadow: 0 calc(1px * var(--s)) calc(2px * var(--s)) rgba(0,0,0,0.25), 0 calc(4px * var(--s)) calc(24px * var(--s)) rgba(0,0,0,0.35);'
 
 // ─── Lower third ─────────────────────────────────────────────────────────
 // editorial (default): a hairline rule, the name set in a serif, the role in tracked caps — no panel.
@@ -436,6 +335,8 @@ export const TEMPLATE_DURATION: Record<Exclude<MotionTemplate, 'custom'>, number
   counter: 4,
   quote: 6,
   chapter: 3.5,
+  'particle-title': 5.5,
+  chart: 6,
 }
 
 export const TEMPLATE_NAMES: Record<MotionTemplate, string> = {
@@ -445,13 +346,17 @@ export const TEMPLATE_NAMES: Record<MotionTemplate, string> = {
   counter: 'Stat counter',
   quote: 'Pull quote',
   chapter: 'Chapter marker',
+  'particle-title': 'Particle title',
+  chart: 'Chart',
   custom: 'Motion graphic',
 }
 
 /** How long a template stays up when no length is asked for: its default, or longer when it has a lot to read. */
 export function templateDuration(template: Exclude<MotionTemplate, 'custom'>, params: Record<string, unknown>) {
+  // A chart's numbers take reading too; particles take longer to gather and to scatter than type takes to wipe.
+  if (template === 'chart') return Math.max(TEMPLATE_DURATION.chart, chartDuration(params))
   const words = [params.title, params.name, params.text, params.subtitle, params.label, params.author].filter((v) => typeof v === 'string').join(' ')
-  const motion = template === 'kinetic' ? 1.2 : 1.6
+  const motion = template === 'kinetic' ? 1.2 : template === 'particle-title' ? 3.4 : 1.6
   return Math.max(TEMPLATE_DURATION[template], Math.round((readingTime(words) + motion) * 10) / 10)
 }
 
@@ -469,5 +374,9 @@ export function buildTemplate(template: Exclude<MotionTemplate, 'custom'>, param
       return quote(params, frame)
     case 'chapter':
       return chapter(params, frame)
+    case 'particle-title':
+      return particleTitle(params, frame)
+    case 'chart':
+      return chart(params, frame)
   }
 }

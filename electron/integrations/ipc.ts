@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { IPC, type BlenderRenderRequest, type ImageGenRequest, type McpServerConfig, type MotionRenderRequest, type Provenance, type VideoGenRequest, type WebVideoOptions } from '../../shared/integrations'
 import { detectBlender, renderBlender, runLive, setBlenderPath } from './blender'
+import { registerComfyIpc } from './comfyui/ipc'
 import { renderMotion } from './hyperframes'
 import { cancelJob, listJobs } from './jobs'
 import { callToolForAgent, connectServer, disconnectServer, listServers, removeServer, saveServer, signOut, startToolCall } from './mcp'
@@ -47,6 +48,8 @@ export function registerIntegrationIpc(isTrustedUrl: (url: string) => boolean) {
   handle(IPC.mcpSignOut, (id: string) => signOut(String(id)))
   handle(IPC.mcpCall, async (id: string, tool: string, args: Record<string, unknown>) => (await startToolCall(String(id), String(tool), args && typeof args === 'object' ? args : {})).job)
   handle(IPC.mcpCallForAgent, (id: string, tool: string, args: Record<string, unknown>) => callToolForAgent(String(id), String(tool), args && typeof args === 'object' ? args : {}))
+
+  registerComfyIpc(handle)
 
   handle(IPC.mediaImportUrl, (url: string, name?: string, provenance?: Provenance) => importUrl(String(url), name, provenance ?? { integration: 'web', tool: 'download' }))
   handle(IPC.mediaReveal, (url: string) => reveal(String(url)))
@@ -197,7 +200,7 @@ function sanitizeBlender(req: BlenderRenderRequest): BlenderRenderRequest {
 }
 
 function sanitizeMotion(req: MotionRenderRequest): MotionRenderRequest {
-  if (!['lower-third', 'kinetic', 'counter', 'title-card', 'quote', 'chapter', 'custom'].includes(req?.template)) throw new Error('Unknown motion template')
+  if (!['lower-third', 'kinetic', 'counter', 'title-card', 'quote', 'chapter', 'particle-title', 'chart', 'custom'].includes(req?.template)) throw new Error('Unknown motion template')
   return {
     ...frameSpec(req),
     params: req.params && typeof req.params === 'object' ? req.params : {},

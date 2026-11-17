@@ -118,8 +118,9 @@ const SKILL_TOOLS: Record<string, string[]> = {
   'generation-prompts': ['generate_image', 'generate_video', 'render_3d_background'],
   'sound-and-music': ['generate_music', 'generate_sound_effect', 'generate_voiceover', 'add_sound_effect', 'duck_music'],
   'short-form-editing': ['reframe', 'add_captions', 'remove_pauses', 'cut_to_beats'],
-  'color-grading': ['lut_add'],
+  'color-grading': ['lut_add', 'auto_color', 'match_color', 'relight_clip'],
   'text-behind-subject': ['cut_out_subject'],
+  'video-director': ['get_storyboard', 'storyboard_update', 'storyboard_addScenes'],
 }
 
 /** A tool's description, with the skills that apply to it (and, for use_skill, every skill that's on). */

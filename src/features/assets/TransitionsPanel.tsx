@@ -1,3 +1,4 @@
+import { Wand2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Preview3D } from '@/components/Preview3D'
@@ -8,8 +9,10 @@ import { TRANSITIONS } from '@/editor/presets'
 import type { TransitionKind } from '@/editor/types'
 import { useUI } from '@/editor/ui-store'
 import { usePreviewArt } from '@/engine/preview-art'
+import { drawSmartPreview } from '@/engine/smart-previews'
 import { drawTransitionPreview } from '@/engine/three/previews'
 import { dnd } from '@/features/dnd'
+import { actions } from '@/features/shell/actions'
 import { clamp } from '@/lib/math'
 import { PanelHeader, scrollArea, SectionLabel } from './shared'
 
@@ -57,6 +60,20 @@ function TransitionPreview3D({ kind, active }: { kind: TransitionKind; active: b
   )
 }
 
+/** A smart transition, drawn by the timeline's own shader between the two preview pictures. */
+function TransitionPreviewSmart({ kind, active, a, b }: { kind: TransitionKind; active: boolean; a: string; b: string }) {
+  return (
+    <div className={cardClass}>
+      <Preview3D
+        active={active}
+        rest={0}
+        draw={(canvas, t) => drawSmartPreview(canvas, kind, active ? clamp(((t % 2.6) - 0.35) / 1.8, 0, 1) : 0.42, a, b)}
+      />
+      <span className="absolute top-1.5 left-1.5 rounded-md bg-black/55 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-white backdrop-blur-sm">SMART</span>
+    </div>
+  )
+}
+
 export function TransitionsPanel() {
   const [hovered, setHovered] = useState<TransitionKind | null>(null)
   const art = usePreviewArt()
@@ -86,7 +103,13 @@ export function TransitionsPanel() {
       onPointerLeave={() => setHovered((h) => (h === t.kind ? null : h))}
       className="group/tr text-left outline-none"
     >
-      {t.is3d ? <TransitionPreview3D key={art.key} kind={t.kind} active={hovered === t.kind} /> : <TransitionPreview2D kind={t.kind} a={art.a} b={art.b} />}
+      {t.smart ? (
+        <TransitionPreviewSmart key={art.key} kind={t.kind} active={hovered === t.kind} a={art.a} b={art.b} />
+      ) : t.is3d ? (
+        <TransitionPreview3D key={art.key} kind={t.kind} active={hovered === t.kind} />
+      ) : (
+        <TransitionPreview2D kind={t.kind} a={art.a} b={art.b} />
+      )}
       <div className="mt-1.5 px-0.5">
         <div className="text-xs font-medium text-fg-2 group-hover/tr:text-fg">{t.name}</div>
         <div className="truncate text-2xs text-fg-4">{t.description}</div>
@@ -98,10 +121,26 @@ export function TransitionsPanel() {
     <>
       <PanelHeader title="Transitions" />
       <div className={scrollArea}>
+        <SectionLabel
+          right={
+            <button
+              type="button"
+              onClick={() => void actions.autoTransitions()}
+              title="Reads every cut without a transition and gives it the one that suits it, timed to the music’s beat"
+              className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-2xs font-medium text-fg-3 hover:bg-white/[0.06] hover:text-fg [&_svg]:size-3"
+            >
+              <Wand2 /> Choose for every cut
+            </button>
+          }
+        >
+          Smart
+        </SectionLabel>
+        <div className="grid grid-cols-2 gap-x-2.5 gap-y-3">{TRANSITIONS.filter((t) => t.smart).map(card)}</div>
+        <p className="mt-2 px-1 text-2xs leading-relaxed text-fg-4">Smart transitions read the two shots at the cut — their subjects, the camera’s motion, how they line up, their colours — and carry one into the other.</p>
         <SectionLabel>3D</SectionLabel>
         <div className="grid grid-cols-2 gap-x-2.5 gap-y-3">{TRANSITIONS.filter((t) => t.is3d).map(card)}</div>
         <SectionLabel>Classic</SectionLabel>
-        <div className="grid grid-cols-2 gap-x-2.5 gap-y-3">{TRANSITIONS.filter((t) => !t.is3d).map(card)}</div>
+        <div className="grid grid-cols-2 gap-x-2.5 gap-y-3">{TRANSITIONS.filter((t) => !t.is3d && !t.smart).map(card)}</div>
         <p className="mt-4 px-1 text-2xs leading-relaxed text-fg-4">Drag a transition to where two clips touch: onto the end of the first clip, onto the cut itself, or onto the start of the second. Or select the clips and click. Click a transition on the timeline to move it, change its length or remove it.</p>
       </div>
     </>

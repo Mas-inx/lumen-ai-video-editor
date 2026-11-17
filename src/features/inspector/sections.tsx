@@ -53,7 +53,8 @@ import { KeyParams } from './KeyParams'
 import { CurveIcon, EasingMenu, MotionPresetsSection } from './MotionPresets'
 import { easingLabel } from '@/editor/easing'
 import { playback } from '@/editor/playback'
-import { CurvesSection, HslSection, LutSection, WheelsSection } from './GradeSections'
+import { CorrectionSection, CurvesSection, HslSection, LutSection, WheelsSection } from './GradeSections'
+import { EffectParams } from './EffectParams'
 import { FontPicker } from './FontPicker'
 import { fontCss } from '@/engine/fonts'
 
@@ -212,6 +213,7 @@ export function EffectsSection({ clip }: { clip: Clip }) {
                   <span className="w-8 text-right text-xs text-fg-3 tabular">{Math.round(fx.amount)}</span>
                 </div>
                 {(fx.kind === 'chromaKey' || fx.kind === 'lumaKey') && fx.enabled && <KeyParams clip={clip} fx={fx} />}
+                {fx.enabled && <EffectParams clip={clip} fx={fx} />}
               </div>
             )
           })}
@@ -242,7 +244,7 @@ export function ColorSections({ clips }: { clips: Clip[] }) {
         title="Look"
         icon={<Aperture />}
         actions={
-          <IconButton size="xs" label="Reset color" onClick={() => update(ids, { color: { ...DEFAULT_COLOR, curves: null, wheels: null, hsl: null, lut: null }, look: null })}>
+          <IconButton size="xs" label="Reset color" onClick={() => update(ids, { color: { ...DEFAULT_COLOR, balance: null, levels: null, match: null, curves: null, wheels: null, hsl: null, lut: null }, look: null })}>
             <RotateCcw />
           </IconButton>
         }
@@ -258,11 +260,12 @@ export function ColorSections({ clips }: { clips: Clip[] }) {
           </Button>
         </div>
       </Section>
+      <CorrectionSection clips={clips} />
       <Section title="Light" icon={<Aperture />}>
         <div className="space-y-1">
           <ValueSlider label="Exposure" value={g.exposure} onChange={set('exposure')} min={-100} max={100} bipolar />
           <ValueSlider label="Contrast" value={g.contrast} onChange={set('contrast')} min={-100} max={100} bipolar />
-          <ValueSlider label="Vignette" value={g.vignette} onChange={set('vignette')} min={0} max={100} />
+          <ValueSlider label="Vignette" value={g.vignette} onChange={set('vignette')} min={-100} max={100} bipolar />
         </div>
       </Section>
       <Section title="Color" icon={<Palette />}>

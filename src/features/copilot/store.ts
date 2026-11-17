@@ -240,6 +240,13 @@ useCopilot.subscribe((s, prev) => {
   saveTimer = setTimeout(saveNow, s.busy ? 2500 : 700)
 })
 
+/**
+ * What the next message goes with (see Attachments below). Made before the
+ * project's chats load at startup, which clear it: made after, that load threw
+ * and the first project's chats were never kept.
+ */
+export const useAttachments = create<{ items: Attachment[] }>(() => ({ items: [] }))
+
 /** Opens a project's chats: the latest one, ready to carry on. */
 async function loadChatsFor(projectId: string) {
   saveNow()
@@ -319,8 +326,6 @@ export interface FileAttachment {
 }
 
 export type Attachment = AssetAttachment | FileAttachment
-
-export const useAttachments = create<{ items: Attachment[] }>(() => ({ items: [] }))
 
 export function attach(item: AssetAttachment) {
   useAttachments.setState((s) => (s.items.some((i) => i.id === item.id) ? s : { items: [...s.items, item] }))

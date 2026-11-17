@@ -4,6 +4,7 @@ import { app, BrowserWindow, nativeTheme, protocol, shell } from 'electron'
 import { APP_IPC } from '../shared/app'
 import { registerAppIpc } from './app-ipc'
 import { initCapture, stopCapture } from './capture'
+import { watchEditor } from './crash'
 import { abortAllExports } from './export'
 import { registerMediaProtocol } from './files'
 import { applyGraphicsSettings } from './gpu'
@@ -82,6 +83,11 @@ function createWindow() {
   initIngest(win)
   initCapture(win, isTrustedUrl)
   guardClose(win)
+  // A page that crashes or hangs offers to reload (onto the recovery copy) or quit, instead of a black window.
+  watchEditor(win, () => {
+    stopCapture()
+    abortAllExports()
+  })
   // Show the editor as soon as its page has loaded. 'ready-to-show' alone isn't
   // enough: it waits for a visible first paint, but the start screen fades in with
   // animations that only run once the window is on screen — so it never fires.

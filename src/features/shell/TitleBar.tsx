@@ -23,6 +23,7 @@ import {
   SaveAll,
   Settings2,
   Square,
+  Stamp,
   Undo2,
   Upload,
 } from 'lucide-react'
@@ -233,6 +234,9 @@ function AppMenu() {
         </MenuItem>
         <MenuItem icon={<Cpu />} disabled={!desktop} onSelect={() => useUI.getState().setGraphicsOpen(true)}>
           Graphics and encoding…
+        </MenuItem>
+        <MenuItem icon={<Stamp />} onSelect={() => useUI.getState().setBrandOpen(true)}>
+          Brand kits…
         </MenuItem>
         {updateReady ? (
           <MenuItem icon={<RefreshCw />} onSelect={() => void installUpdate()}>

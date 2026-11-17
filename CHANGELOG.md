@@ -4,6 +4,74 @@ Every notable change to Lumen, newest first. The format follows [Keep a Changelo
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-11-17
+
+Light and lens effects on the GPU, relighting and a colour correction stage before the grade; smart transitions and particles; particle titles and animated charts; storyboards, styles and brand kits; repeated takes and an edit check; ComfyUI; and memory that stays bounded on heavy projects.
+
+### Added
+
+- **Light and lens effects,** a new *Light* section in Effects, drawn on the GPU after the grade and identical in the preview and the export:
+  - **Glow & Bloom** now blooms just the highlights, with a threshold, a radius and a colour. Glows made before keep their look.
+  - **Halation:** film's red-orange glow just outside bright edges.
+  - **God Rays:** shafts of light from a light you place — on the frame or off it — through the bright parts of the shot, with haze around the light.
+  - **Lens Flare:** classic, anamorphic or starburst, with the lens's reflections across the frame and a colour.
+  - **Light Leak** in five styles: the drifting glow it had, a burst, streaks, an edge burn and a prism, with two colours, speed, direction and variation.
+  - **Vignette** with a size, a feather, a roundness, a centre you move, and a colour: white lightens the edges. The Light section's vignette slider goes below 0 to lighten them too.
+  - **Relight:** add a light, or move where the light comes from. Lumen measures the shot's depth on your computer (Depth Anything V2, downloaded once) so the light wraps around faces and objects; without a depth map it shapes the light from the picture's brightness.
+  - Every setting is in the inspector, with a pad to place the light. Flares and god rays can **follow the brightest light** in the shot, and fade when it goes out.
+  - Glows spill past the edge of keyed subjects and pictures-in-picture, the way light spills off a sign.
+- **Correction, before the grade** (a new section in Color), on the footage as it came in:
+  - **A white balance that makes whites white:** pick something that should be neutral, or press *Auto*. It works in linear light, so highlights come out clean; temperature and tint stay as creative washes.
+  - **Levels:** black point, white point and midtones. *Auto* sets them along with the balance.
+  - **Match to another shot:** lines a clip's shadows, midtones, highlights and colour cast up with a reference shot, and can copy its grade too.
+- **For the Copilot and agents:** `auto_color`, `match_color` and `relight_clip`; `effect_add` describes every light effect's settings; the colour grading skill covers the correction, light effects and relighting.
+- **Palette commands:** *Auto colour (white balance and levels)* and *Relight clip*.
+- **Smart transitions** ([#2](https://github.com/Mas-inx/lumen-ai-video-editor/issues/2)), a new section in Transitions. Each reads the two shots at its cut — where their subjects are, how the camera moves, how the frames line up, how their colours differ — and carries one into the other on the GPU:
+  - **Morph:** both frames warp along how their content lines up while they cross, so one shot melts into the next.
+  - **Zoom Through:** into the outgoing shot's subject and out of the incoming one's, with a zoom blur.
+  - **Whip Pan:** a motion-blurred whip in the camera's own direction, carrying its motion across the cut.
+  - **Luma Fade:** the next shot appears through its brightest parts first.
+  - **Colour Match:** the next shot starts in this one's colours and eases into its own.
+  - **Choose for every cut** reads each cut, picks the transition that suits it and says why, and times it so the shots swap on the music's beat — without moving any cut. The Copilot has `smart_transition` and `auto_transitions`.
+- **Particles:** dust in the air (or only where the shot is lit, like a sunbeam), snow, rain, embers, bokeh, sparkles and confetti, in layers near and far that move at their own speeds, with size, speed, wind and colour. Put them on an adjustment layer to have them fall over everything below.
+- **Particle title** ([#2](https://github.com/Mas-inx/lumen-ai-video-editor/issues/2)), a new motion graphic: your title gathers out of thousands of particles sampled from its own letters, settles into crisp type and scatters at the end. Four styles — dust, sparks, embers and digital pixels — coming in from the left, the right, below or everywhere, with an optional subtitle and a seed for another scatter.
+- **Animated charts** ([#2](https://github.com/Mas-inx/lumen-ai-video-editor/issues/2)): bar (columns or rows), line, and donut (one value, or the parts of a whole), from your real numbers. Round scales and ticks, labels that fit, values that count up, one item picked out in the accent, units, decimals and a source line. In *Generate › Motion* you type the data as `Label: value` lines and see what was read as you type; the Copilot's `render_motion_graphic` makes both, and refuses a chart with no numbers in it.
+- **Storyboard: plan a video before making it** ([#2](https://github.com/Mas-inx/lumen-ai-video-editor/issues/2)). A new *Story* panel holds the plan: ordered scenes, each with a script, a treatment (footage, B-roll, kinetic type, infographic, generated image or video, 3D, motion graphic), a target length, the transition into it, what's still needed, linked media and notes, with a running total. Edit in place, drag to reorder, mark progress, link the clips that make a scene and jump to them. *Plan with Copilot*, *Produce* and *Revise* hand each step to the Copilot.
+- **The Copilot directs:** a new built-in skill has it plan a video as a storyboard first, wait for your review, produce scene by scene, revise one scene without rebuilding the rest, and keep one style throughout.
+- **Styles that are more than colour:** six house styles in a new *Styles* panel — Editorial, Product commercial, Kinetic typography, Infographic, Cinematic and Documentary. Each sets title typography, placement and motion, captions, transitions, a look, finishing effects, camera moves and pacing, and differs from the others in composition and motion, not just colour. Apply one to the whole timeline or a selection in one undo step; effects you added yourself are kept, and switching styles swaps the previous style's out.
+- **Brand kits,** kept for every project: colours, typefaces (built in, font files, or fonts from a project), logos, title and caption styles, a look and motion rules. Apply one in one step: fonts are embedded, logos become media, titles, captions, cuts and footage are restyled, and the logo can sit in a corner. Styles keep your brand's typefaces and colours. *Brand kits…* is in the Lumen menu.
+- **B-roll from your own media:** *Find media* on a storyboard scene, and the Copilot's new `suggest_broll`, rank the media already in the project for each sentence by what it's about — names, tags, descriptions, generation prompts, folders and what's said in it. Media can now carry a description.
+- **For the Copilot and agents:** `get_storyboard`, `list_styles`, `apply_style`, `suggest_broll`, `get_brand_kit` and `apply_brand_kit`; the storyboard and brand commands; `find_media` searches descriptions; `get_project` mentions the storyboard and brand.
+- **Repeated takes** ([#2](https://github.com/Mas-inx/lumen-ai-video-editor/issues/2)): Lumen finds lines said more than once — false starts, word-for-word repeats, near repeats, and stumbles like "we can — we can do this" — and suggests the take to keep, saying why and how sure it is. A take that says something the others don't is never the one suggested to go. Hear each take, choose one or keep all, and cut the rest in one step; repeats that look deliberate are kept unless you choose. The button sits in the timeline's toolbar.
+- **Check edit** ([#2](https://github.com/Mas-inx/lumen-ai-video-editor/issues/2)): one click finds problems before you export, worst first, each with where it is and one-click fixes where they're safe — gaps and offline media; captions overlapping, too short to read or outliving their words; titles and captions off the frame or outside the title-safe area; black or frozen picture; clipping, loudness off target, sound that cuts off at a cut, and silence where the transcript has words; letterboxing and blown-up media.
+- **For the Copilot and agents:** `find_repeated_takes`, `remove_speech` (cuts sentences, takes or time ranges safely, and says where each join landed) and `check_quality`. The Copilot checks the edit before it calls a job done.
+- **ComfyUI** ([#5](https://github.com/Mas-inx/lumen-ai-video-editor/issues/5)): connect your own ComfyUI in *Integrations › ComfyUI* — its address, an optional auth header kept encrypted, and its version, graphics card, memory and queue at a glance. Lumen talks only to the address you set.
+  - **A workflow library:** import workflows exported with *Export (API)*, ComfyUI's normal saved workflows (converted with your ComfyUI's node definitions) or PNGs ComfyUI made. Drag and drop, rename, remove; Lumen warns when your ComfyUI lacks a workflow's custom nodes.
+  - **Generate › ComfyUI:** Lumen finds each workflow's prompt, negative prompt, seed (new each run, or kept), steps, CFG, denoise, size, length and frame rate. Picture, video and sound inputs come from the selected clip (just the stretch it uses), the frame at the playhead, or anything in your media. Progress shows live; results land in Media, and on the timeline if you like; *Cancel* stops the run in ComfyUI.
+  - **For the Copilot and agents:** `comfyui_status`, `comfyui_list_workflows`, `comfyui_run_workflow` (returns the new media; long runs hand back a job to check with `get_job`) and `comfyui_import_workflow` (asks you first). Text that workflows show — captions, tags — comes back to the agent; 3D models are saved to disk.
+- **If the editor crashes, runs out of memory or stops responding,** Lumen offers to reload it — back onto your project, with your unsaved changes — or to quit, instead of leaving a black window. If it keeps stopping right after reloading, it offers to start without the project, then only to quit.
+
+### Changed
+
+- **Speech cuts never cut a word.** Removing pauses, takes or any stretch of speech cuts between words with a breath either side, and never through another speaker; `find_pauses` and `remove_pauses` say which words they kept.
+- **Word-level transcripts:** ElevenLabs and OpenAI transcripts, and ElevenLabs voiceovers, now keep each word's timing (a project's transcript schema used to drop them).
+- **Memory stays within bounds while you play, scrub and export heavy projects** ([#6](https://github.com/Mas-inx/lumen-ai-video-editor/issues/6)):
+  - audio longer than a minute streams instead of being decoded whole (it was ten minutes);
+  - decoded sound, pictures, image-sequence frames and filmstrips stay within fixed budgets, least recently used first out;
+  - video players for clips far from the playhead are released, and exports keep decoders only for what's on screen;
+  - sound is decoded a few files at a time, nearest the playhead first, and a sound that finishes decoding during playback joins in without restarting the mix.
+- **Long recordings under the resting playhead, or at a loop's start, are ready before you press play.**
+- **Reframing keeps each shot's subject in view.** A vertical, square or portrait copy of a timeline — and the Copilot's `reframe` — moves every shot so its subject stays in frame: the cut-out subject's box when the shot has one, otherwise where its detail, faces and colour are. Before, every shot was cropped to its middle. `reframe` takes `follow_subject: false` for the old way.
+- **docs/AI-TOOLS.md is checked against the tool registry** by a test, so it can't fall behind; `LUMEN_WRITE_DOCS=1 npx vitest run src/integrations/tools/docs.test.ts` rewrites it.
+
+### Fixed
+
+- **Memory kept growing while long recordings played**, until playback stopped: played chunks were never let go.
+- **Long exports and render previews kept a decoder open for every clip they had passed.**
+- **Denoised long recordings had seams between their chunks** in playback and export.
+- **A cut-out subject could vanish for a moment a few seconds after any edit:** the clean-up of unused video players also threw away the players of subject mattes.
+- **Copilot chats in the project Lumen starts with were never saved,** so they were gone once you opened another project (since 1.5.0). Loading that project's chats at startup failed on the attachments, which didn't exist yet.
+
 ## [1.6.2] — 2026-10-16
 
 A volume for the preview that leaves the mix alone.
@@ -344,7 +412,8 @@ First release.
 - **Integrations** — Blender renders (3D titles, backgrounds, agent-written scenes), HyperFrames motion graphics, MCP host (Higgsfield, Runway, Replicate, fal.ai or any server) and Lumen's own MCP server for external agents.
 - Windows installer (NSIS, per-user or all-users).
 
-[Unreleased]: https://github.com/Mas-inx/lumen-ai-video-editor/compare/v1.6.2...HEAD
+[Unreleased]: https://github.com/Mas-inx/lumen-ai-video-editor/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.7.0
 [1.6.2]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.6.2
 [1.6.1]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.6.1
 [1.6.0]: https://github.com/Mas-inx/lumen-ai-video-editor/releases/tag/v1.6.0

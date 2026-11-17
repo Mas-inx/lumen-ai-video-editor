@@ -50,6 +50,15 @@ export interface SpeechSegment {
   start: number
   end: number
   text: string
+  /** Each word's timing, when the transcriber gave them (same seconds). */
+  words?: SpeechWord[]
+}
+
+/** One word of a transcript phrase. */
+export interface SpeechWord {
+  start: number
+  end: number
+  text: string
 }
 
 /** Something that happens in a clip with no sound of its own (a line said, a cut, footsteps), told by the app that made it. */
@@ -90,6 +99,8 @@ export interface Asset {
   transcript?: SpeechSegment[]
   favorite?: boolean
   tags?: string[]
+  /** What it shows, in words (written by the user or the AI after looking) — B-roll is found by it. */
+  description?: string
   /** A small copy of a heavy video that the preview plays instead (exports always use the original). */
   proxy?: { path: string; url: string; width: number; height: number }
   /** What happens in it and when, from the app that made it (see editor/cues.ts). */
@@ -107,6 +118,8 @@ export interface Asset {
     /** Where the subject usually is (0..1 of the frame; the median over the stretch). */
     box?: { x: number; y: number; w: number; h: number }
   }
+  /** A depth map made from another media item, for relighting (kept with the project, not listed in the Media panel). */
+  depthOf?: { assetId: string; from: number; to: number }
   addedAt: number
 }
 
@@ -226,7 +239,34 @@ export type HslBand = 'red' | 'orange' | 'yellow' | 'green' | 'aqua' | 'blue' | 
 /** Per colour range: hue shift (degrees, -60..60), saturation and luminance (-100..100). */
 export type HslAdjust = Partial<Record<HslBand, { hue: number; saturation: number; luminance: number }>>
 
-/** All values -100..100 except vignette (0..100). */
+/** White balance: gains per channel in linear light (1, 1, 1 is neutral). */
+export interface WhiteBalance {
+  r: number
+  g: number
+  b: number
+}
+
+/** Levels: where black and white sit in the footage (0..1) and a midtone gamma (1 is neutral). */
+export interface Levels {
+  black: number
+  white: number
+  gamma: number
+}
+
+/** A shot match: per-channel curves that bring a clip's footage in line with a reference clip's. */
+export interface ShotMatch {
+  red: CurvePoints
+  green: CurvePoints
+  blue: CurvePoints
+  /** The clip it was matched to (informational). */
+  ref?: string
+}
+
+/**
+ * All values -100..100 (a vignette below 0 lightens the edges). The correction
+ * — balance, levels, match — runs first, on the footage as it came in; the
+ * creative grade follows.
+ */
 export interface ColorGrade {
   exposure: number
   contrast: number
@@ -234,6 +274,9 @@ export interface ColorGrade {
   temperature: number
   tint: number
   vignette: number
+  balance?: WhiteBalance
+  levels?: Levels
+  match?: ShotMatch
   curves?: Curves
   wheels?: Wheels
   hsl?: HslAdjust
@@ -328,6 +371,12 @@ export type TransitionKind =
   | 'warp'
   | 'shatter'
   | 'spin'
+  // Smart — they read the two shots at the cut (see TransitionMatch), drawn on the GPU
+  | 'morph'
+  | 'through'
+  | 'whip'
+  | 'luma'
+  | 'match'
 
 /**
  * Where a transition sits on its cut: ending at it (over the end of the first
@@ -340,6 +389,24 @@ export interface Transition {
   duration: Frame
   /** Default 'after'. */
   align?: TransitionAlign
+  /** What a smart transition measured of the two shots at its cut (project/transition-actions.ts). */
+  match?: TransitionMatch
+}
+
+/**
+ * The two shots at a cut, measured: what smart transitions carry across it.
+ * Without a measurement they fall back to neutral settings.
+ */
+export interface TransitionMatch {
+  /** Where the outgoing and incoming shots' subjects are (fractions of the frame): Zoom Through goes into one and out of the other. */
+  from?: { x: number; y: number }
+  to?: { x: number; y: number }
+  /** The camera's motion around the cut, in frame heights a second (x right, y down): Whip Pan carries it on. */
+  motion?: { x: number; y: number }
+  /** Where the outgoing frame's content lands in the incoming one: w × h cells of offsets (fractions of the frame), x then y, as base64 float32. Morph warps along it. */
+  flow?: { w: number; h: number; data: string }
+  /** Curves that give the incoming shot the outgoing one's colours; Colour Match eases them off. */
+  color?: { red: CurvePoints; green: CurvePoints; blue: CurvePoints }
 }
 
 export type EffectKind =
@@ -353,6 +420,12 @@ export type EffectKind =
   | 'leak'
   | 'rgb'
   | 'sharpen'
+  // Light — rendered on the GPU
+  | 'halation'
+  | 'rays'
+  | 'flare'
+  | 'relight'
+  | 'particles'
   // Keys — make part of the picture transparent
   | 'chromaKey'
   | 'lumaKey'
@@ -472,6 +545,8 @@ export interface Clip {
   color: ColorGrade
   /** Named look preset last applied (informational). */
   look: string | null
+  /** The style last applied (see editor/styles.ts) — which effects and camera moves are the style's. */
+  style?: string
   audio: AudioMix
   text?: TextStyle
   blend: BlendMode
@@ -496,6 +571,16 @@ export interface Clip {
   stabilize?: Stabilization
   /** Cut down to the subject (or, inverted, to everything but it) by an AI matte. */
   matte?: SubjectMatte
+  /** How near each point of the picture is (an AI depth map): what Relight shapes its light around. */
+  depth?: DepthMap
+}
+
+/** An AI depth map for a clip: a video of the picture's depth (white = near). */
+export interface DepthMap {
+  /** The depth media. */
+  assetId: string
+  /** Source seconds the depth map starts at (it covers the stretch it was made for). */
+  from: number
 }
 
 /** An AI matte applied to a clip: a video of the subject's shape (white = subject). */
@@ -526,6 +611,114 @@ export interface ProjectFont {
   fileName: string
   /** The font file, base64. */
   data: string
+}
+
+// ─── Storyboard ──────────────────────────────────────────────────────────
+
+/** How a scene is made: shot footage, B-roll, kinetic type, an infographic, generated media, 3D, a motion graphic… */
+export type SceneTreatment =
+  | 'footage'
+  | 'broll'
+  | 'kinetic-type'
+  | 'infographic'
+  | 'generated-image'
+  | 'generated-video'
+  | '3d'
+  | 'motion-graphic'
+  | 'other'
+
+export type SceneStatus = 'planned' | 'in-progress' | 'done'
+
+/** Where a scene was made: a stretch of a timeline, and the clips that make it (the stretch follows them as the edit changes). */
+export interface SceneProduced {
+  timelineId: string
+  from: Frame
+  to: Frame
+  clipIds?: string[]
+}
+
+export interface StoryboardScene {
+  id: string
+  title: string
+  /** What's said over it: narration, dialogue or the words on screen. */
+  script: string
+  treatment: SceneTreatment
+  /** Target length in seconds — a plan, so it doesn't depend on any timeline's frame rate. */
+  seconds: number
+  /** How it comes in from the scene before; null is a straight cut. */
+  transition: { kind: TransitionKind; seconds: number } | null
+  /** What it still needs: shots to find or film, media to generate. */
+  needs: string[]
+  /** Media in the project it uses (or will use). */
+  assetIds: string[]
+  status: SceneStatus
+  notes: string
+  produced?: SceneProduced
+}
+
+/** A plan for the video, made before (and kept while) producing it: ordered scenes. */
+export interface Storyboard {
+  title?: string
+  /** What the video is for, who it's for, the tone. */
+  brief?: string
+  /** The style every scene keeps (an editor/styles.ts id, or "brand"). */
+  style?: string | null
+  scenes: StoryboardScene[]
+}
+
+// ─── Brand ───────────────────────────────────────────────────────────────
+
+export interface BrandTitles {
+  /** Text colour (hex), or null to keep each style's. */
+  color: string | null
+  /** The box behind lower thirds and labels (hex), or null for none. */
+  background: string | null
+  weight: number
+  uppercase: boolean
+  /** Letter spacing, em. */
+  tracking: number
+}
+
+export interface BrandCaptions {
+  style: 'clean' | 'bold' | 'word' | 'boxed'
+  /** Key words in word-by-word captions (hex). */
+  accent: string | null
+  /** null keeps the caption style's own case. */
+  uppercase: boolean | null
+}
+
+export interface BrandMotion {
+  titleIn: AnimPreset
+  titleOut: AnimPreset
+  /** How long title animations take. */
+  seconds: number
+  /** The curve for camera moves and keyframes. */
+  easing: Easing
+  /** On cuts: a transition, 'cut' for straight cuts, or null to leave cuts alone. */
+  transition: TransitionKind | 'cut' | null
+  transitionSeconds: number
+}
+
+/**
+ * The brand a project was given, from a brand kit: its identity (colours,
+ * typefaces, logos) and house style, kept with the project so it travels.
+ */
+export interface ProjectBrand {
+  /** The brand kit it came from. */
+  kitId?: string
+  name: string
+  colors: { name: string; hex: string }[]
+  /** Built-in fonts, or `custom:<id>` fonts embedded in the project. */
+  fonts: { heading: FontRef; body: FontRef }
+  /** The logos, as media in the project. */
+  logoAssetIds: string[]
+  titles: BrandTitles
+  captions: BrandCaptions
+  /** A colour look id (presets.ts), or null to leave footage as it is. */
+  look: string | null
+  motion: BrandMotion
+  /** The style (editor/styles.ts) the brand builds on, or null. */
+  style: string | null
 }
 
 // ─── Project ─────────────────────────────────────────────────────────────
@@ -600,5 +793,9 @@ export interface Project {
   sequence?: SequenceRef
   /** The project's other timelines, by id. */
   sequences?: Record<string, Sequence>
+  /** The plan the video is produced from (see editor/storyboard.ts). */
+  storyboard?: Storyboard
+  /** The brand applied from a brand kit. */
+  brand?: ProjectBrand
   createdAt: number
 }

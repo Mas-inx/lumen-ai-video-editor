@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { useEditor } from './store'
 
-export type LeftTab = 'media' | 'audio' | 'text' | 'effects' | 'transitions' | 'looks' | 'generate'
+export type LeftTab = 'storyboard' | 'media' | 'audio' | 'text' | 'effects' | 'transitions' | 'looks' | 'styles' | 'generate'
 export type RightTab = 'inspector' | 'mixer' | 'copilot'
 /** select: move and trim · blade: cut · roll: move a cut · slip: change the footage in place · slide: move a clip between its neighbours */
 export type Tool = 'select' | 'blade' | 'roll' | 'slip' | 'slide'
@@ -89,6 +89,8 @@ interface UIState {
   aboutOpen: boolean
   /** The graphics card and encoder check. */
   graphicsOpen: boolean
+  /** The brand kit editor. */
+  brandOpen: boolean
   /** clipId → timestamp; drives the "AI just touched this" shimmer */
   aiTouched: Record<string, number>
   /** Bumps to ask the timeline to zoom-to-fit */
@@ -124,6 +126,7 @@ interface UIState {
   setShortcutsOpen: (v: boolean) => void
   setAboutOpen: (v: boolean) => void
   setGraphicsOpen: (v: boolean) => void
+  setBrandOpen: (v: boolean) => void
   markAiTouched: (ids: string[]) => void
   requestFit: () => void
 }
@@ -160,6 +163,7 @@ export const useUI = create<UIState>()(
       shortcutsOpen: false,
       aboutOpen: false,
       graphicsOpen: false,
+      brandOpen: false,
       aiTouched: {},
       fitRequest: 0,
 
@@ -203,6 +207,7 @@ export const useUI = create<UIState>()(
       setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
       setAboutOpen: (aboutOpen) => set({ aboutOpen }),
       setGraphicsOpen: (graphicsOpen) => set({ graphicsOpen }),
+      setBrandOpen: (brandOpen) => set({ brandOpen }),
       markAiTouched: (ids) =>
         set((s) => {
           const now = Date.now()

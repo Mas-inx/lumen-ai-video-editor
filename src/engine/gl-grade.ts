@@ -2,14 +2,15 @@
  * The GPU grade: one WebGL2 fragment shader that keys and colours a clip's
  * layer, per pixel —
  *
- *   sharpen → key (chroma / luma, with spill suppression) → temperature & tint
- *   → exposure, contrast, saturation, mono → curves → lift / gamma / gain
- *   → HSL bands → 3D LUT
+ *   sharpen → key (chroma / luma, with spill suppression) → correction (white
+ *   balance, levels, shot match) → temperature & tint → exposure, contrast,
+ *   saturation, mono → curves → lift / gamma / gain → HSL bands → 3D LUT
  *
  * The basic sliders do exactly what the CSS-filter path does, so a clip looks
- * the same whether or not it needs this pass. Only clips that use curves,
- * wheels, HSL, a LUT, a key or sharpening come through here.
+ * the same whether or not it needs this pass. Only clips that use a
+ * correction, curves, wheels, HSL, a LUT, a key or sharpening come through here.
  */
+import { correctionTable, hasCorrection } from '@/editor/color-correct'
 import { curveTable, hasAdvancedGrade, isIdentityCurve, wheelParams } from '@/editor/color-math'
 import { base64ToBytes } from './fonts'
 import type { Clip, ColorGrade, Effect, Project } from '@/editor/types'
@@ -36,6 +37,9 @@ uniform int u_keyMode;          // 0 none, 1 chroma, 2 luma
 uniform vec3 u_keyColor;
 uniform vec4 u_key;             // tolerance, softness, spill, amount (0..1)
 uniform vec3 u_luma;            // threshold, softness, invert
+
+uniform bool u_hasCorrect;
+uniform sampler2D u_correct;    // 256 x 1, RGB = the correction curve per channel (half float)
 
 uniform vec4 u_temp;            // soft-light wash colour + strength
 uniform vec4 u_tint;
@@ -154,6 +158,12 @@ void main() {
     a *= mix(1.0, alpha, u_key.w);
   }
 
+  if (u_hasCorrect) {
+    c = vec3(texture(u_correct, vec2(c.r * 0.99609375 + 0.001953125, 0.5)).r,
+             texture(u_correct, vec2(c.g * 0.99609375 + 0.001953125, 0.5)).g,
+             texture(u_correct, vec2(c.b * 0.99609375 + 0.001953125, 0.5)).b);
+  }
+
   c = wash(c, u_temp);
   c = wash(c, u_tint);
   c *= u_basic.x;
@@ -210,6 +220,7 @@ interface Gl {
   program: WebGLProgram
   image: WebGLTexture
   curves: WebGLTexture
+  correct: WebGLTexture
   emptyLut: WebGLTexture
   loc: Record<string, WebGLUniformLocation | null>
 }
@@ -217,6 +228,22 @@ interface Gl {
 let state: Gl | null = null
 const lutTextures = new Map<string, { data: string; texture: WebGLTexture }>()
 let curvesKey = ''
+let correctKey = ''
+
+/** Correction tables by their settings: clips graded differently in one frame don't rebuild theirs every time. */
+const correctionCache = new Map<string, Float32Array>()
+
+function correctionTexels(key: string, g: ColorGrade) {
+  let data = correctionCache.get(key)
+  if (!data) {
+    const table = correctionTable(g)!
+    data = new Float32Array(256 * 4)
+    for (let i = 0; i < 256; i++) data.set([table[i * 3], table[i * 3 + 1], table[i * 3 + 2], 1], i * 4)
+    if (correctionCache.size >= 32) correctionCache.delete(correctionCache.keys().next().value!)
+    correctionCache.set(key, data)
+  }
+  return data
+}
 
 function compile(gl: WebGL2RenderingContext, type: number, src: string) {
   const s = gl.createShader(type)!
@@ -251,6 +278,7 @@ function init(): Gl | null {
   if (state && !state.gl.isContextLost()) return state
   lutTextures.clear()
   curvesKey = ''
+  correctKey = ''
   const canvas = document.createElement('canvas')
   const gl = canvas.getContext('webgl2', { premultipliedAlpha: true, preserveDrawingBuffer: true, antialias: false })
   if (!gl) return null
@@ -266,15 +294,19 @@ function init(): Gl | null {
   const pos = gl.getAttribLocation(program, 'a_pos')
   gl.enableVertexAttribArray(pos)
   gl.vertexAttribPointer(pos, 2, gl.FLOAT, false, 0, 0)
-  const names = ['u_image', 'u_texel', 'u_sharpen', 'u_keyMode', 'u_keyColor', 'u_key', 'u_luma', 'u_temp', 'u_tint', 'u_basic', 'u_hasCurves', 'u_curves', 'u_hasWheels', 'u_lift', 'u_gamma', 'u_gain', 'u_hasHsl', 'u_hsl', 'u_lutAmount', 'u_lutSize', 'u_lut']
+  const names = ['u_image', 'u_texel', 'u_sharpen', 'u_keyMode', 'u_keyColor', 'u_key', 'u_luma', 'u_hasCorrect', 'u_correct', 'u_temp', 'u_tint', 'u_basic', 'u_hasCurves', 'u_curves', 'u_hasWheels', 'u_lift', 'u_gamma', 'u_gain', 'u_hasHsl', 'u_hsl', 'u_lutAmount', 'u_lutSize', 'u_lut']
   const loc = Object.fromEntries(names.map((n) => [n, gl.getUniformLocation(program, n)]))
   const image = texture2d(gl)
   const curves = texture2d(gl)
+  const correct = texture2d(gl)
+  // An identity until a clip has a correction, so the sampler is always complete.
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, 2, 1, 0, gl.RGBA, gl.FLOAT, new Float32Array([0, 0, 0, 1, 1, 1, 1, 1]))
   const emptyLut = texture3d(gl, 2, new Uint8Array([0, 0, 0, 255, 0, 0, 0, 255, 0, 255, 255, 0, 0, 0, 255, 255, 0, 255, 0, 255, 255, 255, 255, 255]))
   gl.uniform1i(loc.u_image, 0)
   gl.uniform1i(loc.u_curves, 1)
   gl.uniform1i(loc.u_lut, 2)
-  state = { canvas, gl, program, image, curves, emptyLut, loc }
+  gl.uniform1i(loc.u_correct, 3)
+  state = { canvas, gl, program, image, curves, correct, emptyLut, loc }
   return state
 }
 
@@ -292,7 +324,7 @@ const enabled = (clip: Pick<Clip, 'effects'>, kind: Effect['kind']) => clip.effe
 
 /** Whether a clip's picture needs the GPU grade. */
 export function needsGpuGrade(clip: Pick<Clip, 'color' | 'effects'>) {
-  return hasAdvancedGrade(clip.color) || Boolean(enabled(clip, 'chromaKey') || enabled(clip, 'lumaKey') || enabled(clip, 'sharpen'))
+  return hasAdvancedGrade(clip.color) || hasCorrection(clip.color) || Boolean(enabled(clip, 'chromaKey') || enabled(clip, 'lumaKey') || enabled(clip, 'sharpen'))
 }
 
 export interface GradeInput {
@@ -343,6 +375,20 @@ export function gpuGrade(source: HTMLCanvasElement, input: GradeInput, project: 
   gl.uniform3fv(loc.u_keyColor, hex(String(chroma?.params?.color ?? '#00d84a')))
   gl.uniform4f(loc.u_key, num(chroma, 'tolerance', 32) / 100, num(chroma, 'softness', 18) / 100, num(chroma, 'spill', 60) / 100, (keyFx?.amount ?? 100) / 100)
   gl.uniform3f(loc.u_luma, num(luma, 'threshold', 18) / 100, num(luma, 'softness', 12) / 100, num(luma, 'invert', 0))
+
+  // The correction, as one curve per channel (half floats: gentle white-balance gains don't band).
+  const correct = hasCorrection(g)
+  gl.uniform1i(loc.u_hasCorrect, correct ? 1 : 0)
+  gl.activeTexture(gl.TEXTURE3)
+  gl.bindTexture(gl.TEXTURE_2D, s.correct)
+  if (correct) {
+    const key = JSON.stringify([g.balance, g.levels, g.match])
+    if (key !== correctKey) {
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, 256, 1, 0, gl.RGBA, gl.FLOAT, correctionTexels(key, g))
+      correctKey = key
+    }
+  }
 
   // The same washes and filter numbers the 2D path uses (color.ts).
   const temp = input.washes && g.temperature ? hex(g.temperature > 0 ? '#ff963a' : '#3a8cff') : [0, 0, 0]

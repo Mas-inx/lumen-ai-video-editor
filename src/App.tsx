@@ -8,6 +8,7 @@ import { HomeScreen } from '@/features/home/HomeScreen'
 import { startSession, useSession } from '@/project/session'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { AssetsPanel } from '@/features/assets/AssetsPanel'
+import { BrandKitDialog } from '@/features/brand/BrandKitDialog'
 import { CommandPalette } from '@/features/command/CommandPalette'
 import { ExportDialog } from '@/features/export/ExportDialog'
 import { RenderQueueDialog } from '@/features/export/RenderQueue'
@@ -67,6 +68,7 @@ export function App() {
         <ShortcutsDialog />
         <AboutDialog />
         <GraphicsDialog />
+        <BrandKitDialog />
         <PasteAttributesDialog />
         <VersionHistoryDialog />
         <RenameTimelineDialog />

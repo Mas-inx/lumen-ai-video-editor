@@ -4,6 +4,7 @@
  * Type-only apart from the IPC channel names, so both sides can import it.
  */
 import type { AgentEvent, AgentRunRequest, AttachmentContent, AttachmentInput, ChatAttachment, LocalAgentId, LocalAgentState, ModelInfo, ProviderId, ProviderState } from './ai'
+import type { ComfyAPI } from './comfyui'
 import type { SkillDoc, SkillInfo, SkillSource } from './skills'
 
 // ─── Generated media ─────────────────────────────────────────────────────
@@ -19,6 +20,8 @@ export interface TranscriptSegment {
   start: number
   end: number
   text: string
+  /** Each word's timing, when the service gives them. */
+  words?: { start: number; end: number; text: string }[]
 }
 
 export interface Provenance {
@@ -46,7 +49,7 @@ export interface GeneratedAsset {
 
 // ─── Jobs ────────────────────────────────────────────────────────────────
 
-export type IntegrationKind = 'blender' | 'hyperframes' | 'mcp' | 'elevenlabs' | 'ai'
+export type IntegrationKind = 'blender' | 'hyperframes' | 'mcp' | 'elevenlabs' | 'ai' | 'comfyui'
 
 // ─── Image & video generation (the user's OpenAI / Google keys) ──────────
 
@@ -82,7 +85,9 @@ export interface Job {
   progress: number
   message?: string
   assets?: GeneratedAsset[]
-  /** MCP tool calls keep their full result for the tool explorer. */
+  /** Files a job saved that aren't media the editor plays (ComfyUI's 3D models and data). */
+  files?: { name: string; path: string }[]
+  /** MCP tool calls keep their full result for the tool explorer; ComfyUI runs put the text they show here. */
   result?: McpCallResult
   /** Transcription jobs return phrase timings. */
   transcript?: TranscriptSegment[]
@@ -130,7 +135,7 @@ export interface BlenderLiveResult {
 
 // ─── HyperFrames (HTML motion graphics) ──────────────────────────────────
 
-export type MotionTemplate = 'lower-third' | 'kinetic' | 'counter' | 'title-card' | 'quote' | 'chapter' | 'custom'
+export type MotionTemplate = 'lower-third' | 'kinetic' | 'counter' | 'title-card' | 'quote' | 'chapter' | 'particle-title' | 'chart' | 'custom'
 
 export interface MotionRenderRequest {
   template: MotionTemplate
@@ -310,6 +315,8 @@ export interface IntegrationsAPI {
     /** Calls a tool for an AI agent and resolves with what it said (no job, nothing imported). */
     callForAgent(serverId: string, tool: string, args: Record<string, unknown>): Promise<McpAgentResult>
   }
+  /** The user's own ComfyUI: its connection, the workflow library and runs (see shared/comfyui.ts). */
+  comfyui: ComfyAPI
   media: {
     /** Downloads remote media into Lumen's library folder. */
     importUrl(url: string, name?: string, provenance?: Provenance): Promise<GeneratedAsset>

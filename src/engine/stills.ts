@@ -7,12 +7,19 @@
 import type { Asset, Project } from '@/editor/types'
 import { clipSourceTime, mediaDrawnAt, renderFrame } from './compositor'
 import { framesAt, VideoReader } from './decode'
-import { ensureImage, ensureSequenceFrame, sequenceFrame, withVideoFrames } from './media'
+import { ensureImage, ensureSequenceFrame, holdPictures, sequenceFrame, sequenceFrameUrl, sequenceIndex, withVideoFrames } from './media'
 
-/** Decodes, for one frame at a time, exactly the video frames the compositor will draw — inside nested timelines too. */
+/**
+ * Decodes, for one frame at a time, exactly the video frames the compositor will
+ * draw — inside nested timelines too. A clip's reader stays open while its clip
+ * is drawn, and is let go at the first frame that doesn't draw it: an export
+ * moves on and never comes back, so a long one holds only what's on screen.
+ */
 export class FrameFeeder {
   private readers = new Map<string, VideoReader>()
   private ready = new Map<string, CanvasImageSource | null>()
+  /** The stills and sequence frames this frame draws, kept loaded until it's drawn. */
+  private pictures = holdPictures()
   constructor(
     /** The project frames are prepared for (may change between frames: readers carry over). */
     public project: Project,
@@ -22,23 +29,33 @@ export class FrameFeeder {
 
   async prepare(frame: number) {
     this.ready.clear()
+    this.pictures.urls.clear()
+    const drawn = new Set<string>()
     for (const { clip, local, view, key, offset } of mediaDrawnAt(this.project, frame)) {
       const asset = clip.assetId ? view.assets[clip.assetId] : undefined
       if (!asset || asset.source.missing) continue
       const t = clipSourceTime(clip, local, view.settings.fps) - (offset ?? 0)
       if (asset.source.type === 'file' && asset.kind === 'video') {
-        this.ready.set(key, await this.reader(key, asset.source.url).frameAt(Math.max(0, t)))
+        const id = `${key}
+${asset.source.url}`
+        drawn.add(id)
+        this.ready.set(key, await this.reader(id, asset.source.url).frameAt(Math.max(0, t)))
       } else if (asset.source.type === 'file' && asset.kind === 'image') {
+        this.pictures.urls.add(asset.source.url)
         await ensureImage(asset.source.url)
       } else if (asset.source.type === 'sequence') {
+        this.pictures.urls.add(sequenceFrameUrl(asset.source, sequenceIndex(asset.source, Math.max(0, t))))
         await ensureSequenceFrame(asset.source, Math.max(0, t))
       }
     }
+    for (const [id, r] of this.readers) {
+      if (drawn.has(id)) continue
+      r.dispose()
+      this.readers.delete(id)
+    }
   }
 
-  private reader(key: string, url: string) {
-    const id = `${key}
-${url}`
+  private reader(id: string, url: string) {
     let r = this.readers.get(id)
     if (!r) {
       r = new VideoReader(url, this.width, this.height)
@@ -52,6 +69,8 @@ ${url}`
   dispose() {
     for (const r of this.readers.values()) r.dispose()
     this.readers.clear()
+    this.ready.clear()
+    this.pictures.release()
   }
 }
 

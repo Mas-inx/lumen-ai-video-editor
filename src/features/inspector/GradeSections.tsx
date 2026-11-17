@@ -1,22 +1,28 @@
 /**
- * Advanced colour: lift / gamma / gain wheels, tone curves, HSL bands and LUTs.
- * All of it runs in the GPU grade (engine/gl-grade.ts); the editors here only
- * shape the numbers.
+ * Advanced colour: the correction (white balance, levels, shot match), lift /
+ * gamma / gain wheels, tone curves, HSL bands and LUTs. All of it runs in the
+ * GPU grade (engine/gl-grade.ts); the editors here only shape the numbers.
  */
-import { Blend, Circle, FileUp, Plus, RotateCcw, Spline, SwatchBook, Trash } from 'lucide-react'
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { Blend, Circle, FileUp, GitCompareArrows, Pipette, Plus, RotateCcw, Spline, SwatchBook, Trash, Wand2, X } from 'lucide-react'
+import { useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { toast } from 'sonner'
+import { useShallow } from 'zustand/react/shallow'
 import { IconButton } from '@/components/ui/button'
 import { Row, Section } from '@/components/ui/section'
 import { Segmented } from '@/components/ui/segmented'
 import { Select } from '@/components/ui/select'
 import { Slider } from '@/components/ui/slider'
+import { Switch } from '@/components/ui/switch'
+import { balanceFor, hasCorrection, isNeutralBalance, NEUTRAL_BALANCE, NEUTRAL_LEVELS } from '@/editor/color-correct'
 import { HSL_BANDS, evalCurve, isIdentityCurve, isNeutralHsl, isNeutralWheel, normalizePoints } from '@/editor/color-math'
-import { IDENTITY_CURVES, NEUTRAL_WHEELS } from '@/editor/defaults'
+import { DEFAULT_COLOR, IDENTITY_CURVES, NEUTRAL_WHEELS } from '@/editor/defaults'
 import { parseCube } from '@/editor/lut'
 import { dispatch, useEditor } from '@/editor/store'
-import type { Clip, CurvePoints, Curves, HslBand, Wheel, Wheels } from '@/editor/types'
+import type { Clip, ColorGrade, CurvePoints, Curves, HslBand, Wheel, Wheels } from '@/editor/types'
 import { bytesToBase64 } from '@/engine/fonts'
+import { rgbOf } from '@/engine/gl-fx'
+import { actions } from '@/features/shell/actions'
+import { setBalance } from '@/project/color-actions'
 import { uid } from '@/lib/id'
 import { cn } from '@/lib/cn'
 import { clamp } from '@/lib/math'
@@ -24,6 +30,168 @@ import { clamp } from '@/lib/math'
 type Patch = Parameters<typeof dispatch<'clip.update'>>[1]['patch']
 const update = (ids: string[], color: NonNullable<Patch>['color'], key?: string, label?: string) =>
   dispatch('clip.update', { ids, patch: { color, look: null } }, { ...(key ? { coalesce: key } : {}), ...(label ? { label } : {}) })
+
+// ─── Correction ──────────────────────────────────────────────────────────
+
+/** A clip's whole grade as a patch that puts it back exactly (what's absent is removed). */
+function restoring(g: ColorGrade): NonNullable<Patch>['color'] {
+  return {
+    exposure: g.exposure,
+    contrast: g.contrast,
+    saturation: g.saturation,
+    temperature: g.temperature,
+    tint: g.tint,
+    vignette: g.vignette,
+    balance: g.balance ?? null,
+    levels: g.levels ?? null,
+    match: g.match ?? null,
+    curves: g.curves ?? null,
+    wheels: g.wheels ?? null,
+    hsl: g.hsl ?? null,
+    lut: g.lut ?? null,
+  }
+}
+
+const NEUTRAL_GRADE = { ...DEFAULT_COLOR, balance: null, levels: null, match: null, curves: null, wheels: null, hsl: null, lut: null }
+
+/** Other shots a clip can be matched to, as "id name" pairs (plain strings keep the selector stable). */
+const SEP = '\u0000'
+
+function SmallButton({ onClick, icon, children, title, disabled }: { onClick: () => void; icon: ReactNode; children: ReactNode; title?: string; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      disabled={disabled}
+      className="flex h-6 shrink-0 items-center gap-1 rounded-md bg-white/[0.06] px-2 text-2xs font-medium text-fg-2 hover:bg-white/[0.1] hover:text-fg disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-3"
+    >
+      {icon}
+      {children}
+    </button>
+  )
+}
+
+/**
+ * The correction: white balance (pick something that should be neutral, or
+ * Auto), levels, and matching to another shot — on the footage as it came
+ * in, before the creative grade below.
+ */
+export function CorrectionSection({ clips }: { clips: Clip[] }) {
+  const ids = clips.map((c) => c.id)
+  const g = clips[0].color
+  const footage = clips.every((c) => (c.kind === 'video' || c.kind === 'image') && !c.sequenceId)
+  const active = hasCorrection(g)
+  const balance = g.balance ?? NEUTRAL_BALANCE
+  const levels = g.levels ?? NEUTRAL_LEVELS
+  const others = useEditor(
+    useShallow((s) =>
+      Object.values(s.project.clips)
+        .filter((c) => (c.kind === 'video' || c.kind === 'image') && !c.sequenceId && !ids.includes(c.id))
+        .sort((a, b) => a.start - b.start)
+        .map((c) => `${c.id}${SEP}${c.name}`),
+    ),
+  )
+  const matchedTo = useEditor((s) => (g.match?.ref ? s.project.clips[g.match.ref]?.name : undefined))
+  const [ref, setRef] = useState('none')
+  const [copyLook, setCopyLook] = useState(false)
+  const setLevels = (patch: Partial<typeof levels>, key: string) => update(ids, { levels: patch }, `levels:${ids.join()}:${key}`, 'Levels')
+
+  const pick = async () => {
+    const Dropper = (window as unknown as { EyeDropper?: new () => { open(): Promise<{ sRGBHex: string }> } }).EyeDropper
+    if (!Dropper) return void toast('This browser has no eyedropper — use Auto instead')
+    // Pick off the footage as it came in: the grade is off while the dropper is open.
+    const saved = clips.map((c) => ({ id: c.id, color: restoring(c.color) }))
+    dispatch('clip.update', { ids, patch: { color: NEUTRAL_GRADE } }, { history: false })
+    let hex: string | null = null
+    try {
+      hex = (await new Dropper().open()).sRGBHex
+    } catch {
+      /* cancelled */
+    }
+    for (const s of saved) dispatch('clip.update', { ids: [s.id], patch: { color: s.color } }, { history: false })
+    if (hex) setBalance(ids, balanceFor(rgbOf(hex)))
+  }
+
+  return (
+    <Section
+      title="Correction"
+      icon={<Pipette />}
+      defaultOpen={active}
+      actions={
+        active && (
+          <IconButton size="xs" label="Reset correction" onClick={() => update(ids, { balance: null, levels: null, match: null }, undefined, 'Reset correction')}>
+            <RotateCcw />
+          </IconButton>
+        )
+      }
+    >
+      {!footage ? (
+        <p className="text-2xs text-fg-4">Correction measures footage: select video or image clips. On an adjustment layer, grade with the tools below.</p>
+      ) : (
+        <div className="space-y-2.5">
+          <Row label="Balance">
+            <SmallButton onClick={() => void pick()} icon={<Pipette />} title="Click something that should be white or grey">
+              Pick
+            </SmallButton>
+            <SmallButton onClick={() => void actions.autoColor(ids)} icon={<Wand2 />} title="Measure the footage and take out its colour cast; sets the levels too">
+              Auto
+            </SmallButton>
+            <span className="ml-auto truncate text-2xs text-fg-4 tabular">{isNeutralBalance(g.balance) ? 'As shot' : `${balance.r.toFixed(2)} · ${balance.g.toFixed(2)} · ${balance.b.toFixed(2)}`}</span>
+          </Row>
+          <div className="space-y-1">
+            <Row label="Black point">
+              <Slider aria-label="Black point" value={levels.black * 100} min={0} max={50} defaultValue={0} onChange={(v) => setLevels({ black: Math.round(v) / 100 }, 'b')} />
+              <span className="w-9 shrink-0 text-right text-xs text-fg-3 tabular">{Math.round(levels.black * 100)}</span>
+            </Row>
+            <Row label="White point">
+              <Slider aria-label="White point" value={levels.white * 100} min={50} max={100} defaultValue={100} onChange={(v) => setLevels({ white: Math.round(v) / 100 }, 'w')} />
+              <span className="w-9 shrink-0 text-right text-xs text-fg-3 tabular">{Math.round(levels.white * 100)}</span>
+            </Row>
+            <Row label="Midtones">
+              <Slider
+                aria-label="Midtones"
+                value={Math.log2(levels.gamma) * 100}
+                min={-100}
+                max={100}
+                bipolar
+                defaultValue={0}
+                onChange={(v) => setLevels({ gamma: Math.round(Math.pow(2, v / 100) * 1000) / 1000 }, 'g')}
+              />
+              <span className="w-9 shrink-0 text-right text-xs text-fg-3 tabular">{Math.round(Math.log2(levels.gamma) * 100)}</span>
+            </Row>
+          </div>
+          <div className="space-y-1">
+            <Row label="Match to">
+              <Select
+                aria-label="Shot to match"
+                value={ref}
+                onChange={setRef}
+                options={[{ value: 'none', label: others.length ? 'Choose a shot…' : 'No other shots' }, ...others.map((o) => ({ value: o.split(SEP)[0], label: o.split(SEP)[1] }))]}
+                className="min-w-0 flex-1"
+              />
+              <SmallButton onClick={() => void actions.matchColor(ids, ref, copyLook)} icon={<GitCompareArrows />} disabled={ref === 'none'} title="Line this shot’s tones and colour up with the chosen one">
+                Match
+              </SmallButton>
+            </Row>
+            <Row label="Its grade too">
+              <span className="flex-1 truncate text-2xs text-fg-4">Copy the reference’s look as well</span>
+              <Switch aria-label="Also copy the reference’s grade" checked={copyLook} onChange={setCopyLook} />
+            </Row>
+            {g.match && (
+              <div className="flex items-center gap-1.5 pl-[84px] text-2xs text-fg-3">
+                <span className="min-w-0 flex-1 truncate">Matched to {matchedTo ? `“${matchedTo}”` : 'another shot'}</span>
+                <IconButton size="xs" label="Remove the match" onClick={() => update(ids, { match: null }, undefined, 'Remove colour match')}>
+                  <X />
+                </IconButton>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </Section>
+  )
+}
 
 // ─── Wheels ──────────────────────────────────────────────────────────────
 

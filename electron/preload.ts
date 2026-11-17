@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'ele
 import type { AgentEvent } from '../shared/ai'
 import { APP_IPC, type AppAPI, type CollectProgress, type UpdateState } from '../shared/app'
 import { CAPTURE_IPC, type CaptureHotkey, type CursorEvent } from '../shared/capture'
+import { COMFY_IPC } from '../shared/comfyui'
 import type { IngestClip, IngestState } from '../shared/ingest'
 import { IPC, type BridgeRequest, type BridgeState, type IntegrationsAPI, type Job, type McpServerState } from '../shared/integrations'
 
@@ -34,6 +35,17 @@ const integrations: IntegrationsAPI = {
     signOut: (id) => invoke(IPC.mcpSignOut, id),
     call: (serverId, tool, args) => invoke(IPC.mcpCall, serverId, tool, args),
     callForAgent: (serverId, tool, args) => invoke(IPC.mcpCallForAgent, serverId, tool, args),
+  },
+  comfyui: {
+    status: (refresh) => invoke(COMFY_IPC.status, refresh),
+    configure: (patch) => invoke(COMFY_IPC.configure, patch),
+    workflows: () => invoke(COMFY_IPC.workflows),
+    importFile: (path) => invoke(COMFY_IPC.importFile, path),
+    importJson: (json, name) => invoke(COMFY_IPC.importJson, json, name),
+    rename: (id, name) => invoke(COMFY_IPC.rename, id, name),
+    remove: (id) => invoke(COMFY_IPC.remove, id),
+    upload: (source) => invoke(COMFY_IPC.upload, source),
+    run: (req) => invoke(COMFY_IPC.run, req),
   },
   media: {
     importUrl: (url, name, provenance) => invoke(IPC.mediaImportUrl, url, name, provenance),
@@ -141,6 +153,7 @@ const appApi: AppAPI = {
     discardRecovery: () => invoke(APP_IPC.projectDiscardRecovery),
     setState: (state) => ipcRenderer.send(APP_IPC.projectState, state),
     startupFile: () => invoke(APP_IPC.projectStartup),
+    reopen: () => invoke(APP_IPC.projectReopen),
     confirmDiscard: (name) => invoke(APP_IPC.confirmDiscard, name),
     onOpenRequest: (cb) => subscribe<string>(APP_IPC.openRequest, cb),
     onSaveBeforeClose: (cb) => subscribe<void>(APP_IPC.saveBeforeClose, () => cb()),
@@ -222,6 +235,11 @@ const appApi: AppAPI = {
     gpu: () => invoke(APP_IPC.gpuInfo),
     setGraphics: (patch) => invoke(APP_IPC.graphicsSet, patch),
     relaunch: () => ipcRenderer.send(APP_IPC.relaunch),
+  },
+  brand: {
+    get: () => invoke(APP_IPC.brandGet),
+    save: (store) => invoke(APP_IPC.brandSave, store),
+    addLogo: () => invoke(APP_IPC.brandAddLogo),
   },
   updates: {
     state: () => invoke(APP_IPC.updateState),

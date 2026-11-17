@@ -1,10 +1,14 @@
-import { Clapperboard, LoaderCircle } from 'lucide-react'
+import { Clapperboard, Dices, LoaderCircle } from 'lucide-react'
 import { AnimatePresence } from 'motion/react'
 import { useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import type { MotionTemplate } from '@shared/integrations'
-import { Button } from '@/components/ui/button'
+import { CHART_KINDS, chartKind, PARTICLE_DEFAULT_DIRECTION, PARTICLE_DIRECTIONS, PARTICLE_STYLES, parseChartData, particleStyle } from '@shared/motion'
+import { Button, IconButton } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { ScrubInput } from '@/components/ui/scrub-input'
+import { Segmented } from '@/components/ui/segmented'
+import { Select } from '@/components/ui/select'
 import { useEditor } from '@/editor/store'
 import { ColorSwatches } from '@/features/inspector/controls'
 import { RenderCard } from '@/features/integrations/parts'
@@ -18,6 +22,18 @@ type Template = Exclude<MotionTemplate, 'custom'>
 const serif = { fontFamily: '"Fraunces Variable", Georgia, serif' }
 const art = { fontFamily: '"Syne Variable", sans-serif' }
 const tech = { fontFamily: '"Space Grotesk Variable", sans-serif' }
+const display = { fontFamily: '"Bricolage Grotesque Variable", sans-serif' }
+
+/** Where the particle preview's loose dots sit: still drifting in from the left. */
+const STRAYS = [
+  [14, 38, 0.35],
+  [20, 58, 0.5],
+  [24, 44, 0.7],
+  [9, 52, 0.25],
+  [28, 62, 0.55],
+  [18, 30, 0.4],
+  [31, 36, 0.8],
+]
 
 /** Tiny static mock-ups of each template, so the picker reads at a glance. */
 const PREVIEWS: Record<Template, ReactNode> = {
@@ -75,6 +91,27 @@ const PREVIEWS: Record<Template, ReactNode> = {
       </span>
     </div>
   ),
+  'particle-title': (
+    <div className="absolute inset-0 grid place-items-center">
+      {/* The word in dots, as it is just before it turns to solid type. */}
+      <span
+        className="bg-clip-text text-[21px] leading-none font-extrabold tracking-tight text-transparent"
+        style={{ ...display, backgroundImage: 'radial-gradient(circle, #fff 0.6px, transparent 0.8px)', backgroundSize: '2px 2px' }}
+      >
+        Spark
+      </span>
+      {STRAYS.map(([x, y, o], i) => (
+        <span key={i} className={cn('absolute size-[2px] rounded-full', i % 3 ? 'bg-white' : 'bg-accent')} style={{ left: `${x}%`, top: `${y}%`, opacity: o }} />
+      ))}
+    </div>
+  ),
+  chart: (
+    <div className="absolute inset-x-[18%] top-[24%] bottom-[24%] flex items-end gap-[3px] border-b border-white/50">
+      {[38, 55, 47, 70, 92].map((h, i) => (
+        <span key={i} className={cn('flex-1 rounded-t-[1px]', i === 4 ? 'bg-accent' : 'bg-white/75')} style={{ height: `${h}%` }} />
+      ))}
+    </div>
+  ),
 }
 
 const TEMPLATES: { id: Template; label: string }[] = [
@@ -84,12 +121,15 @@ const TEMPLATES: { id: Template; label: string }[] = [
   { id: 'counter', label: 'Counter' },
   { id: 'quote', label: 'Pull quote' },
   { id: 'chapter', label: 'Chapter' },
+  { id: 'particle-title', label: 'Particle title' },
+  { id: 'chart', label: 'Chart' },
 ]
 
 const STYLES: Partial<Record<Template, string[]>> = {
   'lower-third': ['editorial', 'block', 'minimal'],
   'title-card': ['editorial', 'poster'],
   kinetic: ['punch', 'stack', 'stretch'],
+  'particle-title': [...PARTICLE_STYLES],
 }
 
 const FONTS: { id: string; label: string; css: string }[] = [
@@ -126,7 +166,20 @@ function nameFor(template: Template, v: Record<string, unknown>) {
       return `Quote — ${plain(v.text)}`
     case 'chapter':
       return `Chapter ${plain(v.number)} — ${plain(v.title)}`
+    case 'particle-title':
+      return `Particle title — ${plain(v.title)}`
+    case 'chart':
+      return `${chartKind(v.kind).replace(/^./, (c) => c.toUpperCase())} chart — ${plain(v.title)}`
   }
+}
+
+/** What a template is sent: the panel's own switches left out. */
+function paramsFor(template: Template, v: Record<string, unknown>) {
+  if (template !== 'chart') return v
+  const { parts, highlight, ...rest } = v
+  const pick = typeof highlight === 'string' && highlight !== 'none' ? highlight.replace(/^=/, '') : undefined
+  // A donut shows one value, or — split into parts — the data.
+  return { ...rest, value: rest.kind === 'donut' && !parts ? rest.value : undefined, highlight: pick }
 }
 
 export function GenerateMotion() {
@@ -141,6 +194,8 @@ export function GenerateMotion() {
     counter: { value: 100, suffix: '%', label: '', accent: '#d6ee00' },
     quote: { text: 'Simplicity is the ultimate sophistication.', author: '', accent: '#d6ee00', font: 'editorial' },
     chapter: { number: '01', title: 'Chapter title', accent: '#d6ee00', font: 'display' },
+    'particle-title': { title: 'Make it count', subtitle: '', style: 'dust', color: '#ffffff', accent: '#d6ee00', font: 'display', seed: 1 },
+    chart: { kind: 'bar', title: 'Viewers this week', data: 'Mon: 42\nTue: 58\nWed: 61\nThu: 74\nFri: 92', value: 72, label: '', prefix: '', suffix: '', highlight: 'max', parts: false, color: '#ffffff', accent: '#d6ee00', font: 'tech' },
   })
   const [busy, setBusy] = useState(false)
   const v = values[template]
@@ -154,7 +209,8 @@ export function GenerateMotion() {
   const render = async () => {
     setBusy(true)
     try {
-      await renderMotion({ template, params: v, name: nameFor(template, v).slice(0, 60), prompt: JSON.stringify(v) })
+      const params = paramsFor(template, v)
+      await renderMotion({ template, params, name: nameFor(template, v).slice(0, 60), prompt: JSON.stringify(params) })
     } catch (err) {
       toast.error('Couldn’t start the render', { description: err instanceof Error ? err.message : String(err) })
     } finally {
@@ -164,6 +220,8 @@ export function GenerateMotion() {
 
   const text = (key: string, placeholder?: string) => <Input value={String(v[key] ?? '')} onChange={(e) => set(key, e.target.value)} placeholder={placeholder} />
   const styles = STYLES[template]
+  // A bar or line chart (or a donut split into parts) needs at least one number to draw.
+  const ready = template !== 'chart' || (chartKind(v.kind) === 'donut' && !v.parts) || parseChartData(v.data).items.length > 0
   const usesBpm = template === 'kinetic' || (template === 'title-card' && v.style === 'poster')
 
   return (
@@ -235,6 +293,13 @@ export function GenerateMotion() {
             <Labeled label="Title">{text('title', 'Chapter title')}</Labeled>
           </div>
         )}
+        {template === 'particle-title' && (
+          <>
+            <Labeled label="Title">{text('title', 'Title — | breaks a line')}</Labeled>
+            <Labeled label="Subtitle">{text('subtitle', 'Optional, once the title has formed')}</Labeled>
+          </>
+        )}
+        {template === 'chart' && <ChartFields v={v} set={set} text={text} />}
 
         {styles && (
           <div>
@@ -248,6 +313,7 @@ export function GenerateMotion() {
             </div>
           </div>
         )}
+        {template === 'particle-title' && <ParticleFields v={v} set={set} />}
         {template !== 'kinetic' || v.style !== 'stretch' ? (
           <div>
             <span className="mb-1.5 block text-2xs font-semibold tracking-wider text-fg-4 uppercase">Typeface</span>
@@ -265,12 +331,18 @@ export function GenerateMotion() {
             <Input type="number" min={40} max={240} value={v.bpm === undefined ? '' : String(v.bpm)} onChange={(e) => set('bpm', e.target.value ? Number(e.target.value) : undefined)} placeholder="Optional, e.g. 120" />
           </Labeled>
         )}
+        {(template === 'particle-title' || template === 'chart') && (
+          <div>
+            <span className="mb-1.5 block text-2xs font-semibold tracking-wider text-fg-4 uppercase">Colour</span>
+            <ColorSwatches value={String(v.color ?? '#ffffff')} onChange={(c) => c && set('color', c)} />
+          </div>
+        )}
         <div>
           <span className="mb-1.5 block text-2xs font-semibold tracking-wider text-fg-4 uppercase">Accent</span>
           <ColorSwatches value={String(v.accent ?? '#d6ee00')} onChange={(c) => c && set('accent', c)} />
         </div>
 
-        <Button variant="ai" size="lg" className="w-full" disabled={busy} onClick={render}>
+        <Button variant="ai" size="lg" className="w-full" disabled={busy || !ready} onClick={render}>
           {busy ? <LoaderCircle className="animate-spin" /> : <Clapperboard />}
           Render motion graphic
         </Button>
@@ -291,5 +363,127 @@ export function GenerateMotion() {
         </div>
       </div>
     </div>
+  )
+}
+
+type Setter = (key: string, value: unknown) => void
+
+/** Where a particle title's particles come from, and which scatter of them. */
+function ParticleFields({ v, set }: { v: Record<string, unknown>; set: Setter }) {
+  const direction = String(v.direction ?? PARTICLE_DEFAULT_DIRECTION[particleStyle(v.style)])
+  return (
+    <>
+      <div>
+        <span className="mb-1.5 block text-2xs font-semibold tracking-wider text-fg-4 uppercase">Particles come in</span>
+        <div className="flex flex-wrap gap-1">
+          {PARTICLE_DIRECTIONS.map((d) => (
+            <Chip key={d} active={direction === d} onClick={() => set('direction', d)}>
+              {d === 'everywhere' ? 'From everywhere' : d === 'below' ? 'From below' : `From the ${d}`}
+            </Chip>
+          ))}
+        </div>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <ScrubInput className="flex-1" prefix="Seed" value={Number(v.seed ?? 1)} onChange={(n) => set('seed', Math.round(n))} min={1} max={9999} aria-label="Seed" />
+        <IconButton label="Scatter them differently" onClick={() => set('seed', 1 + Math.floor(Math.random() * 9999))}>
+          <Dices />
+        </IconButton>
+      </div>
+    </>
+  )
+}
+
+const KIND_LABEL = { bar: 'Bars', line: 'Line', donut: 'Donut' } as const
+
+const ORIENTATIONS = [
+  [undefined, 'Auto'],
+  ['vertical', 'Columns'],
+  ['horizontal', 'Rows'],
+] as const
+
+/** A chart's numbers: "Label: value" lines (or one value for a donut), their unit, and the item to pick out. */
+function ChartFields({ v, set, text }: { v: Record<string, unknown>; set: Setter; text: (key: string, placeholder?: string) => ReactNode }) {
+  const kind = chartKind(v.kind)
+  const single = kind === 'donut' && !v.parts
+  const data = parseChartData(v.data)
+  const values = data.items.map((d) => d.value)
+  const noun = kind === 'line' ? 'points' : kind === 'donut' ? 'parts' : 'bars'
+  const labels = [...new Set(data.items.map((d) => d.label).filter(Boolean))].slice(0, 40)
+  const highlights = [
+    { value: 'none', label: 'None' },
+    { value: 'max', label: kind === 'line' ? 'Highest' : 'Largest' },
+    { value: 'min', label: kind === 'line' ? 'Lowest' : 'Smallest' },
+    { value: 'last', label: 'Last' },
+    ...labels.map((l) => ({ value: `=${l}`, label: l })),
+  ]
+  const lines = String(v.data ?? '').split('\n').length
+  return (
+    <>
+      <Segmented stretch value={kind} onChange={(k) => set('kind', k)} options={CHART_KINDS.map((k) => ({ value: k, label: KIND_LABEL[k] }))} />
+      <Labeled label="Title">{text('title', 'What the numbers show')}</Labeled>
+      <Labeled label="Subtitle">{text('subtitle', 'Optional, e.g. the unit or the period')}</Labeled>
+      {kind === 'donut' && (
+        <div className="flex gap-1">
+          <Chip active={single} onClick={() => set('parts', false)}>
+            One value
+          </Chip>
+          <Chip active={!single} onClick={() => set('parts', true)}>
+            Parts of a whole
+          </Chip>
+        </div>
+      )}
+      {single ? (
+        <>
+          <div className="grid grid-cols-2 gap-2">
+            <Labeled label="Value">
+              <Input type="number" value={String(v.value ?? '')} onChange={(e) => set('value', e.target.value === '' ? undefined : Number(e.target.value))} />
+            </Labeled>
+            <Labeled label="Out of">
+              <Input type="number" value={String(v.max ?? '')} onChange={(e) => set('max', e.target.value === '' ? undefined : Number(e.target.value))} placeholder="100" />
+            </Labeled>
+          </div>
+          <Labeled label="Label">{text('label', 'What the number means')}</Labeled>
+        </>
+      ) : (
+        <div>
+          <Labeled label="Data">
+            <textarea
+              value={String(v.data ?? '')}
+              onChange={(e) => set('data', e.target.value)}
+              onKeyDown={(e) => e.stopPropagation()}
+              rows={Math.min(8, Math.max(4, lines))}
+              spellCheck={false}
+              placeholder="Label: value, one per line"
+              className="w-full resize-y rounded-control bg-white/[0.045] px-2.5 py-2 font-mono text-xs leading-relaxed text-fg shadow-[inset_0_0_0_1px_rgb(255_255_255/0.06)] outline-none transition-[background-color,box-shadow] placeholder:text-fg-4 hover:bg-white/[0.06] focus:bg-white/[0.07] focus:shadow-[inset_0_0_0_1px_rgb(214_238_0/0.5),0_0_0_3px_rgb(214_238_0/0.12)]"
+            />
+          </Labeled>
+          <p className={cn('mt-1 text-2xs tabular', data.items.length && !data.skipped.length ? 'text-fg-4' : 'text-warn')}>
+            {data.items.length ? `${data.items.length} ${noun} · ${Math.min(...values).toLocaleString('en-US')} to ${Math.max(...values).toLocaleString('en-US')}` : 'One “Label: value” per line.'}
+            {data.skipped.length ? ` · line${data.skipped.length > 1 ? 's' : ''} ${data.skipped.join(', ')} ${data.skipped.length > 1 ? 'have' : 'has'} no number` : ''}
+          </p>
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-2">
+        <Labeled label="Prefix">{text('prefix', '$')}</Labeled>
+        <Labeled label="Suffix">{text('suffix', '%')}</Labeled>
+      </div>
+      {/* Its own row: beside Prefix and Suffix it ran off a narrow panel. */}
+      {!single && (
+        <div>
+          <span className="mb-1.5 block text-2xs font-semibold tracking-wider text-fg-4 uppercase">Highlight</span>
+          <Select aria-label="Highlight" size="md" className="w-full" value={String(v.highlight ?? 'none')} onChange={(h) => set('highlight', h)} options={highlights} />
+        </div>
+      )}
+      {kind === 'bar' && (
+        <div className="flex gap-1">
+          {ORIENTATIONS.map(([o, label]) => (
+            <Chip key={label} active={v.orientation === o} onClick={() => set('orientation', o)}>
+              {label}
+            </Chip>
+          ))}
+        </div>
+      )}
+      <Labeled label="Source">{text('source', 'Optional, e.g. “Company data, 2026”')}</Labeled>
+    </>
   )
 }

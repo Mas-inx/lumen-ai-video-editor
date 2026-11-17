@@ -43,7 +43,7 @@ async function withOpenAI(buffer: AudioBuffer, language?: string) {
   for (let from = 0; from < buffer.duration; from += piece) {
     const to = Math.min(buffer.duration, from + piece)
     const segs = await api.ai.transcribe(await speechWav(buffer, from, to), language)
-    for (const s of segs) out.push({ start: s.start + from, end: s.end + from, text: s.text })
+    for (const s of segs) out.push({ start: s.start + from, end: s.end + from, text: s.text, ...(s.words?.length ? { words: s.words.map((w) => ({ ...w, start: w.start + from, end: w.end + from })) } : {}) })
   }
   return out
 }

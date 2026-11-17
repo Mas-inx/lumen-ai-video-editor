@@ -78,6 +78,7 @@ function mediaLine(p: Project, a: Asset) {
     ...(a.cues?.length ? { cues: a.cues.length } : {}),
     ...(a.favorite ? { favorite: true } : {}),
     ...(a.tags?.length ? { tags: a.tags } : {}),
+    ...(a.description ? { description: a.description } : {}),
     ...(a.alpha ? { transparent: true } : {}),
     ...(a.generated ? { generated_by: a.provenance?.integration ?? 'ai' } : {}),
     ...(a.source.missing ? { offline: true } : {}),
@@ -251,7 +252,7 @@ export const INSPECT_TOOLS: AgentTool[] = [
     description:
       'Search the media library by name, tag or kind — and, for transcribed media, by what is said in it (returns the matching lines with their source times, ready for place_asset or clip_trim). Lists length, size, frame rate, audio, transcript, tags and how often each item is used on the timeline.',
     inputSchema: obj({
-      query: str('Words to look for in names, tags, file paths and transcripts'),
+      query: str('Words to look for in names, tags, descriptions, file paths and transcripts'),
       kind: oneOf('Only this kind', ['video', 'audio', 'image']),
       tag: str('Only media with this tag'),
       unused: bool('Only media not on the timeline yet'),
@@ -271,7 +272,7 @@ export const INSPECT_TOOLS: AgentTool[] = [
         if (a.unused === true && line.on_timeline > 0) continue
         let said: { start: number; end: number; text: string }[] = []
         if (words.length) {
-          const hay = `${asset.name} ${asset.tags?.join(' ') ?? ''} ${asset.source.type === 'file' ? (asset.source.path ?? '') : ''}`.toLowerCase()
+          const hay = `${asset.name} ${asset.tags?.join(' ') ?? ''} ${asset.description ?? ''} ${asset.source.type === 'file' ? (asset.source.path ?? '') : ''}`.toLowerCase()
           said = speechScript(asset)
             .filter((s) => words.every((w) => s.text.toLowerCase().includes(w)))
             .slice(0, 5)

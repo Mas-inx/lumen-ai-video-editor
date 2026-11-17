@@ -1,4 +1,4 @@
-import { ArrowRight, AudioLines, BookOpen, Box, Clapperboard, ExternalLink, Film, LoaderCircle, LogOut, Plug, Plus, RefreshCw, Server, Sparkles, Terminal, Trash, Unplug, Waypoints } from 'lucide-react'
+import { ArrowRight, AudioLines, BookOpen, Box, Clapperboard, ExternalLink, Film, LoaderCircle, LogOut, Plug, Plus, RefreshCw, Server, Sparkles, Terminal, Trash, Unplug, Waypoints, Workflow } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { MCP_CATALOG, type McpCatalogEntry, type McpServerConfig, type McpServerState, type McpTool } from '@shared/integrations'
@@ -12,10 +12,12 @@ import { PROVIDERS } from '@shared/ai'
 import { useAi } from '@/integrations/ai'
 import { skillEntries, useSkills } from '@/integrations/skills'
 import { useBridge, setBridgeEnabled, regenerateBridgeToken } from '@/integrations/bridge'
+import { useComfy } from '@/integrations/comfyui'
 import { connectServer, disconnectServer, refreshBlender, removeServer, saveServer, setBlenderPath, signOutServer, useIntegrations } from '@/integrations/store'
 import { cn } from '@/lib/cn'
 import { useGenerate } from '@/features/assets/generate-store'
 import { LocalAgentsPane, ModelsPane } from './AiPanes'
+import { ComfyUIPane } from './ComfyUIPane'
 import { ElevenLabsPane } from './ElevenLabsPane'
 import { SkillsPane } from './SkillsPane'
 import { useIngest } from '@/project/ingest'
@@ -23,7 +25,7 @@ import { IngestPane } from './IngestPane'
 import { Card, CopyField, IconTile, PaneHeader, STATUS_LABEL, StatusDot } from './parts'
 import { ToolList, ToolRunner } from './ToolRunner'
 
-type Selection = 'ai-models' | 'local-agents' | 'skills' | 'blender' | 'hyperframes' | 'elevenlabs' | 'agents' | 'ingest' | 'add' | `server:${string}` | `catalog:${string}`
+type Selection = 'ai-models' | 'local-agents' | 'skills' | 'blender' | 'hyperframes' | 'comfyui' | 'elevenlabs' | 'agents' | 'ingest' | 'add' | `server:${string}` | `catalog:${string}`
 
 export function IntegrationsHub() {
   const open = useIntegrations((s) => s.hubOpen)
@@ -63,6 +65,8 @@ function Sidebar({ selected, onSelect }: { selected: Selection; onSelect: (s: Se
   const servers = useIntegrations((s) => s.servers)
   const available = useIntegrations((s) => s.available)
   const eleven = useIntegrations((s) => s.elevenlabs)
+  const comfy = useComfy((s) => s.status)
+  const comfyWorkflows = useComfy((s) => s.workflows.length)
   const bridge = useBridge((s) => s.status)
   const ingest = useIngest((s) => s.state)
   const receiving = ingest?.clips.filter((c) => c.status === 'receiving' || c.status === 'assembling').length ?? 0
@@ -108,6 +112,14 @@ function Sidebar({ selected, onSelect }: { selected: Selection; onSelect: (s: Se
       <NavLabel>Engines</NavLabel>
       <NavItem active={selected === 'blender'} onClick={() => onSelect('blender')} icon={<IconTile tone="blender" size="sm"><Box /></IconTile>} label="Blender" hint={!available ? 'Desktop app' : blender?.found ? blender.version : blender ? 'Not found' : 'Checking…'} status={blender?.found ? 'ready' : blender ? 'missing' : undefined} />
       <NavItem active={selected === 'hyperframes'} onClick={() => onSelect('hyperframes')} icon={<IconTile tone="hyperframes" size="sm"><Clapperboard /></IconTile>} label="HyperFrames" hint="Built in" status={available ? 'ready' : undefined} />
+      <NavItem
+        active={selected === 'comfyui'}
+        onClick={() => onSelect('comfyui')}
+        icon={<IconTile tone="mcp" size="sm"><Workflow /></IconTile>}
+        label="ComfyUI"
+        hint={comfyWorkflows ? `${comfy?.connected && comfy.version ? `${comfy.version} · ` : ''}${comfyWorkflows} workflow${comfyWorkflows === 1 ? '' : 's'}` : comfy?.connected ? `${comfy.version ?? 'Connected'}` : 'Your workflows, your GPU'}
+        status={comfy?.connected ? 'ready' : undefined}
+      />
       <NavItem
         active={selected === 'elevenlabs'}
         onClick={() => onSelect('elevenlabs')}
@@ -214,6 +226,7 @@ function Detail({ selected, onSelect }: { selected: Selection; onSelect: (s: Sel
   if (selected === 'skills') return <SkillsPane />
   if (selected === 'blender') return <BlenderPane />
   if (selected === 'hyperframes') return <HyperFramesPane />
+  if (selected === 'comfyui') return <ComfyUIPane />
   if (selected === 'elevenlabs') return <ElevenLabsPane />
   if (selected === 'agents') return <AgentsPane />
   if (selected === 'ingest') return <IngestPane />

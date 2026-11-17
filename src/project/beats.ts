@@ -6,8 +6,8 @@ import { clipBeats, musicClip, type TimelineBeat } from '@/editor/beat-grid'
 import { clipEnd, sourceFrames } from '@/editor/ops'
 import { dispatch, getProject, useEditor } from '@/editor/store'
 import type { Asset, Clip } from '@/editor/types'
-import { loadAudio } from '@/engine/audio-engine'
-import { detectBeats, type BeatGrid } from '@/engine/beats'
+import { eachMinute, isLongAudio, loadAudio } from '@/engine/audio-engine'
+import { BEAT_SECONDS, BeatInput, beatsIn, detectBeats, type BeatGrid } from '@/engine/beats'
 import { decodeAudio } from '@/engine/decode'
 
 const running = new Map<string, Promise<BeatGrid>>()
@@ -28,13 +28,33 @@ export function analyzeBeats(assetId: string): Promise<BeatGrid> {
 async function find(asset: Asset): Promise<BeatGrid> {
   if (asset.kind === 'image') throw new Error(`“${asset.name}” is an image — it has no sound.`)
   if (asset.source.type !== 'file' || asset.source.missing) throw new Error(`“${asset.name}” is offline.`)
-  // Long files stream in playback; beats only need the first quarter hour, decoded once.
-  const buffer = (await loadAudio(asset)) ?? (await decodeAudio(asset.source.url))
-  if (!buffer) throw new Error(`“${asset.name}” has no sound Lumen can decode.`)
-  const channels = Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c))
-  const grid = await detectBeats(channels, buffer.sampleRate)
+  const grid = isLongAudio(asset) ? await streamedBeats(asset) : await decodedBeats(asset, asset.source.url)
   if (getProject().assets[asset.id]) dispatch('asset.update', { id: asset.id, patch: { beats: grid } }, { history: false })
   return grid
+}
+
+const channelsOf = (buffer: AudioBuffer) => Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c))
+
+/** A short file is decoded whole (and kept for playback). */
+async function decodedBeats(asset: Asset, url: string) {
+  const buffer = (await loadAudio(asset)) ?? (await decodeAudio(url))
+  if (!buffer) throw new Error(`“${asset.name}” has no sound Lumen can decode.`)
+  return detectBeats(channelsOf(buffer), buffer.sampleRate)
+}
+
+/** A long one streams through a minute at a time: only its first quarter hour, mixed down small, is ever held. */
+async function streamedBeats(asset: Asset) {
+  let input = null as BeatInput | null
+  const read = await eachMinute(
+    asset,
+    (buffer) => {
+      input ??= new BeatInput(buffer.sampleRate)
+      input.push(channelsOf(buffer))
+    },
+    BEAT_SECONDS,
+  )
+  if (!read || !input) throw new Error(`“${asset.name}” has no sound Lumen can decode.`)
+  return beatsIn(input)
 }
 
 /** The beats of a music clip on the timeline (detecting them first if needed). */

@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { app, BrowserWindow, dialog } from 'electron'
-import { APP_IPC, type CloseChoice, type OpenedProject, type RecentProject, type RecoveryInfo, type VersionKind } from '../shared/app'
+import { APP_IPC, type CloseChoice, type OpenedProject, type RecentProject, type RecoveryInfo, type ReopenInfo, type VersionKind } from '../shared/app'
 import { fileInfo, urlFor } from './files'
 import { allowPath, ensureDir, mediaPath, readJson, userDir, writeJson } from './integrations/paths'
 import { readVersionText, writeVersion } from './versions'
@@ -295,12 +295,48 @@ export function readRecovery(): RecoveryInfo | null {
   }
 }
 
+// ─── After the editor stopped ────────────────────────────────────────────
+
+/** What the editor lands on once its page has been loaded again after it stopped (taken once). */
+let reopen: ReopenInfo | null = null
+
+/** Whether the crash-recovery copy holds the project with this id. */
+function recoveryIsOf(id: string | null) {
+  if (!id) return false
+  try {
+    const info = JSON.parse(fs.readFileSync(recoveryFile(), 'utf8')) as RecoveryInfo
+    return (JSON.parse(info.text) as StoredProject).id === id
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The editor stopped and its page is being loaded again: remembers what it should
+ * land on — the recovery copy when that holds this project's unsaved changes,
+ * otherwise the project's file — or, with `withProject` false, the start screen.
+ */
+export function holdReopen(withProject: boolean) {
+  reopen = withProject && (state.path || state.dirty) ? { path: state.path, recover: state.dirty && recoveryIsOf(state.id) } : null
+}
+
+/** Taken by the reloaded editor, once (a plain start finds nothing). */
+export function takeReopen(): ReopenInfo | null {
+  const r = reopen
+  reopen = null
+  return r
+}
+
 // ─── Window state & closing ──────────────────────────────────────────────
 
-const state = { name: 'Untitled', path: null as string | null, dirty: false }
+const state = { id: null as string | null, name: 'Untitled', path: null as string | null, dirty: false }
 let forceClose = false
 
-export function setProjectState(win: BrowserWindow, next: { name?: unknown; path?: unknown; dirty?: unknown }) {
+/** The open project as the editor last said. */
+export const projectStatus = () => ({ name: state.name, path: state.path, dirty: state.dirty })
+
+export function setProjectState(win: BrowserWindow, next: { id?: unknown; name?: unknown; path?: unknown; dirty?: unknown }) {
+  if (typeof next.id === 'string') state.id = next.id
   if (typeof next.name === 'string') state.name = next.name
   if (typeof next.path === 'string' || next.path === null) state.path = next.path as string | null
   if (typeof next.dirty === 'boolean') state.dirty = next.dirty
@@ -326,10 +362,10 @@ export async function confirmDiscard(win: BrowserWindow | null, name: string): P
   return response === 0 ? 'save' : response === 1 ? 'discard' : 'cancel'
 }
 
-/** Asks before closing a window with unsaved changes. */
+/** Asks before closing a window with unsaved changes (not when its page has died: it couldn't save, and they're in the recovery copy). */
 export function guardClose(win: BrowserWindow) {
   win.on('close', (e) => {
-    if (forceClose || !state.dirty) return
+    if (forceClose || !state.dirty || win.webContents.isCrashed()) return
     e.preventDefault()
     void confirmDiscard(win, state.name).then((choice) => {
       if (choice === 'discard') {

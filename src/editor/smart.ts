@@ -6,10 +6,11 @@
 import { activeRegions, activeRegionsStreamed, isAudible, isLongAudio, loadAudio } from '@/engine/audio-engine'
 import { speechScript } from '@/engine/audio'
 import { clipEnd } from './ops'
-import { dispatch, getProject, useEditor } from './store'
+import { dispatch, getProject, useEditor, type ActionSource } from './store'
+import { reframeOffset, type Focus } from './subject-frame'
 import { captionStyle, layCaptions, type CaptionStyle } from './subtitles'
 import { consumed, localForSource } from './timing'
-import type { Clip, Project } from './types'
+import type { Clip, Project, SpeechSegment } from './types'
 
 const ai = { source: 'ai' as const }
 
@@ -42,13 +43,13 @@ export async function speechRegions(project: Project, clip: Clip): Promise<{ reg
 }
 
 /** The part of a clip's source (seconds) that's on the timeline. */
-function sourceRange(project: Project, clip: Clip): [number, number] {
+export function sourceRange(project: Project, clip: Clip): [number, number] {
   const fps = project.settings.fps
   return [clip.inPoint / fps, (clip.inPoint + consumed(clip)) / fps]
 }
 
 /** The timeline frame where a clip shows a source second (clamped to the clip) — speed ramps included. */
-function toTimeline(project: Project, clip: Clip, sourceSec: number) {
+export function toTimeline(project: Project, clip: Clip, sourceSec: number) {
   const src = sourceSec * project.settings.fps
   const local = localForSource(clip, src)
   if (local !== null) return clip.start + local
@@ -59,7 +60,7 @@ function toTimeline(project: Project, clip: Clip, sourceSec: number) {
 const VOICE_TRACK = /voice|vo\b|dialog|narrat|interview|speech/i
 
 /** Where speech is expected first: the main track and voice-ish tracks. */
-const speechTrack = (project: Project, clip: Clip) => {
+export const speechTrack = (project: Project, clip: Clip) => {
   const track = project.tracks.find((t) => t.id === clip.trackId)
   return Boolean(track && (track.role === 'main' || VOICE_TRACK.test(track.name)))
 }
@@ -110,6 +111,121 @@ export function timelineTranscript(project: Project, from = 0, to = Infinity): T
     }
   }
   return out.sort((a, b) => a.start - b.start)
+}
+
+// ─── Words ───────────────────────────────────────────────────────────────
+
+/** A phrase's words, in source seconds: as the transcriber timed them, or spread over the phrase by their length. */
+export function phraseWords(seg: SpeechSegment): { start: number; end: number; text: string; timed: boolean }[] {
+  const given = seg.words?.filter((w) => w.text.trim() && Number.isFinite(w.start) && Number.isFinite(w.end))
+  if (given?.length) return given.map((w) => ({ start: w.start, end: Math.max(w.start, w.end), text: w.text.trim(), timed: true }))
+  const parts = seg.text.split(/\s+/).filter(Boolean)
+  const weights = parts.map((p) => p.replace(/[^\p{L}\p{N}]/gu, '').length + 1)
+  const total = weights.reduce((s, w) => s + w, 0) || 1
+  let t = seg.start
+  return parts.map((text, i) => {
+    const d = ((seg.end - seg.start) * weights[i]) / total
+    const w = { start: t, end: t + d, text, timed: false }
+    t += d
+    return w
+  })
+}
+
+export interface TimelineWord {
+  /** Timeline seconds. */
+  start: number
+  end: number
+  text: string
+  clipId: string
+  /** The track it's heard on: the speech on one track is one voice. */
+  lane: string
+  assetId: string
+  /** Seconds into the media where it starts. */
+  source: number
+  /** The transcriber timed this word itself; otherwise its timing is spread across its phrase. */
+  timed: boolean
+  /** It starts / ends its phrase — an edge the transcriber timed even when the word isn't. */
+  phraseStart?: boolean
+  phraseEnd?: boolean
+}
+
+const wordKey = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
+
+/**
+ * Every word said on the timeline, in timeline seconds, sorted. Speech heard
+ * twice — an audible copy of the interview on another track, a camera's own
+ * sound under the lav — is listed once, from the main and voice tracks first.
+ */
+export function timelineWords(project: Project): TimelineWord[] {
+  const fps = project.settings.fps
+  const clips = voiceClips(project)
+    .filter((c) => !c.reverse && speechScript(project.assets[c.assetId!]).length)
+    .sort((a, b) => Number(speechTrack(project, b)) - Number(speechTrack(project, a)) || a.start - b.start)
+  const heard: { a: number; b: number; keys: Set<string>; clipId: string }[] = []
+  const out: TimelineWord[] = []
+  for (const clip of clips) {
+    const asset = project.assets[clip.assetId!]
+    const [s0, s1] = sourceRange(project, clip)
+    for (const seg of speechScript(asset)) {
+      if (seg.end <= s0 || seg.start >= s1) continue
+      const all = phraseWords(seg)
+      const words: TimelineWord[] = []
+      all.forEach((w, i) => {
+        // Only words mostly on the timeline: a cut through a word leaves it to the side that has most of it.
+        const mid = (w.start + w.end) / 2
+        if (mid < s0 || mid >= s1) return
+        const start = toTimeline(project, clip, Math.max(w.start, s0)) / fps
+        const end = toTimeline(project, clip, Math.min(w.end, s1)) / fps
+        if (end <= start) return
+        words.push({ start, end, text: w.text, clipId: clip.id, lane: clip.trackId, assetId: asset.id, source: w.start, timed: w.timed, ...(i === 0 ? { phraseStart: true } : {}), ...(i === all.length - 1 ? { phraseEnd: true } : {}) })
+      })
+      if (!words.length) continue
+      const a = words[0].start
+      const b = words[words.length - 1].end
+      const keys = new Set(words.map((w) => wordKey(w.text)).filter(Boolean))
+      const twice = heard.some((h) => {
+        if (h.clipId === clip.id || Math.min(b, h.b) - Math.max(a, h.a) <= (b - a) / 2) return false
+        let same = 0
+        for (const k of keys) if (h.keys.has(k)) same++
+        return same >= keys.size * 0.6
+      })
+      if (twice) continue
+      heard.push({ a, b, keys, clipId: clip.id })
+      out.push(...words)
+    }
+  }
+  return out.sort((x, y) => x.start - y.start)
+}
+
+/** "1:02.5" */
+const clock = (sec: number) => {
+  const m = Math.floor(sec / 60)
+  return `${m}:${(sec - m * 60).toFixed(1).padStart(4, '0')}`
+}
+
+/**
+ * Keeps the words the transcriber timed out of pause cuts, with a breath either
+ * side: the sound can miss a quiet word, the transcript doesn't. A piece of a
+ * pause too short to matter is left alone.
+ */
+function spareWords(project: Project, cuts: [number, number][], pad: number, minLen: number, notes?: string[]): [number, number][] {
+  const fps = project.settings.fps
+  const words = timelineWords(project).filter((w) => w.timed)
+  if (!words.length) return cuts
+  const out: [number, number][] = []
+  for (const cut of cuts) {
+    const a = cut[0] / fps
+    const b = cut[1] / fps
+    const inside = words.filter((w) => Math.min(b, w.end) - Math.max(a, w.start) > 0.04)
+    if (!inside.length) {
+      out.push(cut)
+      continue
+    }
+    const kept = subtractSpans([cut], inside.map((w) => [Math.floor((w.start - pad) * fps), Math.ceil((w.end + pad) * fps)]))
+    out.push(...kept.filter(([x, y]) => y - x >= minLen))
+    notes?.push(`Kept “${inside.map((w) => w.text).join(' ')}” at ${clock(inside[0].start)}: the transcript has ${inside.length > 1 ? 'those words' : 'that word'} inside the pause.`)
+  }
+  return out
 }
 
 /** Music beds: audible audio clips on music-ish tracks, or long audio without speech elsewhere. */
@@ -191,9 +307,11 @@ function subtractSpans(pieces: [number, number][], spans: [number, number][]) {
 
 /**
  * The timeline stretches the pauses in `reports` can remove: only where every
- * speech clip is quiet — one speaker's pause may be another's line. Sorted, merged.
+ * speech clip is quiet — one speaker's pause may be another's line — and never
+ * through a word the transcript has there. Sorted, merged. `notes` collects the
+ * words kept out of a cut.
  */
-export async function silentCuts(project: Project, reports: PauseReport[], opts: { minGap?: number; pad?: number } = {}) {
+export async function silentCuts(project: Project, reports: PauseReport[], opts: { minGap?: number; pad?: number; notes?: string[] } = {}) {
   const pad = opts.pad ?? 0.12
   const minLen = Math.max(2, Math.round(((opts.minGap ?? 0.6) - 2 * pad) * project.settings.fps))
   const voices = voiceClips(project)
@@ -219,48 +337,61 @@ export async function silentCuts(project: Project, reports: PauseReport[], opts:
     if (last && a <= last[1]) last[1] = Math.max(last[1], b)
     else merged.push([a, b])
   }
-  return merged
+  return spareWords(project, merged, pad, minLen, opts.notes)
+}
+
+export interface RippleResult {
+  /** The stretches taken out (frames, as they were before the edit), in order. */
+  removed: [number, number][]
+  /** Where each join landed once the stretches before it closed up too (frames). */
+  joins: number[]
+  seconds: number
+}
+
+/**
+ * Takes stretches (frames, not overlapping) out of the whole timeline as one
+ * undo step. Everything after each one closes up, so captions, B-roll, effects,
+ * markers and keyframes stay in sync — while music and other sound beds play on
+ * through the joins instead of being chopped up.
+ */
+export function rippleRemove(cuts: [number, number][], label: string, source: ActionSource = 'ai'): RippleResult {
+  const project = getProject()
+  const speech = new Set(voiceClips(project).map((c) => c.id))
+  const keepWhole = Object.values(project.clips)
+    .filter((c) => c.kind === 'audio' && !speech.has(c.id))
+    .map((c) => c.id)
+  const removed: [number, number][] = []
+  useEditor.getState().transaction(label, source, () => {
+    // Last stretch first, so earlier positions stay valid as later ones close up.
+    for (const [a, b] of [...cuts].sort((x, y) => y[0] - x[0])) {
+      if (dispatch('timeline.removeRange', { start: a, end: b, keepWhole }, { source }).ok) removed.unshift([a, b])
+    }
+  })
+  let shift = 0
+  const joins = removed.map(([a, b]) => {
+    const at = a - shift
+    shift += b - a
+    return at
+  })
+  return { removed, joins, seconds: shift / project.settings.fps }
 }
 
 /**
  * Cuts the pauses out of the speech. The whole timeline closes up around each
  * one, so captions, B-roll, effects and markers stay in sync — while music and
- * other sound beds play on through the joins instead of being chopped up.
+ * other sound beds play on through the joins instead of being chopped up. A word
+ * the transcript has inside a pause stays (`notes` says which).
  */
 export async function removePauses(opts: { clipIds?: string[]; minGap?: number } = {}) {
   const project = getProject()
-  const fps = project.settings.fps
-  const cuts = await silentCuts(project, await findPauses(project, opts), opts)
-  const speech = new Set(voiceClips(project).map((c) => c.id))
-  const keepWhole = Object.values(project.clips)
-    .filter((c) => c.kind === 'audio' && !speech.has(c.id))
-    .map((c) => c.id)
-  const joins: number[] = []
-  let removed = 0
-  let seconds = 0
-  useEditor.getState().transaction('Remove pauses', 'ai', () => {
-    // Last stretch first, so earlier positions stay valid as later ones close up.
-    for (const [a, b] of [...cuts].reverse()) {
-      if (!dispatch('timeline.removeRange', { start: a, end: b, keepWhole }, ai).ok) continue
-      removed++
-      seconds += (b - a) / fps
-      joins.push(a)
-    }
-  })
-  // Where each join landed once every earlier stretch closed up too.
-  const done = new Set(joins)
-  let shift = 0
-  const landed: number[] = []
-  for (const [a, b] of cuts) {
-    if (!done.has(a)) continue
-    landed.push(a - shift)
-    shift += b - a
-  }
+  const notes: string[] = []
+  const cuts = await silentCuts(project, await findPauses(project, opts), { ...opts, notes })
+  const r = rippleRemove(cuts, 'Remove pauses')
   const after = getProject()
   const touched = voiceClips(after)
-    .filter((c) => landed.some((f) => c.start === f || clipEnd(c) === f))
+    .filter((c) => r.joins.some((f) => c.start === f || clipEnd(c) === f))
     .map((c) => c.id)
-  return { removed, seconds, clips: touched }
+  return { removed: r.removed.length, seconds: r.seconds, clips: touched, notes }
 }
 
 // ─── Captions ────────────────────────────────────────────────────────────
@@ -383,7 +514,13 @@ export async function duckMusic(opts: { depth?: number; musicClipIds?: string[];
  * Changes the canvas size and reframes: media that filled the old frame is
  * scaled to fill the new one (centered crop), titles move and resize proportionally.
  */
-export function reframe(width: number, height: number, source: 'user' | 'ai' = 'ai') {
+/**
+ * Changes the canvas size and reframes: footage that filled the old frame is
+ * scaled to fill the new one — placed by `focus` (where its subject is, see
+ * project/reframe-actions.ts) or else kept where it was — and titles move and
+ * resize to match. One undo step.
+ */
+export function reframe(width: number, height: number, source: 'user' | 'ai' = 'ai', focus?: (clip: Clip) => Pick<Focus, 'x' | 'y'> | undefined) {
   const how = { source }
   const project = getProject()
   const { width: W0, height: H0 } = project.settings
@@ -405,7 +542,9 @@ export function reframe(width: number, height: number, source: 'user' | 'ai' = '
         if (Math.abs(containOld - coverOld) / coverOld > 0.02) continue
         const containNew = Math.min(width / asset.width, height / asset.height)
         const coverNew = Math.max(width / asset.width, height / asset.height)
-        dispatch('clip.update', { ids: [c.id], patch: { transform: { scale: Math.round((coverNew / containNew) * 1000) / 1000, x: Math.round(c.transform.x * sx), y: Math.round(c.transform.y * sy) } } }, how)
+        const f = focus?.(c)
+        const at = f ? reframeOffset({ mediaW: asset.width, mediaH: asset.height, canvasW: width, canvasH: height, focus: f }) : { x: Math.round(c.transform.x * sx), y: Math.round(c.transform.y * sy) }
+        dispatch('clip.update', { ids: [c.id], patch: { transform: { scale: Math.round((coverNew / containNew) * 1000) / 1000, x: at.x, y: at.y } } }, how)
       }
     }
   })

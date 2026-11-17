@@ -5,6 +5,7 @@
  * editor control (tools/control), plus the Blender / HyperFrames / media integrations.
  */
 import type { BridgeToolResult, Job, McpServerState } from '@shared/integrations'
+import { chartData, chartKind } from '@shared/motion'
 import { commands, toolDefinitions, type CommandName } from '@/editor/commands'
 import { clipEnd, projectDuration } from '@/editor/ops'
 import { placeAsset } from '@/editor/placement'
@@ -12,7 +13,8 @@ import { allSequences, openSequenceId, openSequenceName } from '@/editor/sequenc
 import { playback, usePlayback } from '@/editor/playback'
 import { dispatch, getProject } from '@/editor/store'
 import { useUI } from '@/editor/ui-store'
-import { addCaptions, duckMusic, findPauses, reframe, removePauses, silentCuts, untranscribed } from '@/editor/smart'
+import { addCaptions, duckMusic, findPauses, removePauses, silentCuts, untranscribed } from '@/editor/smart'
+import { smartReframe } from '@/project/reframe-actions'
 import { SFX } from '@/engine/sfx'
 import { desktop } from '@/lib/platform'
 import { sfxAsset } from '@/project/audio-library'
@@ -31,9 +33,14 @@ import { VISION_TOOLS } from './tools/vision'
 import { BEAT_TOOLS } from './tools/beats'
 import { SKILL_TOOLS } from './tools/skills'
 import { SUBJECT_TOOLS } from './tools/subject'
+import { COLOR_TOOLS } from './tools/color'
 import { ATTACHMENT_TOOLS } from './tools/attachments'
 import { CAPTURE_TOOLS } from './tools/capture'
+import { CREATIVE_TOOLS } from './tools/creative'
+import { COMFYUI_TOOLS } from './tools/comfyui'
 import { INGEST_TOOLS } from './tools/ingest'
+import { REVIEW_TOOLS } from './tools/review'
+import { TRANSITION_TOOLS } from './tools/transitions'
 import { WEB_TOOLS } from './tools/web'
 
 const PLACE = bool('Put the finished clip on the timeline at the playhead (default true).')
@@ -85,6 +92,7 @@ function jobReport(job: Job | undefined, placedClip?: string | null) {
     error: job.error,
     asset_ids: assetIds,
     ...(placedClip ? { clip_id: placedClip } : {}),
+    ...(job.files?.length ? { files: job.files.map((f) => f.path) } : {}),
     ...(job.result ? { text: job.result.text.join('\n').slice(0, 4000), links: job.result.links } : {}),
   }
 }
@@ -183,6 +191,8 @@ function projectSummary() {
       ...(a.generated ? { generated_by: a.provenance?.integration ?? 'ai' } : {}),
     })),
     markers: p.markers.map((m) => ({ id: m.id, frame: m.frame, label: m.label, color: m.color })),
+    ...(p.storyboard?.scenes.length ? { storyboard: { scenes: p.storyboard.scenes.length, done: p.storyboard.scenes.filter((s) => s.status === 'done').length, ...(p.storyboard.style ? { style: p.storyboard.style } : {}), note: 'get_storyboard reads the plan' } } : {}),
+    ...(p.brand ? { brand: { name: p.brand.name, note: 'get_brand_kit reads it' } } : {}),
     ...(p.luts && Object.keys(p.luts).length ? { luts: Object.values(p.luts).map((l) => ({ id: l.id, name: l.name, size: l.size })) } : {}),
     ...(p.fonts && Object.keys(p.fonts).length ? { fonts: Object.values(p.fonts).map((f) => ({ ref: `custom:${f.id}`, name: f.name })) } : {}),
   }
@@ -360,11 +370,13 @@ const INTEGRATION_TOOLS: AgentTool[] = [
       '- counter: { value, prefix, suffix, decimals, label, accent, font }',
       '- quote: { text, author, accent, font }',
       '- chapter: { number, title, accent, font }',
-      'Fonts: editorial (Fraunces), serif (Instrument Serif), display (Bricolage Grotesque), art (Syne), wide (Archivo), tech (Space Grotesk), sans (Geist), mono. Accent: pick from the footage or brand, not a default. bpm (the music’s tempo, from analyze_audio or detect_beats) lands changes on the beat. Leave duration out: it grows with the words so there’s time to read.',
+      '- particle-title: { title (a "|" breaks lines), subtitle (revealed once the title has formed), style: "dust" (fine, soft — default) | "sparks" (bright, fast, short trails) | "embers" (warm, rising; burns away upward) | "digital" (square pixels moving in steps), direction: "left" | "right" | "below" | "everywhere" (where the particles come from; each style has its own default), color (the title), accent (a share of the particles), font, seed (an integer: another scatter, the same motion) } — thousands of particles sampled from the title’s own letterforms stream in, settle into crisp type, and scatter at the end. A hero moment, not a lower third.',
+      '- chart: { kind: "bar" (default) | "line" | "donut", title, subtitle, data (label/value pairs: [{ label, value }], { label: value } or "Label: value" lines), prefix, suffix ("$", "%", "km"; taken from the data when written there), decimals, highlight (a label, or "max" | "min" | "last": picked out in the accent; a line chart calls its value out), orientation (bars: "vertical" | "horizontal"; chosen from the labels when left out), source, color, accent, font; donut: value (fills the ring, out of max — 100 unless given) and label, or leave value out to split the ring by data } — real numbers only: the scale, ticks and label fit are worked out from them.',
+      'Fonts: editorial (Fraunces), serif (Instrument Serif), display (Bricolage Grotesque), art (Syne), wide (Archivo), tech (Space Grotesk), sans (Geist), mono. Accent: pick from the footage or brand, not a default. bpm (the music’s tempo, from analyze_audio or detect_beats) lands changes on the beat. Leave duration out: it grows with the words (and a chart’s data) so there’s time to read.',
     ].join('\n'),
     inputSchema: obj(
       {
-        template: str('Template', { enum: ['lower-third', 'title-card', 'kinetic', 'counter', 'quote', 'chapter'] }),
+        template: str('Template', { enum: ['lower-third', 'title-card', 'kinetic', 'counter', 'quote', 'chapter', 'particle-title', 'chart'] }),
         params: { type: 'object', description: 'Template parameters (see description)', additionalProperties: true },
         duration_seconds: num('Clip length (default: long enough to read it)', { minimum: 1, maximum: 30 }),
         place: PLACE,
@@ -373,18 +385,26 @@ const INTEGRATION_TOOLS: AgentTool[] = [
       },
       ['template', 'params'],
     ),
-    run: (a, ctx) =>
-      runJob(
+    run: async (a, ctx) => {
+      const params = (a.params as Record<string, unknown>) ?? {}
+      if (a.template === 'chart') {
+        // A chart is only worth rendering with numbers in it: say how to give them rather than draw an empty frame.
+        const kind = chartKind(params.kind)
+        const single = kind === 'donut' && params.value !== undefined && params.value !== null && params.value !== ''
+        if (!single && !chartData(params).items.length) throw new Error(kind === 'donut' ? 'A donut needs params.value (a number, out of params.max, 100 unless given) or params.data to split the ring by.' : `A ${kind} chart needs params.data: [{ "label": "Mon", "value": 42 }, …] or "Label: value" lines.`)
+      }
+      return runJob(
         () =>
           renderMotion({
             template: a.template as 'lower-third',
-            params: (a.params as Record<string, unknown>) ?? {},
+            params,
             duration: typeof a.duration_seconds === 'number' ? a.duration_seconds : undefined,
             prompt: JSON.stringify(a.params),
           }),
         a,
         ctx,
-      ),
+      )
+    },
   },
   {
     name: 'render_hyperframes_html',
@@ -462,35 +482,37 @@ const INTEGRATION_TOOLS: AgentTool[] = [
       if (!canTranscribe(asset)) throw new Error('Only audio or video with sound can be transcribed.')
       const using = typeof a.provider === 'string' && transcribers().includes(a.provider as Transcriber) ? (a.provider as Transcriber) : undefined
       const transcript = await transcribeMedia(String(a.asset_id), { using, language: typeof a.language_code === 'string' ? a.language_code : undefined })
-      return { phrases: transcript.length, transcript: transcript.slice(0, 60) }
+      return { phrases: transcript.length, transcript: transcript.slice(0, 60).map(({ start, end, text }) => ({ start, end, text })), ...(transcript.some((s) => s.words?.length) ? { word_timings: true } : {}) }
     },
   },
   {
     name: 'find_pauses',
-    description: 'Measure the long pauses in the speech on the timeline (from the audio itself, or transcripts). Returns the timeline spans remove_pauses would cut, in seconds (only where every speaker is quiet), and which clips were analysed.',
+    description: 'Measure the long pauses in the speech on the timeline (from the audio itself, or transcripts). Returns the timeline spans remove_pauses would cut, in seconds (only where every speaker is quiet, and never through a word the transcript has there), and which clips were analysed.',
     inputSchema: obj({ clip_ids: { type: 'array', items: { type: 'string' }, description: 'Only these clips (default: every clip with speech)' }, min_gap_seconds: num('Shortest pause to report (default 0.6)', { minimum: 0.2, maximum: 5 }) }),
     run: async (a) => {
       const p = getProject()
       const fps = p.settings.fps
       const opts = { clipIds: Array.isArray(a.clip_ids) ? a.clip_ids.map(String) : undefined, minGap: typeof a.min_gap_seconds === 'number' ? a.min_gap_seconds : undefined }
       const reports = await findPauses(p, opts)
-      const cuts = await silentCuts(p, reports, opts)
+      const notes: string[] = []
+      const cuts = await silentCuts(p, reports, { ...opts, notes })
       const sec = (f: number) => Math.round((f / fps) * 100) / 100
       return {
         pauses: cuts.map(([s, e]) => [sec(s), sec(e)]),
         seconds: Math.round((cuts.reduce((t, [s, e]) => t + e - s, 0) / fps) * 10) / 10,
         clips: reports.map((r) => ({ clip_id: r.clip.id, clip: r.clip.name, measured_from: r.from })),
+        ...(notes.length ? { words_kept: notes } : {}),
       }
     },
   },
   {
     name: 'remove_pauses',
-    description: 'Cut long pauses out of the speech (keeping a little breath around each line). The whole timeline closes up around each cut, so captions, B-roll, effects and markers stay in sync; music beds play on through the joins. Only cuts where every speaker is quiet. One undo step.',
+    description: 'Cut long pauses out of the speech (keeping a little breath around each line). The whole timeline closes up around each cut, so captions, B-roll, effects and markers stay in sync; music beds play on through the joins. Only cuts where every speaker is quiet, and never through a word the transcript has inside a pause (words_kept says which). One undo step.',
     inputSchema: obj({ clip_ids: { type: 'array', items: { type: 'string' }, description: 'Only these clips (default: every clip with speech)' }, min_gap_seconds: num('Shortest pause to cut (default 0.6)', { minimum: 0.2, maximum: 5 }) }),
     run: async (a) => {
       const r = await removePauses({ clipIds: Array.isArray(a.clip_ids) ? a.clip_ids.map(String) : undefined, minGap: typeof a.min_gap_seconds === 'number' ? a.min_gap_seconds : undefined })
       useUI.getState().markAiTouched(r.clips)
-      return { pauses_removed: r.removed, seconds_saved: Math.round(r.seconds * 10) / 10 }
+      return { pauses_removed: r.removed, seconds_saved: Math.round(r.seconds * 10) / 10, ...(r.notes.length ? { words_kept: r.notes } : {}) }
     },
   },
   {
@@ -534,9 +556,17 @@ const INTEGRATION_TOOLS: AgentTool[] = [
   },
   {
     name: 'reframe',
-    description: 'Change the canvas size (e.g. 1080x1920 for vertical) and reframe: footage that filled the old frame is scaled to fill the new one, titles are moved and resized to match.',
-    inputSchema: obj({ width: num('Canvas width in pixels', { minimum: 16, maximum: 8192 }), height: num('Canvas height in pixels', { minimum: 16, maximum: 8192 }) }, ['width', 'height']),
-    run: async (a) => reframe(Math.round(Number(a.width)), Math.round(Number(a.height))),
+    description:
+      'Change the canvas size (e.g. 1080x1920 for vertical) and reframe: footage that filled the old frame is scaled to fill the new one and moved to keep its subject in view — from the shot’s subject matte when it has one (cut_out_subject), otherwise from where the detail, faces and colour are — and titles are moved and resized to match. One undo step. Check the result with get_contact_sheet; nudge a shot with clip_update transform.x if its subject sits wrong.',
+    inputSchema: obj(
+      {
+        width: num('Canvas width in pixels', { minimum: 16, maximum: 8192 }),
+        height: num('Canvas height in pixels', { minimum: 16, maximum: 8192 }),
+        follow_subject: bool('Keep each shot’s subject in view (default true); false keeps shots centred'),
+      },
+      ['width', 'height'],
+    ),
+    run: async (a) => smartReframe(Math.round(Number(a.width)), Math.round(Number(a.height)), { source: 'ai', followSubject: a.follow_subject !== false }),
   },
   {
     name: 'generate_image',
@@ -711,7 +741,7 @@ function mcpAgentTools(servers: Record<string, McpServerState>): AgentTool[] {
 
 let cache: AgentTool[] | null = null
 export function agentTools(servers: Record<string, McpServerState> = useIntegrations.getState().servers): AgentTool[] {
-  cache ??= [...INTEGRATION_TOOLS, ...VISION_TOOLS, ...INSPECT_TOOLS, ...CONTROL_TOOLS, ...FOOTAGE_TOOLS, ...WEB_TOOLS, ...SKILL_TOOLS, ...BEAT_TOOLS, ...SUBJECT_TOOLS, ...INGEST_TOOLS, ...CAPTURE_TOOLS, ...ATTACHMENT_TOOLS, ...editorTools()]
+  cache ??= [...INTEGRATION_TOOLS, ...VISION_TOOLS, ...INSPECT_TOOLS, ...CONTROL_TOOLS, ...FOOTAGE_TOOLS, ...REVIEW_TOOLS, ...WEB_TOOLS, ...SKILL_TOOLS, ...BEAT_TOOLS, ...SUBJECT_TOOLS, ...COLOR_TOOLS, ...TRANSITION_TOOLS, ...INGEST_TOOLS, ...CAPTURE_TOOLS, ...COMFYUI_TOOLS, ...ATTACHMENT_TOOLS, ...CREATIVE_TOOLS, ...editorTools()]
   const mcp = mcpAgentTools(servers)
   return mcp.length ? [...cache, ...mcp] : cache
 }
